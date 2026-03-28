@@ -150,17 +150,28 @@ class GenericImporter:
 
         processed_set = set(progress.processed_items) if progress else set()
 
-        stats = {"files": 0, "nodes": 0, "failed": 0}
+        stats = {"files": 0, "nodes": 0, "failed": 0, "skipped": 0}
 
         for i, file_path in enumerate(file_paths):
             path_str = str(file_path)
             if path_str in processed_set:
                 continue
 
+            # 增量更新：检查文件是否已修改
+            if self.processor.config.incremental and progress:
+                if not self.processor.is_file_changed(path_str, progress):
+                    stats["skipped"] += 1
+                    continue
+                
+                # 更新文件哈希
+                file_hash = self.processor.compute_file_hash(path_str)
+                if progress:
+                    progress.file_hashes[path_str] = file_hash
+
             if i % 10 == 0:
                 elapsed = time.time() - (progress.started_at if progress else time.time())
                 print(f"\n   进度: {i+1}/{len(file_paths)} ({100*(i+1)//len(file_paths)}%)")
-                print(f"   节点: {stats['nodes']}, 耗时: {elapsed:.0f}s")
+                print(f"   节点: {stats['nodes']}, 跳过: {stats['skipped']}, 耗时: {elapsed:.0f}s")
 
             if on_progress:
                 on_progress(i + 1, len(file_paths), file_path.name)

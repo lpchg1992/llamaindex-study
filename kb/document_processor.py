@@ -7,6 +7,7 @@
 - Office 文档处理 (Word, Excel, PPTX)
 - 批量处理和增量保存
 - 断点续传
+- 增量更新（基于文件哈希）
 
 供所有导入脚本使用
 """
@@ -20,7 +21,7 @@ import time
 import uuid
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
-from typing import Optional, List, Callable
+from typing import Optional, List, Callable, Set
 
 from llama_index.core import SimpleDirectoryReader
 from llama_index.core.node_parser import SentenceSplitter
@@ -37,6 +38,7 @@ class DocumentProcessorConfig:
     pdf_scan_threshold: float = 10.0  # 文字密度阈值 (chars/sq inch)
     pdf_image_ratio_threshold: float = 0.8  # 图片比例阈值
     pdf_convert_timeout: int = 600  # PDF 转换超时 (秒)
+    incremental: bool = True  # 增量更新模式
 
 
 @dataclass
@@ -49,6 +51,7 @@ class ProcessingProgress:
     started_at: Optional[float] = None
     last_item: Optional[str] = None
     total_nodes: int = 0
+    file_hashes: dict = field(default_factory=dict)  # 文件路径 -> MD5 哈希
 
     def save(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -93,6 +96,51 @@ class DocumentProcessor:
         """设置 embedding 模型"""
         self.embed_model = embed_model
 
+    @staticmethod
+    def compute_file_hash(file_path: str) -> str:
+        """
+        计算文件的 MD5 哈希值
+        
+        Args:
+            file_path: 文件路径
+            
+        Returns:
+            MD5 哈希值字符串
+        """
+        hash_md5 = hashlib.md5()
+        try:
+            with open(file_path, "rb") as f:
+                # 只读取前 1MB 用于快速哈希
+                chunk = f.read(1024 * 1024)
+                hash_md5.update(chunk)
+            return hash_md5.hexdigest()
+        except Exception:
+            return ""
+    
+    def is_file_changed(self, file_path: str, progress: ProcessingProgress = None) -> bool:
+        """
+        检查文件是否已修改（用于增量更新）
+        
+        Args:
+            file_path: 文件路径
+            progress: 进度记录
+            
+        Returns:
+            True 如果文件已修改或新文件，需要处理
+        """
+        if not self.config.incremental:
+            return True
+        
+        current_hash = self.compute_file_hash(file_path)
+        if not current_hash:
+            return True
+        
+        # 检查是否是新文件或已修改
+        if file_path not in (progress.file_hashes if progress else {}):
+            return True
+        
+        return progress.file_hashes.get(file_path) != current_hash
+    
     def is_scanned_pdf(self, pdf_path: str) -> bool:
         """
         检测 PDF 是否为扫描件

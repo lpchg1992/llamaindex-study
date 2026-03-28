@@ -1096,6 +1096,60 @@ def delete_table(table_name: str):
     raise HTTPException(status_code=404, detail=f"表 {table_name} 不存在")
 
 
+# ============== WebSocket 接口 ==============
+
+@app.websocket("/ws/tasks")
+async def websocket_tasks(websocket: WebSocket, task_id: str = None):
+    """
+    WebSocket 实时任务进度推送
+    
+    连接方式:
+    - /ws/tasks                    # 接收所有任务更新
+    - /ws/tasks?task_id=abc123     # 只接收指定任务更新
+    """
+    from kb.websocket_manager import ws_manager
+    
+    task_id_param = websocket.query_params.get("task_id")
+    
+    await ws_manager.connect(websocket, task_id_param or task_id)
+    
+    try:
+        # 保持连接，接收消息
+        while True:
+            # 接收客户端消息（心跳等）
+            data = await websocket.receive_text()
+            
+            # 处理心跳
+            if data == "ping":
+                await websocket.send_text("pong")
+    except Exception:
+        pass
+    finally:
+        await ws_manager.disconnect(websocket, task_id_param or task_id)
+
+
+@app.websocket("/ws")
+async def websocket_all(websocket: WebSocket):
+    """
+    WebSocket 全局连接
+    
+    接收所有系统消息广播
+    """
+    from kb.websocket_manager import ws_manager
+    
+    await ws_manager.connect(websocket)
+    
+    try:
+        while True:
+            data = await websocket.receive_text()
+            if data == "ping":
+                await websocket.send_text("pong")
+    except Exception:
+        pass
+    finally:
+        await ws_manager.disconnect(websocket)
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000, reload=False)

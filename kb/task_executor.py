@@ -3,7 +3,7 @@
 
 后台任务执行器，支持：
 - 异步任务执行
-- 进度实时更新
+- 进度实时更新（WebSocket + 数据库）
 - 错误处理
 - 任务取消
 """
@@ -27,6 +27,17 @@ class TaskExecutor:
         self._running_tasks: Dict[str, asyncio.Task] = {}
         self._cancel_events: Dict[str, asyncio.Event] = {}
     
+    async def _notify_progress(self, task_id: str):
+        """通知进度更新"""
+        try:
+            task = self.queue.get_task(task_id)
+            if task:
+                # 导入在这里避免循环导入
+                from kb.websocket_manager import ws_manager
+                await ws_manager.send_task_update(task_id, task.to_dict())
+        except:
+            pass
+    
     async def execute_task(self, task_id: str):
         """
         执行任务
@@ -48,6 +59,7 @@ class TaskExecutor:
         try:
             # 标记为运行中
             self.queue.start_task(task_id)
+            await self._notify_progress(task_id)
             
             # 根据任务类型执行
             if task.task_type == "zotero":
@@ -116,7 +128,7 @@ class TaskExecutor:
         # 重建
         if params.get("rebuild"):
             vs.delete_table()
-            self.queue.update_progress(task.task_id, message="已清空知识库")
+            await self._notify_progress(task.task_id)
         
         # 创建导入器
         config = DocumentProcessorConfig(
@@ -147,6 +159,7 @@ class TaskExecutor:
             total=total_items,
             message=f"找到 {total_items} 篇文献"
         )
+        await self._notify_progress(task.task_id)
         
         # 导入文献
         total_nodes = 0
@@ -157,6 +170,7 @@ class TaskExecutor:
             # 检查取消
             if await self._check_cancelled(task.task_id):
                 importer.close()
+                await self._notify_progress(task.task_id)
                 return
             
             # 获取文献
@@ -178,6 +192,7 @@ class TaskExecutor:
                     total=total_items,
                     message=f"处理: {item.title[:30]}..."
                 )
+                await self._notify_progress(task.task_id)
                 
                 # 模拟一些延迟（实际处理可能很慢）
                 await asyncio.sleep(0.1)
@@ -193,6 +208,7 @@ class TaskExecutor:
             progress=100,
             message=f"完成！处理 {processed} 篇，成功 {processed - failed} 篇"
         )
+        await self._notify_progress(task.task_id)
     
     async def _execute_obsidian(self, task):
         """执行 Obsidian 导入"""
