@@ -1,0 +1,44 @@
+[project]
+name = "llamaindex-study"
+version = "0.1.0"
+description = "LlamaIndex 学习项目 - 现代化 RAG 应用开发"
+readme = "README.md"
+authors = [
+    {name = "lpchg1992", email = "huitailang_luo@126.com"}
+]
+requires-python = ">=3.11,<4.0"
+dependencies = [
+    "llama-index-core>=0.10.0",
+    "llama-index-llms-openai>=0.1.0",
+    "llama-index-embeddings-ollama>=0.1.0",
+    "python-dotenv>=1.0.0",
+    "lancedb (>=0.30.1,<0.31.0)",
+    "llama-index-vector-stores-lancedb (>=0.5.0,<0.6.0)",
+    "pypdf (>=6.9.2,<7.0.0)",
+    "llama-index-readers-file (>=0.6.0,<0.7.0)",
+    "reportlab (>=4.4.10,<5.0.0)",
+    "llama-index-packs-node-parser-semantic-chunking (>=0.5.1,<0.6.0)",
+    "scikit-learn (>=1.8.0,<2.0.0)",
+    "fastapi (>=0.135.2,<0.136.0)",
+    "uvicorn (>=0.42.0,<0.43.0)",
+    "python-docx (>=1.2.0,<2.0.0)",
+    "openpyxl (>=3.1.5,<4.0.0)",
+    "python-pptx (>=1.0.2,<2.0.0)",
+    "docx2txt (>=0.9,<0.10)",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "ruff>=0.1.0",
+]
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+package-mode = true
+
+[tool.poetry.scripts]
+llamaindex-study = "llamaindex_study.main:main"
