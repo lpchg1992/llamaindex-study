@@ -17,20 +17,36 @@ API 端点:
     POST /kbs/{kb_id}/search        - 向量检索
     POST /kbs/{kb_id}/query        - RAG 问答
 
-    文档导入:
-    POST /kbs/{kb_id}/ingest        - 通用文件导入
-    POST /kbs/{kb_id}/ingest/zotero - Zotero 收藏夹导入
-    POST /kbs/{kb_id}/ingest/obsidian - Obsidian vault 导入
-    POST /kbs/{kb_id}/rebuild       - 重建知识库
+    任务队列:
+    POST /tasks                      - 提交任务
+    GET  /tasks                      - 列出任务
+    GET  /tasks/{task_id}           - 查询任务状态
+    DELETE /tasks/{task_id}          - 取消任务
+
+    文档导入 (异步):
+    POST /kbs/{kb_id}/ingest        - 通用文件导入（异步）
+    POST /kbs/{kb_id}/ingest/zotero - Zotero 收藏夹导入（异步）
+    POST /kbs/{kb_id}/ingest/obsidian - Obsidian vault 导入（异步）
+    POST /kbs/{kb_id}/rebuild       - 重建知识库（异步）
+
+    Zotero 接口:
+    GET  /zotero/collections         - 列出所有收藏夹
+    GET  /zotero/collections/search - 搜索收藏夹
+
+    Obsidian 接口:
+    GET  /obsidian/vaults            - 列出常见 vault 位置
+    GET  /obsidian/vaults/{name}    - 获取 vault 信息
 
     管理接口:
     GET  /admin/tables              - 列出所有向量表
-    GET  /admin/tables/{name}       - 获取表统计
-    DELETE /admin/tables/{name}     - 删除表
+    GET  /admin/tables/{name}        - 获取表统计
+    DELETE /admin/tables/{name}      - 删除表
 """
 
 import os
 import sys
+import asyncio
+import threading
 from pathlib import Path
 from typing import List, Optional
 
@@ -47,8 +63,8 @@ if env_path.exists():
 
 app = FastAPI(
     title="LlamaIndex RAG API",
-    description="RAG 检索增强生成 API，支持 Zotero、Obsidian 和通用文件导入",
-    version="3.0.0",
+    description="RAG 检索增强生成 API，支持任务队列异步处理",
+    version="3.1.0",
     docs_url="/docs",
 )
 
@@ -59,6 +75,29 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 后台任务执行器
+_executor_loop = None
+_executor_thread = None
+
+
+def get_executor_loop():
+    """获取或创建事件循环"""
+    global _executor_loop, _executor_thread
+    if _executor_loop is None:
+        _executor_loop = asyncio.new_event_loop()
+        _executor_thread = threading.Thread(target=_run_loop, args=(_executor_loop,), daemon=True)
+        _executor_thread.start()
+    return _executor_loop
+
+
+def _run_loop(loop):
+    """运行事件循环"""
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_forever()
+    finally:
+        loop.close()
 
 
 # ============== 数据模型 ==============
@@ -101,24 +140,59 @@ class IngestRequest(BaseModel):
         default=["*.xls", "*.xlsx", ".DS_Store"],
         description="排除的文件模式"
     )
+    async_mode: bool = Field(True, description="是否异步执行")
 
 
 class ZoteroIngestRequest(BaseModel):
     """Zotero 收藏夹导入"""
     collection_id: Optional[int] = Field(None, description="Zotero 收藏夹 ID")
-    collection_name: Optional[str] = Field(None, description="Zotero 收藏夹名称（与 collection_id 二选一）")
+    collection_name: Optional[str] = Field(None, description="Zotero 收藏夹名称")
     rebuild: bool = Field(False, description="是否强制重建")
+    async_mode: bool = Field(True, description="是否异步执行")
 
 
 class ObsidianIngestRequest(BaseModel):
     """Obsidian vault 导入"""
     vault_path: str = Field(..., description="Obsidian vault 路径")
-    folder_path: Optional[str] = Field(None, description="特定文件夹路径（可选）")
+    folder_path: Optional[str] = Field(None, description="特定文件夹路径")
     recursive: bool = Field(True, description="是否递归")
     exclude_patterns: List[str] = Field(
         default=["*/image/*", "*/_resources/*", "*/.obsidian/*"],
         description="排除的文件模式"
     )
+    async_mode: bool = Field(True, description="是否异步执行")
+
+
+class SubmitTaskRequest(BaseModel):
+    """提交任务请求"""
+    task_type: str = Field(..., description="任务类型: zotero, obsidian, generic, rebuild")
+    kb_id: str = Field(..., description="知识库 ID")
+    params: dict = Field(default_factory=dict, description="任务参数")
+    source: str = Field("", description="来源描述")
+
+
+class TaskResponse(BaseModel):
+    """任务响应"""
+    task_id: str
+    task_type: str
+    status: str
+    kb_id: str
+    progress: int
+    current: int
+    total: int
+    message: str
+    created_at: float
+    started_at: Optional[float] = None
+    completed_at: Optional[float] = None
+    result: Optional[dict] = None
+    error: Optional[str] = None
+
+
+class IngestResponse(BaseModel):
+    status: str
+    task_id: Optional[str] = None
+    message: str
+    source: str = ""
 
 
 class TableInfo(BaseModel):
@@ -136,15 +210,6 @@ class KBInfo(BaseModel):
     row_count: Optional[int] = None
     chunk_size: Optional[int] = None
     chunk_overlap: Optional[int] = None
-
-
-class IngestResponse(BaseModel):
-    status: str
-    source: str
-    files_processed: int = 0
-    nodes_created: int = 0
-    failed: int = 0
-    message: str = ""
 
 
 # ============== 辅助函数 ==============
@@ -213,8 +278,138 @@ def get_vector_store(kb_id: str):
 
 @app.get("/health")
 def health_check():
-    return {"status": "ok", "service": "llamaindex-rag-api", "version": "3.0.0"}
+    return {"status": "ok", "service": "llamaindex-rag-api", "version": "3.1.0"}
 
+
+# ============== 任务队列接口 ==============
+
+@app.post("/tasks", response_model=TaskResponse)
+def submit_task(req: SubmitTaskRequest):
+    """
+    提交任务
+    
+    返回任务 ID，可通过 GET /tasks/{task_id} 查询进度
+    """
+    from kb.task_queue import task_queue, TaskType
+    
+    # 验证任务类型
+    valid_types = [t.value for t in TaskType]
+    if req.task_type not in valid_types:
+        raise HTTPException(
+            status_code=400,
+            detail=f"无效的任务类型: {req.task_type}，可选: {valid_types}"
+        )
+    
+    # 提交任务
+    task_id = task_queue.submit_task(
+        task_type=req.task_type,
+        kb_id=req.kb_id,
+        params=req.params,
+        source=req.source,
+    )
+    
+    # 启动任务执行
+    from kb.task_executor import task_executor
+    loop = get_executor_loop()
+    asyncio.run_coroutine_threadsafe(
+        task_executor.execute_task(task_id),
+        loop
+    )
+    
+    # 获取任务信息
+    task = task_queue.get_task(task_id)
+    
+    return TaskResponse(
+        task_id=task.task_id,
+        task_type=task.task_type,
+        status=task.status,
+        kb_id=task.kb_id,
+        progress=task.progress,
+        current=task.current,
+        total=task.total,
+        message=task.message,
+        created_at=task.created_at,
+    )
+
+
+@app.get("/tasks", response_model=List[TaskResponse])
+def list_tasks(
+    kb_id: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = 50,
+):
+    """列出任务"""
+    from kb.task_queue import task_queue
+    
+    tasks = task_queue.list_tasks(kb_id=kb_id, status=status, limit=limit)
+    
+    return [
+        TaskResponse(
+            task_id=t.task_id,
+            task_type=t.task_type,
+            status=t.status,
+            kb_id=t.kb_id,
+            progress=t.progress,
+            current=t.current,
+            total=t.total,
+            message=t.message,
+            created_at=t.created_at,
+            started_at=t.started_at,
+            completed_at=t.completed_at,
+            result=t.result,
+            error=t.error,
+        )
+        for t in tasks
+    ]
+
+
+@app.get("/tasks/{task_id}", response_model=TaskResponse)
+def get_task(task_id: str):
+    """获取任务状态"""
+    from kb.task_queue import task_queue
+    
+    task = task_queue.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"任务不存在: {task_id}")
+    
+    return TaskResponse(
+        task_id=task.task_id,
+        task_type=task.task_type,
+        status=task.status,
+        kb_id=task.kb_id,
+        progress=task.progress,
+        current=task.current,
+        total=task.total,
+        message=task.message,
+        created_at=task.created_at,
+        started_at=task.started_at,
+        completed_at=task.completed_at,
+        result=task.result,
+        error=task.error,
+    )
+
+
+@app.delete("/tasks/{task_id}")
+def cancel_task(task_id: str):
+    """取消任务"""
+    from kb.task_queue import task_queue
+    from kb.task_executor import task_executor
+    
+    # 先尝试取消执行中的任务
+    task_executor.cancel_task(task_id)
+    
+    # 再从队列中删除
+    success = task_queue.cancel_task(task_id)
+    if not success:
+        task = task_queue.get_task(task_id)
+        if task and task.status == "running":
+            return {"status": "cancelled", "task_id": task_id, "message": "正在取消..."}
+        raise HTTPException(status_code=400, detail="无法取消任务，只能取消等待中的任务")
+    
+    return {"status": "cancelled", "task_id": task_id}
+
+
+# ============== 知识库接口 ==============
 
 @app.get("/kbs", response_model=List[KBInfo])
 def list_kbs():
@@ -227,7 +422,6 @@ def list_kbs():
             if not subdir.is_dir():
                 continue
 
-            # 处理 zotero 子目录
             if subdir.name == "zotero":
                 for zotero_subdir in subdir.iterdir():
                     if zotero_subdir.is_dir():
@@ -280,10 +474,8 @@ def create_kb(req: CreateKBRequest):
 
     persist_dir.mkdir(parents=True, exist_ok=True)
 
-    # 创建空的向量存储
     vs = get_vector_store(kb_id)
 
-    # 保存配置
     config_file = persist_dir / "kb_config.json"
     import json
     with open(config_file, "w") as f:
@@ -351,6 +543,8 @@ def delete_kb(kb_id: str):
     return {"status": "deleted", "kb_id": kb_id}
 
 
+# ============== 检索接口 ==============
+
 @app.post("/kbs/{kb_id}/search", response_model=List[SearchResult])
 def search(kb_id: str, req: SearchRequest):
     """向量检索"""
@@ -406,22 +600,57 @@ def query(kb_id: str, req: QueryRequest):
     )
 
 
-# ============== 文档导入接口 ==============
+# ============== 异步导入接口 ==============
 
 @app.post("/kbs/{kb_id}/ingest", response_model=IngestResponse)
 def ingest_files(kb_id: str, req: IngestRequest):
     """
     通用文件导入
-
-    从文件或文件夹路径导入文档，支持 PDF（含 OCR）、Word、Excel、PPTX、Markdown 等格式。
+    
+    设置 async_mode=true 返回任务 ID，通过 /tasks/{task_id} 查询进度
     """
+    if req.async_mode:
+        # 异步模式
+        from kb.task_queue import task_queue
+        from kb.task_executor import task_executor
+        
+        task_id = task_queue.submit_task(
+            task_type="generic",
+            kb_id=kb_id,
+            params={
+                "paths": req.paths,
+                "recursive": req.recursive,
+                "exclude_patterns": req.exclude_patterns,
+            },
+            source="generic",
+        )
+        
+        # 启动任务
+        loop = get_executor_loop()
+        asyncio.run_coroutine_threadsafe(
+            task_executor.execute_task(task_id),
+            loop
+        )
+        
+        return IngestResponse(
+            status="pending",
+            task_id=task_id,
+            message=f"任务已提交，ID: {task_id}，请通过 GET /tasks/{task_id} 查询进度",
+            source="generic",
+        )
+    else:
+        # 同步模式（保留原有逻辑）
+        return _ingest_files_sync(kb_id, req)
+
+
+def _ingest_files_sync(kb_id: str, req: IngestRequest):
+    """同步导入"""
     from kb.generic_processor import GenericImporter, FileImportConfig
-    from kb.document_processor import DocumentProcessorConfig, ProcessingProgress
+    from kb.document_processor import DocumentProcessorConfig
 
     configure_llamaindex()
     embed_model = get_embed_model()
 
-    # 获取知识库配置
     persist_dir = get_kb_persist_dir(kb_id)
     config_file = persist_dir / "kb_config.json"
     chunk_size, chunk_overlap = 512, 50
@@ -432,7 +661,6 @@ def ingest_files(kb_id: str, req: IngestRequest):
             chunk_size = cfg.get("chunk_size", 512)
             chunk_overlap = cfg.get("chunk_overlap", 50)
 
-    # 创建导入器
     importer = GenericImporter(
         config=FileImportConfig(source_name=kb_id),
         processor_config=DocumentProcessorConfig(
@@ -443,7 +671,6 @@ def ingest_files(kb_id: str, req: IngestRequest):
 
     vs = get_vector_store(kb_id)
 
-    # 导入
     paths = [Path(p) for p in req.paths]
     stats = importer.import_paths(
         paths=[str(p) for p in paths],
@@ -467,15 +694,64 @@ def ingest_files(kb_id: str, req: IngestRequest):
 def ingest_zotero(kb_id: str, req: ZoteroIngestRequest):
     """
     Zotero 收藏夹导入
-
-    从 Zotero 收藏夹导入文献，支持：
-    - 文献元数据（标题、作者、标签）
-    - 标注和笔记
-    - PDF 附件（含扫描件 OCR）
-    - Office 文档附件
-
-    可以通过 collection_id 或 collection_name 指定收藏夹
+    
+    设置 async_mode=true 返回任务 ID，通过 /tasks/{task_id} 查询进度
     """
+    from kb.zotero_processor import ZoteroImporter
+
+    if req.async_mode:
+        # 异步模式
+        from kb.task_queue import task_queue
+        from kb.task_executor import task_executor
+        
+        # 获取收藏夹信息
+        importer = ZoteroImporter()
+        collection_id = req.collection_id
+        collection_name = req.collection_name or "Unknown"
+        
+        if not collection_id and req.collection_name:
+            result = importer.get_collection_by_name(req.collection_name)
+            if result and "collectionID" in result:
+                collection_id = result["collectionID"]
+                collection_name = result.get("collectionName", collection_name)
+            elif result and "multiple" in result:
+                raise HTTPException(status_code=400, detail=f"名称模糊，存在多个匹配，请用 collection_id 精确指定")
+            else:
+                raise HTTPException(status_code=400, detail=f"未找到收藏夹: {req.collection_name}")
+        
+        importer.close()
+        
+        task_id = task_queue.submit_task(
+            task_type="zotero",
+            kb_id=kb_id,
+            params={
+                "collection_id": collection_id,
+                "collection_name": collection_name,
+                "rebuild": req.rebuild,
+            },
+            source=f"zotero:{collection_name}",
+        )
+        
+        # 启动任务
+        loop = get_executor_loop()
+        asyncio.run_coroutine_threadsafe(
+            task_executor.execute_task(task_id),
+            loop
+        )
+        
+        return IngestResponse(
+            status="pending",
+            task_id=task_id,
+            message=f"Zotero {collection_name} 导入任务已提交，ID: {task_id}",
+            source="zotero",
+        )
+    else:
+        # 同步模式
+        return _ingest_zotero_sync(kb_id, req)
+
+
+def _ingest_zotero_sync(kb_id: str, req: ZoteroIngestRequest):
+    """同步导入"""
     from kb.zotero_processor import ZoteroImporter
     from kb.document_processor import DocumentProcessorConfig, ProcessingProgress
 
@@ -483,47 +759,28 @@ def ingest_zotero(kb_id: str, req: ZoteroIngestRequest):
     embed_model = get_embed_model()
 
     vs = get_vector_store(kb_id)
-
     importer = ZoteroImporter()
 
-    # 确定收藏夹
     collection_id = req.collection_id
     collection_name = "Unknown"
 
     if collection_id:
-        # 通过 ID 查找
         collections = importer.get_collections()
         for col in collections:
             if col["collectionID"] == collection_id:
                 collection_name = col["collectionName"]
                 break
     elif req.collection_name:
-        # 通过名称查找
         result = importer.get_collection_by_name(req.collection_name)
         if result is None:
-            return IngestResponse(
-                status="error",
-                source="zotero",
-                message=f"未找到收藏夹: {req.collection_name}"
-            )
+            return IngestResponse(status="error", message=f"未找到收藏夹: {req.collection_name}")
         if "multiple" in result:
-            matches = "\n".join([f"- [{m['collectionID']}] {m['collectionName']}" 
-                               for m in result["matches"]])
-            return IngestResponse(
-                status="error",
-                source="zotero",
-                message=f"名称模糊，存在多个匹配:\n{matches}\n\n请使用 collection_id 精确指定"
-            )
+            return IngestResponse(status="error", message=f"名称模糊，存在多个匹配")
         collection_id = result["collectionID"]
         collection_name = result["collectionName"]
     else:
-        return IngestResponse(
-            status="error",
-            source="zotero",
-            message="必须提供 collection_id 或 collection_name"
-        )
+        return IngestResponse(status="error", message="必须提供 collection_id 或 collection_name")
 
-    # 加载进度
     progress_file = Path.home() / ".llamaindex" / f"zotero_{collection_id}_progress.json"
     progress = ProcessingProgress.load(progress_file)
 
@@ -531,7 +788,6 @@ def ingest_zotero(kb_id: str, req: ZoteroIngestRequest):
         vs.delete_table()
         progress = ProcessingProgress()
 
-    # 导入
     stats = importer.import_collection(
         collection_id=collection_id,
         collection_name=collection_name,
@@ -542,8 +798,6 @@ def ingest_zotero(kb_id: str, req: ZoteroIngestRequest):
     )
 
     importer.close()
-
-    # 清理进度文件
     progress_file.unlink(missing_ok=True)
 
     return IngestResponse(
@@ -560,41 +814,74 @@ def ingest_zotero(kb_id: str, req: ZoteroIngestRequest):
 def ingest_obsidian(kb_id: str, req: ObsidianIngestRequest):
     """
     Obsidian vault 导入
-
-    从 Obsidian vault 导入笔记，支持：
-    - Markdown 文件解析
-    - YAML frontmatter 提取
-    - Wiki 链接和标签处理
-    - PDF 附件（含扫描件 OCR）
+    
+    设置 async_mode=true 返回任务 ID，通过 /tasks/{task_id} 查询进度
     """
-    from kb.obsidian_processor import ObsidianImporter
-    from kb.document_processor import DocumentProcessorConfig, ProcessingProgress
-
-    configure_llamaindex()
-    embed_model = get_embed_model()
-
-    # 确定 vault 根目录
     vault_path = Path(req.vault_path)
     if not vault_path.exists():
         raise HTTPException(status_code=400, detail=f"Vault 路径不存在: {req.vault_path}")
 
-    # 确定导入目录
     import_dir = vault_path
     if req.folder_path:
         import_dir = vault_path / req.folder_path
         if not import_dir.exists():
             raise HTTPException(status_code=400, detail=f"文件夹路径不存在: {req.folder_path}")
 
+    if req.async_mode:
+        # 异步模式
+        from kb.task_queue import task_queue
+        from kb.task_executor import task_executor
+        
+        task_id = task_queue.submit_task(
+            task_type="obsidian",
+            kb_id=kb_id,
+            params={
+                "vault_path": str(vault_path),
+                "folder_path": req.folder_path,
+                "recursive": req.recursive,
+                "exclude_patterns": req.exclude_patterns,
+            },
+            source=f"obsidian:{import_dir.name}",
+        )
+        
+        # 启动任务
+        loop = get_executor_loop()
+        asyncio.run_coroutine_threadsafe(
+            task_executor.execute_task(task_id),
+            loop
+        )
+        
+        return IngestResponse(
+            status="pending",
+            task_id=task_id,
+            message=f"Obsidian {import_dir.name} 导入任务已提交，ID: {task_id}",
+            source="obsidian",
+        )
+    else:
+        # 同步模式
+        return _ingest_obsidian_sync(kb_id, req)
+
+
+def _ingest_obsidian_sync(kb_id: str, req: ObsidianIngestRequest):
+    """同步导入"""
+    from kb.obsidian_processor import ObsidianImporter
+    from kb.document_processor import DocumentProcessorConfig, ProcessingProgress
+
+    configure_llamaindex()
+    embed_model = get_embed_model()
+
+    vault_path = Path(req.vault_path)
+    import_dir = vault_path
+    if req.folder_path:
+        import_dir = vault_path / req.folder_path
+
     vs = get_vector_store(kb_id)
 
-    # 加载进度
     progress_file = Path.home() / ".llamaindex" / f"obsidian_{import_dir.name}_progress.json"
     progress = ProcessingProgress.load(progress_file)
 
-    # 创建导入器
     importer = ObsidianImporter(vault_root=vault_path)
 
-    # 导入
     stats = importer.import_directory(
         directory=import_dir,
         vector_store=vs,
@@ -604,7 +891,6 @@ def ingest_obsidian(kb_id: str, req: ObsidianIngestRequest):
         recursive=req.recursive,
     )
 
-    # 清理进度文件
     progress_file.unlink(missing_ok=True)
 
     return IngestResponse(
@@ -618,11 +904,35 @@ def ingest_obsidian(kb_id: str, req: ObsidianIngestRequest):
 
 
 @app.post("/kbs/{kb_id}/rebuild")
-def rebuild_kb(kb_id: str):
-    """重建知识库（清空并重新导入）"""
-    vs = get_vector_store(kb_id)
-    vs.delete_table()
-    return {"status": "rebuilt", "kb_id": kb_id}
+def rebuild_kb(kb_id: str, async_mode: bool = True):
+    """重建知识库"""
+    if async_mode:
+        from kb.task_queue import task_queue
+        from kb.task_executor import task_executor
+        
+        task_id = task_queue.submit_task(
+            task_type="rebuild",
+            kb_id=kb_id,
+            params={},
+            source=f"rebuild:{kb_id}",
+        )
+        
+        # 启动任务
+        loop = get_executor_loop()
+        asyncio.run_coroutine_threadsafe(
+            task_executor.execute_task(task_id),
+            loop
+        )
+        
+        return {
+            "status": "pending",
+            "task_id": task_id,
+            "message": f"重建任务已提交，ID: {task_id}"
+        }
+    else:
+        vs = get_vector_store(kb_id)
+        vs.delete_table()
+        return {"status": "rebuilt", "kb_id": kb_id}
 
 
 # ============== Zotero 接口 ==============
@@ -665,7 +975,6 @@ def list_obsidian_vaults():
     """列出常见的 Obsidian vault 位置"""
     vaults = []
 
-    # 常见路径
     common_paths = [
         Path.home() / "Documents" / "Obsidian Vault",
         Path.home() / "Documents" / "Obsidian",
@@ -676,9 +985,7 @@ def list_obsidian_vaults():
 
     for vault_path in common_paths:
         if vault_path.exists():
-            # 检查是否有 .obsidian 目录
             if (vault_path / ".obsidian").exists():
-                # 统计笔记数量
                 md_count = len(list(vault_path.rglob("*.md")))
                 vaults.append({
                     "path": str(vault_path),
@@ -691,11 +998,10 @@ def list_obsidian_vaults():
 
 @app.get("/obsidian/vaults/{vault_name}")
 def get_obsidian_vault_info(vault_name: str):
-    """获取 Obsidian vault 信息（通过名称匹配）"""
+    """获取 Obsidian vault 信息"""
     vaults_response = list_obsidian_vaults()
     vaults = vaults_response.get("vaults", [])
 
-    # 匹配 vault
     matched = None
     for vault in vaults:
         if vault["name"] == vault_name or vault_name in vault["path"]:
@@ -705,33 +1011,23 @@ def get_obsidian_vault_info(vault_name: str):
     if not matched:
         return {"vault": None, "message": f"未找到 vault: {vault_name}"}
 
-    # 扫描文件夹结构
     vault_path = Path(matched["path"])
     folders = []
+    seen_names = set()
     for item in vault_path.rglob("*"):
         if item.is_dir() and not item.name.startswith("."):
-            rel_path = str(item.relative_to(vault_path))
-            if "/" not in rel_path.replace("\\", "/").split("/")[1] if "/" in rel_path.replace("\\", "/") else True:
-                # 只显示顶层目录
-                pass
-            folders.append({
-                "path": rel_path,
-                "name": item.name,
-            })
-
-    # 去重顶层目录
-    top_folders = []
-    seen_names = set()
-    for f in folders:
-        name = f["name"]
-        if name not in seen_names:
-            seen_names.add(name)
-            top_folders.append(f)
-    top_folders = top_folders[:20]
+            name = item.name
+            if name not in seen_names:
+                seen_names.add(name)
+                folders.append({
+                    "path": str(item.relative_to(vault_path)),
+                    "name": name,
+                })
+    folders = folders[:20]
 
     return {
         "vault": matched,
-        "folders": top_folders,
+        "folders": folders,
     }
 
 
@@ -746,44 +1042,20 @@ def list_tables():
     base = Path("/volumes/online/llamaindex")
 
     if base.exists():
-        # 扫描根目录
-        for subdir in base.iterdir():
-            if not subdir.is_dir():
-                continue
-
-            if subdir.name == "zotero":
-                # 处理 zotero 子目录
-                for zotero_subdir in subdir.iterdir():
-                    if zotero_subdir.is_dir():
-                        lance_file = zotero_subdir / f"{zotero_subdir.name}.lance"
-                        if lance_file.exists():
-                            try:
-                                db = lancedb.connect(str(zotero_subdir))
-                                table = db.open_table(zotero_subdir.name)
-                                df = table.to_pandas()
-                                tables.append(TableInfo(
-                                    name=zotero_subdir.name,
-                                    row_count=len(df),
-                                    vector_dim=len(df["vector"].iloc[0]) if len(df) > 0 and "vector" in df.columns else 0,
-                                    persist_dir=str(zotero_subdir),
-                                ))
-                            except:
-                                pass
-            else:
-                lance_file = subdir / f"{subdir.name}.lance"
-                if lance_file.exists():
-                    try:
-                        db = lancedb.connect(str(subdir))
-                        table = db.open_table(subdir.name)
-                        df = table.to_pandas()
-                        tables.append(TableInfo(
-                            name=subdir.name,
-                            row_count=len(df),
-                            vector_dim=len(df["vector"].iloc[0]) if len(df) > 0 and "vector" in df.columns else 0,
-                            persist_dir=str(subdir),
-                        ))
-                    except:
-                        pass
+        for subdir in base.rglob("*"):
+            if subdir.is_dir() and subdir.name.endswith(".lance"):
+                try:
+                    db = lancedb.connect(str(subdir.parent))
+                    table = db.open_table(subdir.stem)
+                    df = table.to_pandas()
+                    tables.append(TableInfo(
+                        name=subdir.stem,
+                        row_count=len(df),
+                        vector_dim=len(df["vector"].iloc[0]) if len(df) > 0 and "vector" in df.columns else 0,
+                        persist_dir=str(subdir.parent),
+                    ))
+                except:
+                    pass
 
     return {"tables": tables}
 
@@ -795,12 +1067,8 @@ def get_table_info(table_name: str):
 
     base = Path("/volumes/online/llamaindex")
 
-    # 扫描
     for subdir in base.rglob("*"):
-        if not subdir.is_dir():
-            continue
-        lance_file = subdir / f"{table_name}.lance"
-        if lance_file.exists():
+        if subdir.is_dir() and subdir.name == f"{table_name}.lance":
             db = lancedb.connect(str(subdir))
             table = db.open_table(table_name)
             df = table.to_pandas()
@@ -820,10 +1088,7 @@ def delete_table(table_name: str):
     base = Path("/volumes/online/llamaindex")
 
     for subdir in base.rglob("*"):
-        if not subdir.is_dir():
-            continue
-        lance_file = subdir / f"{table_name}.lance"
-        if lance_file.exists():
+        if subdir.is_dir() and subdir.name == f"{table_name}.lance":
             vs = get_vector_store(table_name)
             vs.delete_table()
             return {"status": "deleted", "table": table_name}

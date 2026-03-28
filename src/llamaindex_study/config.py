@@ -46,6 +46,9 @@ class Settings:
         
         # Zotero 向量数据存储目录
         self.zotero_persist_dir: str = os.getenv("ZOTERO_PERSIST_DIR", "/Volumes/online/llamaindex/zotero")
+        
+        # 任务队列数据目录
+        self.data_dir: str = os.getenv("DATA_DIR", "/Users/luopingcheng/.llamaindex")
 
         # ========== 检索配置 ==========
         self.top_k: int = int(os.getenv("TOP_K", "5"))
