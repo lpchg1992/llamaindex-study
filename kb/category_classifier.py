@@ -3,7 +3,6 @@
 """
 
 import json
-import os
 import re
 from typing import List, Dict, Any, Optional
 from pathlib import Path
@@ -61,45 +60,31 @@ class CategoryClassifier:
         
         try:
             from llama_index.llms.openai import OpenAI
-            from llama_index.llms.openai.utils import ALL_AVAILABLE_MODELS
-            import tiktoken
-            import tiktoken.model as tm
+            from llamaindex_study.ollama_utils import configure_llamaindex_for_siliconflow
+            from llamaindex_study.config import get_settings
             
-            # 手动加载 .env
-            env_path = Path(__file__).parent.parent / ".env"
-            if env_path.exists():
-                from dotenv import load_dotenv
-                load_dotenv(env_path)
+            settings = get_settings()
             
-            api_key = os.getenv("SILICONFLOW_API_KEY")
-            model_key = os.getenv("SILICONFLOW_MODEL", "Pro/deepseek-ai/DeepSeek-V3.2")
-            api_base = os.getenv("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1")
-            
-            if not api_key:
+            if not settings.siliconflow_api_key:
                 print("   ⚠️  LLM 分类不可用: SILICONFLOW_API_KEY 未设置")
                 self._llm_available = False
                 return False
             
-            # 注册模型上下文窗口
-            if model_key not in ALL_AVAILABLE_MODELS:
-                ALL_AVAILABLE_MODELS[model_key] = 128000
-            
-            # 注册 tokenizer
-            try:
-                tiktoken.encoding_for_model(model_key)
-            except KeyError:
-                tm.MODEL_TO_ENCODING[model_key] = "cl100k_base"
+            # 配置 LlamaIndex 使用 SiliconFlow（注册模型和 tokeniser）
+            configure_llamaindex_for_siliconflow()
             
             # 使用 SiliconFlow 配置
             self._llm = OpenAI(
-                model=model_key,
-                api_key=api_key,
-                api_base=api_base,
+                model=settings.siliconflow_model,
+                api_key=settings.siliconflow_api_key,
+                api_base=settings.siliconflow_base_url,
             )
             self._llm_available = True
             return True
         except Exception as e:
             print(f"   ⚠️  LLM 初始化失败: {e}")
+            import traceback
+            traceback.print_exc()
             self._llm_available = False
             return False
     
@@ -168,11 +153,19 @@ class CategoryClassifier:
         )
         
         try:
-            response = self._llm.complete(prompt)
+            # 使用 chat 模式
+            from llama_index.core.llms import ChatMessage
+            messages = [
+                ChatMessage(role="system", content="You are a knowledge base classification assistant. Respond with JSON only."),
+                ChatMessage(role="user", content=prompt)
+            ]
+            response = self._llm.chat(messages)
             
             # 获取文本内容
             text = ""
-            if hasattr(response, 'text') and response.text:
+            if hasattr(response, 'message') and hasattr(response.message, 'content'):
+                text = response.message.content
+            elif hasattr(response, 'text'):
                 text = response.text
             
             if not text.strip():
