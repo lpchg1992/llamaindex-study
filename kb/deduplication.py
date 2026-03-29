@@ -463,15 +463,19 @@ class DeduplicationManager:
         # 持久化到 SQLite
         if self.use_sqlite and self._dedup_db:
             try:
-                self._dedup_db.add_record(
+                result = self._dedup_db.add_record(
                     kb_id=self.kb_id,
                     file_path=rel_path,
                     hash=record.hash,
                     doc_id=doc_id,
                     chunk_count=chunk_count,
                 )
+                if not result:
+                    print(f"   ⚠️  保存去重记录返回 False")
             except Exception as e:
                 print(f"   ⚠️  保存去重记录失败: {e}")
+                import traceback
+                traceback.print_exc()
 
     def mark_deleted(self, rel_path: str):
         """

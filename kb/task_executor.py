@@ -219,8 +219,13 @@ class TaskExecutor:
                 
                 # 更新去重状态（串行访问）
                 async with DedupLock():
-                    dedup_manager.mark_processed(abs_path, content, rel_path,
-                                               chunk_count=len(nodes), vault_root=vault_root)
+                    dedup_manager.mark_processed(
+                        file_path=abs_path,
+                        content=content,
+                        doc_id=rel_path,
+                        chunk_count=len(nodes),
+                        vault_root=vault_root
+                    )
                 
                 processed_files += 1
                 

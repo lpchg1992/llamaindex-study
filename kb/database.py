@@ -481,25 +481,24 @@ class DedupStateDB:
             chunk_count: chunk 数量
             
         Returns:
-            是否是新插入
+            是否成功
         """
         now = time.time()
         mtime = time.time()
         
-        with self.db.get_connection() as conn:
-            cursor = conn.execute("""
-                INSERT INTO dedup_records 
-                (kb_id, file_path, hash, doc_id, chunk_count, mtime, last_processed, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(kb_id, file_path) DO UPDATE SET
-                    hash = excluded.hash,
-                    doc_id = excluded.doc_id,
-                    chunk_count = excluded.chunk_count,
-                    last_processed = excluded.last_processed,
-                    updated_at = excluded.updated_at
-            """, (kb_id, file_path, hash, doc_id, chunk_count, mtime, now, now, now))
-            
-            return cursor.rowcount > 0
+        try:
+            with self.db.get_connection() as conn:
+                cursor = conn.execute("""
+                    INSERT OR REPLACE INTO dedup_records 
+                    (kb_id, file_path, hash, doc_id, chunk_count, mtime, last_processed, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (kb_id, file_path, hash, doc_id, chunk_count, mtime, now, now, now))
+                
+                conn.commit()
+                return True
+        except Exception as e:
+            print(f"   ⚠️  add_record 错误: {e}")
+            return False
     
     def bulk_add(self, kb_id: str, records: List[Dict[str, Any]]) -> int:
         """
