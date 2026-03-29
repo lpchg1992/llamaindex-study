@@ -520,7 +520,7 @@ class DedupStateDB:
                 conn.commit()
                 return True
         except Exception as e:
-            print(f"   ⚠️  add_record 错误: {e}")
+            logger.warning(f"add_record 错误: {e}")
             return False
     
     def bulk_add(self, kb_id: str, records: List[Dict[str, Any]]) -> int:
@@ -1076,7 +1076,7 @@ class CategoryRuleDB:
                 conn.commit()
                 return True
         except Exception as e:
-            print(f"   ⚠️  添加分类规则失败: {e}")
+            logger.warning(f"添加分类规则失败: {e}")
             return False
     
     def get_rules_for_kb(self, kb_id: str) -> List[Dict[str, Any]]:

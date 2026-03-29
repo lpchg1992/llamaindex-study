@@ -16,7 +16,7 @@
 │       │                    ▼                                   │
 │       │              Embedding 处理                             │
 │       │              ┌──────────┬──────────┐                  │
-│       │              │ 本地     │ 远程     │ ← 并行执行        │
+│       │              │ 本地     │ 远程     │ ← 竞争模式        │
 │       │              │ Ollama   │ Ollama   │                  │
 │       │              └──────────┴──────────┘                  │
 │       │                    │                                   │
@@ -35,7 +35,7 @@
 
 | 层级 | 组件 | 并行/串行 | 原因 |
 |------|------|----------|------|
-| 计算层 | Embedding | **并行** | 两个 Ollama 端点可同时工作 |
+| 计算层 | Embedding | **竞争模式** | 两个端点同时请求，先完成的使用 |
 | 存储层 | dedup.db | 串行 | SQLite 不支持高并发 |
 | 存储层 | LanceDB | 串行 | WriteQueue 避免锁定 |
 
@@ -67,31 +67,50 @@ class LanceDBWriteQueue:
             self._queue.task_done()
 ```
 
-### 3. 并行 Embedding 处理器
+### 3. 并行 Embedding 处理器（竞争模式）
 
 ```python
 # kb/parallel_embedding.py
 class ParallelEmbeddingProcessor:
     def __init__(self):
-        self._executor = ThreadPoolExecutor(max_workers=2)
         self.endpoints = [
-            {"name": "本地", "url": "http://localhost:11434"},
-            {"name": "远程", "url": "http://192.168.31.169:11434"},
+            EmbeddingEndpoint("本地", DEFAULT_LOCAL_URL),
+            EmbeddingEndpoint("远程", DEFAULT_REMOTE_URL),
         ]
+        self._executor = ThreadPoolExecutor(max_workers=len(self.endpoints))
     
     async def process_batch(self, texts):
-        # 为每个文本轮流分配端点
-        tasks = []
-        for i, text in enumerate(texts):
-            ep = self.endpoints[i % len(self.endpoints)]
-            task = loop.run_in_executor(
-                self._executor,
-                lambda: self._call_ollama(text, ep)
-            )
-            tasks.append(task)
+        """竞争模式：所有端点同时请求，先完成的返回"""
+        async def get_embedding_from_any_endpoint(text):
+            tasks = [try_endpoint(ep) for ep in self.endpoints]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # 找出最快成功的
+            for r in results:
+                if isinstance(r, tuple) and r[2] is None:  # error is None
+                    return r
+            return results[0]  # 所有失败，返回第一个
         
-        # 真正并行执行
-        return await asyncio.gather(*tasks)
+        return await asyncio.gather(*[get_embedding_from_any_endpoint(t) for t in texts])
+```
+
+### 4. 失败重试机制
+
+```python
+# kb/parallel_embedding.py
+def _get_embedding_with_retry(self, text: str, ep: EmbeddingEndpoint) -> EmbeddingResult:
+    """带重试的 embedding 获取"""
+    for attempt in range(MAX_RETRIES):  # 默认3次
+        try:
+            embedding = model.get_text_embedding(text)
+            self._stats[ep.name] += 1
+            return (ep.name, embedding, None)
+        except Exception as e:
+            if attempt < MAX_RETRIES - 1:
+                logger.debug(f"[{ep.name}] 重试 {attempt + 1}/{MAX_RETRIES}")
+    
+    self._failures[ep.name] += 1
+    return (ep.name, [0.0] * EMBEDDING_DIM, f"重试{MAX_RETRIES}次后失败")
 ```
 
 ## 架构分层
@@ -100,9 +119,9 @@ class ParallelEmbeddingProcessor:
 ┌─────────────────────────────────────────────────────────────┐
 │                        接口层 (Interface)                    │
 ├─────────────────────────────────────────────────────────────┤
-│  API 层 (api.py)        │  CLI 层 (kb/ingest_vdb.py)      │
-│  - FastAPI HTTP 接口     │  - 命令行入口                    │
-│  - WebSocket 推送        │  - 批处理脚本                    │
+│  api.py                    │  kb/ingest.py, kb/ingest_vdb.py │
+│  - FastAPI HTTP 接口        │  - 命令行入口                     │
+│  - WebSocket 推送          │  - 批处理脚本                     │
 └──────────────────────────────┬──────────────────────────────┘
                                │
 ┌──────────────────────────────▼──────────────────────────────┐
@@ -110,23 +129,25 @@ class ParallelEmbeddingProcessor:
 ├─────────────────────────────────────────────────────────────┤
 │  kb/services.py                                               │
 │  - KnowledgeBaseService   # 知识库管理                       │
-│  - VectorStoreService     # 向量存储                         │
-│  - ObsidianService        # Obsidian 导入                    │
-│  - ZoteroService          # Zotero 导入                     │
-│  - SearchService          # 搜索和 RAG                      │
+│  - VectorStoreService    # 向量存储                         │
+│  - ObsidianService       # Obsidian 导入                    │
+│  - ZoteroService         # Zotero 导入                      │
+│  - GenericService        # 通用文件导入                      │
+│  - SearchService         # 搜索和 RAG                       │
 └──────────────────────────────┬──────────────────────────────┘
                                │
 ┌──────────────────────────────▼──────────────────────────────┐
 │                     业务层 (Business)                       │
 ├─────────────────────────────────────────────────────────────┤
 │  kb/                                                        │
-│  ├── task_queue.py            # 任务队列（SQLite）           │
-│  ├── task_executor.py        # 任务执行器                   │
-│  ├── task_lock.py            # 去重锁（Semaphore）         │
-│  ├── parallel_embedding.py    # 并行 Embedding               │
-│  ├── ingest_vdb.py           # LanceDB 写入队列             │
-│  ├── deduplication.py        # 去重和增量同步               │
-│  └── registry.py             # 知识库注册表                  │
+│  ├── registry.py             # 知识库注册表                   │
+│  ├── task_queue.py          # 任务队列（SQLite）             │
+│  ├── task_executor.py       # 任务执行器                     │
+│  ├── task_lock.py           # 去重锁（Semaphore）           │
+│  ├── parallel_embedding.py   # 并行 Embedding（竞争模式）     │
+│  ├── ingest_vdb.py          # LanceDB 写入队列               │
+│  ├── deduplication.py        # 去重和增量同步                 │
+│  └── database.py            # SQLite 数据库管理              │
 └──────────────────────────────┬──────────────────────────────┘
                                │
 ┌──────────────────────────────▼──────────────────────────────┐
@@ -137,7 +158,8 @@ class ParallelEmbeddingProcessor:
 │  ├── logger.py              # 日志工具                     │
 │  ├── ollama_utils.py        # Ollama 工具                  │
 │  ├── embedding_service.py   # Ollama Embedding 服务        │
-│  ├── vector_store.py        # 向量数据库                   │
+│  ├── embedding_loadbalancer.py  # 负载均衡                  │
+│  ├── vector_store.py        # 向量数据库（多后端）          │
 │  ├── query_engine.py        # 查询引擎                     │
 │  └── reranker.py            # 重排序                       │
 └─────────────────────────────────────────────────────────────┘
@@ -157,56 +179,57 @@ async def _execute_obsidian(self, task):
         to_add, to_update = dedup_manager.detect_changes(...)
         all_docs = [(c.rel_path, c.abs_path) for c in to_add + to_update]
     
-    # 阶段2: 并行处理（embedding）
+    # 阶段2: 并行处理（embedding - 竞争模式）
     embed_processor = get_parallel_processor()
-    lance_write_queue.start()
+    await lance_write_queue.start()
     
     for rel_path, abs_path in all_docs:
         nodes = node_parser.get_nodes_from_documents([doc])
         
-        # 并行获取 embeddings
+        # 并行获取 embeddings（竞争模式）
         texts = [n.get_content() for n in nodes]
         results = await embed_processor.process_batch(texts)
         
         # 串行写入
         await lance_write_queue.enqueue(lance_store, nodes, kb_id)
     
-    await lance_write_queue._queue.join()
+    await lance_write_queue.wait_until_empty()
     
     # 阶段3: 保存状态（串行访问）
     async with DedupLock():
         dedup_manager._save()
 ```
 
-### 2. 并行 Embedding 处理器
+### 2. 并行 Embedding 处理器（竞争模式）
 
 ```python
 # kb/parallel_embedding.py
 
 class ParallelEmbeddingProcessor:
-    """真正的并行处理 - 两个端点同时工作"""
+    """真正的竞争模式 - 所有端点同时请求，先完成的返回"""
     
-    async def process_batch(self, texts: List[str]) -> List[tuple]:
-        """
-        批量处理，轮流使用端点
+    # 配置常量
+    EMBEDDING_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "bge-m3")
+    EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "1024"))
+    MAX_RETRIES = 3
+    RETRY_DELAY = 1.0
+    
+    async def process_batch(self, texts: List[str]) -> List[EmbeddingResult]:
+        """批量处理，竞争模式"""
+        async def get_embedding_from_any_endpoint(text: str) -> EmbeddingResult:
+            # 同时向所有端点发送请求
+            tasks = [try_endpoint(ep) for ep in self.endpoints]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # 找出最快成功的
+            for r in results:
+                if isinstance(r, tuple) and r[2] is None:
+                    return r
+            
+            # 所有端点都失败
+            return (self.endpoints[0].name, [0.0] * EMBEDDING_DIM, "所有端点都失败")
         
-        chunk_1 → 本地
-        chunk_2 → 远程
-        chunk_3 → 本地
-        chunk_4 → 远程
-        ...
-        """
-        tasks = []
-        for i, text in enumerate(texts):
-            ep = self.endpoints[i % len(self.endpoints)]
-            tasks.append(
-                loop.run_in_executor(
-                    self._executor,
-                    lambda t=text, e=ep: self._call_ollama(t, e)
-                )
-            )
-        
-        return await asyncio.gather(*tasks)
+        return await asyncio.gather(*[get_embedding_from_any_endpoint(t) for t in texts])
 ```
 
 ### 3. 去重数据库锁
@@ -226,7 +249,7 @@ class DedupLock:
     """异步上下文管理器"""
     async def __aenter__(self):
         await self.lock.acquire()
-    async def __aexit__(self, ...):
+    async def __aexit__(self, *args):
         self.lock.release()
 ```
 
@@ -240,20 +263,23 @@ class LanceDBWriteQueue:
     
     _instance = None
     
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
-    
     async def _worker(self):
         while self._running:
             item = await self._queue.get()
             lance_store, nodes, kb_id = item
-            lance_store.add(nodes)  # 串行写入
+            lance_store.add_nodes(nodes)  # 串行写入
             self._queue.task_done()
     
     async def enqueue(self, lance_store, nodes, kb_id):
         await self._queue.put((lance_store, nodes, kb_id))
+    
+    async def wait_until_empty(self, timeout: float = None) -> bool:
+        """等待队列清空"""
+        try:
+            await asyncio.wait_for(self._queue.join(), timeout=timeout)
+            return True
+        except asyncio.TimeoutError:
+            return False
 ```
 
 ## 任务队列系统
@@ -274,7 +300,7 @@ API 提交任务
 │   TaskScheduler     │  # 调度器（asyncio）
 │  - 定时检查待处理任务│
 │  - 分配执行器       │
-│  - 不限制并发数     │
+│  - 并发控制         │
 └─────────┬───────────┘
           │
           ▼
@@ -306,10 +332,10 @@ API 提交任务
    ├── 阶段1: 去重（串行）
    │   └── DedupLock() → detect_changes() → mark_processed()
    │
-   ├── 阶段2: 并行处理
+   ├── 阶段2: 并行处理（embedding - 竞争模式）
    │   ├── 解析文档
    │   ├── 切分文本（SentenceSplitter）
-   │   ├── 并行 Embedding（本地+远程同时工作）
+   │   ├── 并行 Embedding（所有端点同时竞争）
    │   └── 串行写入 LanceDB（WriteQueue）
    │
    └── 阶段3: 保存状态（串行）
@@ -357,8 +383,10 @@ CREATE TABLE tasks (
     kb_id TEXT NOT NULL,
     params TEXT NOT NULL,          -- JSON
     progress INTEGER DEFAULT 0,
+    current INTEGER DEFAULT 0,
+    total INTEGER DEFAULT 0,
     message TEXT DEFAULT '',
-    result TEXT,                   -- JSON: {"files": 26, "nodes": 248}
+    result TEXT,                    -- JSON: {"files": 26, "nodes": 248}
     error TEXT,
     created_at REAL NOT NULL,
     started_at REAL,
@@ -370,16 +398,60 @@ CREATE TABLE tasks (
 ### SQLite: 统一数据库 (project.db)
 
 ```sql
--- 去重状态
+-- 同步状态
+CREATE TABLE sync_states (
+    kb_id TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    hash TEXT NOT NULL,
+    mtime REAL NOT NULL,
+    doc_id TEXT NOT NULL,
+    last_synced REAL NOT NULL,
+    PRIMARY KEY (kb_id, file_path)
+);
+
+-- 去重记录
 CREATE TABLE dedup_records (
     kb_id TEXT NOT NULL,
-    rel_path TEXT NOT NULL,
+    file_path TEXT NOT NULL,
     hash TEXT NOT NULL,
     doc_id TEXT NOT NULL,
+    chunk_count INTEGER DEFAULT 0,
     mtime REAL NOT NULL,
     last_processed REAL NOT NULL,
-    chunk_count INTEGER DEFAULT 0,
-    PRIMARY KEY (kb_id, rel_path)
+    PRIMARY KEY (kb_id, file_path)
+);
+
+-- 进度记录
+CREATE TABLE progress (
+    kb_id TEXT UNIQUE NOT NULL,
+    task_type TEXT NOT NULL,
+    current INTEGER DEFAULT 0,
+    total INTEGER DEFAULT 0,
+    processed_items TEXT DEFAULT '[]',
+    failed_items TEXT DEFAULT '[]',
+    started_at REAL,
+    completed_at REAL
+);
+
+-- 知识库元数据
+CREATE TABLE knowledge_bases (
+    kb_id TEXT UNIQUE NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT,
+    source_type TEXT NOT NULL,
+    persist_path TEXT,
+    tags TEXT DEFAULT '[]',
+    config TEXT DEFAULT '{}'
+);
+
+-- 分类规则
+CREATE TABLE kb_category_rules (
+    kb_id TEXT NOT NULL,
+    rule_type TEXT NOT NULL,
+    pattern TEXT NOT NULL,
+    description TEXT,
+    priority INTEGER DEFAULT 0,
+    PRIMARY KEY (kb_id, rule_type, pattern)
 );
 ```
 
@@ -388,8 +460,8 @@ CREATE TABLE dedup_records (
 ```
 Table: {kb_id}
 ├── id (TEXT, PRIMARY KEY)      -- 节点 ID
-├── text (TEXT)                  -- 文本内容
-├── embedding (FLOAT[])          -- 向量 (1024维)
+├── text (TEXT)                 -- 文本内容
+├── embedding (FLOAT[])         -- 向量 (1024维)
 ├── metadata (JSON)             -- 元数据
 │   ├── source                  -- 来源
 │   ├── file_path              -- 文件路径
@@ -402,21 +474,54 @@ Table: {kb_id}
 ### 环境变量 (.env)
 
 ```env
-# LLM 配置（硅基流动）
+# ==================== LLM 配置 ====================
 SILICONFLOW_BASE_URL=https://api.siliconflow.cn/v1
 SILICONFLOW_API_KEY=your_api_key
 SILICONFLOW_MODEL=Pro/deepseek-ai/DeepSeek-V3.2
 
-# Embedding 配置（本地 Ollama）
-OLLAMA_BASE_URL=http://localhost:11434
+# ==================== Embedding 配置 ====================
 OLLAMA_EMBED_MODEL=bge-m3
-
-# 远程 Ollama（GPU 加速）
+EMBEDDING_DIM=1024
+OLLAMA_LOCAL_URL=http://localhost:11434
 OLLAMA_REMOTE_URL=http://192.168.31.169:11434
 
-# 索引配置
-PERSIST_DIR=/Volumes/online/llamaindex/obsidian
-TOP_K=5
+# ==================== 存储配置 ====================
+OBSIDIAN_VAULT_ROOT=~/Documents/Obsidian Vault
+OBSIDIAN_STORAGE_DIR=~/.llamaindex/storage
+ZOTERO_STORAGE_DIR=~/.llamaindex/storage/zotero
+PERSIST_DIR=~/.llamaindex/storage
+
+# ==================== 任务处理配置 ====================
+CHUNK_SIZE=512
+CHUNK_OVERLAP=50
+PROGRESS_UPDATE_INTERVAL=10
+MAX_CONCURRENT_TASKS=10
+
+# ==================== 并行 Embedding 配置 ====================
+MAX_RETRIES=3
+RETRY_DELAY=1.0
+```
+
+### 配置常量（代码中）
+
+```python
+# kb/registry.py
+DEFAULT_STORAGE_ROOT = Path.home() / ".llamaindex" / "storage"
+DEFAULT_VAULT_ROOT = Path.home() / "Documents" / "Obsidian Vault"
+
+# kb/parallel_embedding.py
+EMBEDDING_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "bge-m3")
+EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "1024"))
+DEFAULT_LOCAL_URL = os.getenv("OLLAMA_LOCAL_URL", "http://localhost:11434")
+DEFAULT_REMOTE_URL = os.getenv("OLLAMA_REMOTE_URL", "http://localhost:11434")
+MAX_RETRIES = 3
+RETRY_DELAY = 1.0
+
+# kb/task_executor.py
+CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "512"))
+CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "50"))
+PROGRESS_UPDATE_INTERVAL = int(os.getenv("PROGRESS_UPDATE_INTERVAL", "10"))
+DEFAULT_MAX_CONCURRENT = int(os.getenv("MAX_CONCURRENT_TASKS", "10"))
 ```
 
 ## 扩展指南
@@ -446,7 +551,7 @@ def ingest_notion(kb_id: str, page_id: str):
 ## 测试
 
 ```bash
-# 测试并行 Embedding
+# 测试并行 Embedding（竞争模式）
 poetry run python -c "
 import asyncio
 from kb.parallel_embedding import get_parallel_processor
@@ -454,7 +559,8 @@ from kb.parallel_embedding import get_parallel_processor
 async def test():
     p = get_parallel_processor()
     results = await p.process_batch(['test'] * 10)
-    print(p.get_stats())
+    print(f'统计: {p.get_stats()}')
+    print(f'失败统计: {p.get_failure_stats()}')
 
 asyncio.run(test())
 "
@@ -471,4 +577,20 @@ async def test():
 
 asyncio.run(test())
 "
+
+# 测试任务执行器
+poetry run python -c "
+from kb.task_executor import TaskExecutor
+executor = TaskExecutor()
+print(f'任务队列: {executor.queue}')
+"
 ```
+
+## 代码质量特性
+
+- **完整类型注解**: 所有模块都有类型注解，提升代码可读性和 IDE 支持
+- **统一日志管理**: 使用 Python logging 模块，支持不同日志级别
+- **参数化查询**: SQLite 使用参数化查询，防止 SQL 注入
+- **配置常量集中管理**: 所有可配置项通过环境变量控制
+- **错误处理完善**: 区分不同错误类型，记录详细日志
+- **失败重试机制**: Embedding 请求支持重试，提高稳定性

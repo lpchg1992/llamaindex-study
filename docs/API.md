@@ -4,7 +4,8 @@
 
 基于 FastAPI 的 RAG（检索增强生成）API 服务，支持：
 
-- **并行多端点 Ollama** - 本地 + 远程同时处理，chunk 级轮流分配
+- **并行多端点 Ollama** - 本地 + 远程同时处理，竞争模式
+- **失败重试机制** - 每个端点最多重试 3 次
 - **任务队列** - 异步提交，随时查询状态
 - **增量同步** - 基于文件哈希检测变更
 - **资源保护** - 去重串行访问、LanceDB 串行写入
@@ -24,20 +25,21 @@ poetry run python api.py
 
 ## 核心功能
 
-### 并行多端点 Ollama
+### 并行多端点 Ollama（竞争模式）
 
-导入任务使用**本地 + 远程 Ollama 同时处理**：
+导入任务使用**本地 + 远程 Ollama 同时竞争处理**：
 
 ```
 Chunk 1 ──→ 本地 Ollama  ─┐
-Chunk 2 ──→ 远程 Ollama  ──┼──→ 并行执行
+Chunk 2 ──→ 远程 Ollama  ──┼──→ 谁先完成用谁的结果
 Chunk 3 ──→ 本地 Ollama  ──┤
 Chunk 4 ──→ 远程 Ollama  ─┘
 ```
 
-配置文件路径：
-- 本地: `http://localhost:11434`
-- 远程: `http://192.168.31.169:11434`
+配置文件（环境变量）：
+- 本地: `OLLAMA_LOCAL_URL` (默认: `http://localhost:11434`)
+- 远程: `OLLAMA_REMOTE_URL` (默认: `http://localhost:11434`)
+- 重试次数: `MAX_RETRIES` (默认: 3)
 
 ### 任务队列
 
@@ -94,6 +96,7 @@ curl "http://localhost:8000/tasks/abc12345"
 | 方法 | 端点 | 功能 |
 |------|------|------|
 | GET | `/kbs` | 列出所有知识库 |
+| POST | `/kbs` | 创建知识库 |
 | GET | `/kbs/{kb_id}` | 获取知识库详情 |
 | DELETE | `/kbs/{kb_id}` | 删除知识库 |
 
@@ -101,6 +104,7 @@ curl "http://localhost:8000/tasks/abc12345"
 
 | 方法 | 端点 | 功能 |
 |------|------|------|
+| POST | `/kbs/{kb_id}/ingest` | 通用文件导入 |
 | POST | `/kbs/{kb_id}/ingest/obsidian` | Obsidian 导入（并行） |
 | POST | `/kbs/{kb_id}/ingest/zotero` | Zotero 导入 |
 | POST | `/kbs/{kb_id}/rebuild` | 重建知识库 |
@@ -119,6 +123,23 @@ curl "http://localhost:8000/tasks/abc12345"
 | GET | `/obsidian/vaults` | 列出 vault 位置 |
 | GET | `/obsidian/mappings` | 知识库映射配置 |
 | POST | `/obsidian/import-all` | 全库分类导入 |
+| GET | `/obsidian/vaults/{name}` | 获取 vault 信息 |
+
+### 分类规则
+
+| 方法 | 端点 | 功能 |
+|------|------|------|
+| GET | `/category/rules` | 列出分类规则 |
+| POST | `/category/rules/sync` | 同步分类规则到数据库 |
+| POST | `/category/classify` | 分类文件夹 |
+| POST | `/category/rules/add` | 添加分类规则 |
+
+### Zotero
+
+| 方法 | 端点 | 功能 |
+|------|------|------|
+| GET | `/zotero/collections` | 列出收藏夹 |
+| GET | `/zotero/collections/search` | 搜索收藏夹 |
 
 ### 管理
 
@@ -126,6 +147,7 @@ curl "http://localhost:8000/tasks/abc12345"
 |------|------|------|
 | GET | `/admin/tables` | 列出向量表 |
 | GET | `/admin/tables/{kb_id}` | 表统计 |
+| DELETE | `/admin/tables/{kb_id}` | 删除表 |
 
 ---
 
@@ -293,6 +315,49 @@ curl -X POST "http://localhost:8000/kbs/tech_tools/query" \
 
 ---
 
+### 分类规则
+
+#### GET /category/rules - 列出分类规则
+
+```bash
+curl http://localhost:8000/category/rules
+```
+
+```json
+{
+  "rules": [
+    {
+      "id": 1,
+      "kb_id": "tech_tools",
+      "rule_type": "folder_path",
+      "pattern": "IT",
+      "description": "文件夹路径匹配: IT",
+      "priority": 100
+    }
+  ],
+  "total": 5
+}
+```
+
+#### POST /category/classify - 分类文件夹
+
+```bash
+curl -X POST "http://localhost:8000/category/classify" \
+  -H "Content-Type: application/json" \
+  -d '{"folder_path": "/path/to/folder", "use_llm": true}'
+```
+
+```json
+{
+  "kb_id": "tech_tools",
+  "matched_by": "llm",
+  "confidence": 0.85,
+  "reason": "基于 LLM 分析，文件夹内容与 IT 技术相关"
+}
+```
+
+---
+
 ## WebSocket 实时推送
 
 ### 连接
@@ -407,13 +472,57 @@ curl -X POST "http://localhost:8000/kbs/tech_tools/search" \
 
 ---
 
+## 环境变量配置
+
+### 存储路径配置
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `OBSIDIAN_VAULT_ROOT` | `~/Documents/Obsidian Vault` | Obsidian Vault 根目录 |
+| `OBSIDIAN_STORAGE_DIR` | `~/.llamaindex/storage` | Obsidian 存储目录 |
+| `ZOTERO_STORAGE_DIR` | `~/.llamaindex/storage/zotero` | Zotero 存储目录 |
+
+### Embedding 配置
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `OLLAMA_EMBED_MODEL` | `bge-m3` | Embedding 模型名称 |
+| `EMBEDDING_DIM` | `1024` | Embedding 向量维度 |
+| `OLLAMA_LOCAL_URL` | `http://localhost:11434` | 本地 Ollama 地址 |
+| `OLLAMA_REMOTE_URL` | `http://localhost:11434` | 远程 Ollama 地址 |
+
+### 任务处理配置
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `CHUNK_SIZE` | `512` | 文本分块大小 |
+| `CHUNK_OVERLAP` | `50` | 文本分块重叠 |
+| `PROGRESS_UPDATE_INTERVAL` | `10` | 进度更新间隔 |
+| `MAX_CONCURRENT_TASKS` | `10` | 最大并发任务数 |
+
+### 并行 Embedding 配置
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `MAX_RETRIES` | `3` | 每个端点最大重试次数 |
+| `RETRY_DELAY` | `1.0` | 重试延迟（秒） |
+
+---
+
 ## 存储位置
 
 ```
-/Volumes/online/llamaindex/           # 向量数据
-~/.llamaindex/                       # SQLite 数据库
-├── project.db                      # 项目数据、去重状态
-└── tasks.db                        # 任务队列
+~/.llamaindex/                    # 本地存储根目录
+├── storage/                      # 向量数据
+│   ├── kb_swine_nutrition/      # 知识库存储
+│   └── kb_tech_tools/
+├── project.db                   # SQLite 数据库
+│   ├── sync_states              # 同步状态
+│   ├── dedup_records            # 去重记录
+│   ├── progress                 # 处理进度
+│   ├── knowledge_bases          # 知识库元数据
+│   └── kb_category_rules         # 分类规则
+└── tasks.db                     # 任务队列
 ```
 
 ---

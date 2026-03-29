@@ -31,11 +31,14 @@
 
 | 特性 | 说明 |
 |------|------|
-| **并行 Embedding** | 本地 + 远程 Ollama 同时工作，chunk 级轮流分配 |
+| **并行 Embedding** | 本地 + 远程 Ollama 同时工作，chunk 级竞争模式 |
+| **失败重试机制** | 每个端点最多重试 3 次，提高稳定性 |
 | **去重串行访问** | Semaphore(1) 保护 dedup.db，避免数据库锁定 |
 | **LanceDB 串行写入** | WriteQueue 保证写入顺序，避免锁定 |
 | **任务队列** | 异步提交，随时查询状态 |
 | **增量同步** | 基于文件哈希检测变更 |
+| **完整类型注解** | 提升代码可维护性 |
+| **统一日志管理** | 使用 Python logging 模块 |
 
 ## 环境要求
 
@@ -85,10 +88,19 @@ cp .env.example .env
 ### 4. 配置 .env
 
 ```env
+# ==================== LLM 配置 ====================
 SILICONFLOW_API_KEY=你的密钥
-SILICONFLOW_MODEL=deepseek-ai/DeepSeek-V3
+SILICONFLOW_MODEL=Pro/deepseek-ai/DeepSeek-V3.2
+
+# ==================== Embedding 配置 ====================
 OLLAMA_EMBED_MODEL=bge-m3
-PERSIST_DIR=./storage
+OLLAMA_LOCAL_URL=http://localhost:11434
+OLLAMA_REMOTE_URL=http://192.168.31.169:11434
+
+# ==================== 存储配置 ====================
+OBSIDIAN_VAULT_ROOT=~/Documents/Obsidian Vault
+OBSIDIAN_STORAGE_DIR=~/.llamaindex/storage
+ZOTERO_STORAGE_DIR=~/.llamaindex/storage/zotero
 ```
 
 ### 5. 运行
@@ -109,23 +121,36 @@ llamaindex-study/
 ├── main.py                   # 交互式查询 CLI
 │
 ├── src/llamaindex_study/    # 核心库
+│   ├── __init__.py
 │   ├── config.py             # 配置管理
+│   ├── logger.py             # 日志工具
 │   ├── embedding_service.py   # Ollama Embedding 服务
 │   ├── embedding_loadbalancer.py  # 负载均衡
-│   ├── vector_store.py       # 向量数据库管理
-│   ├── query_engine.py        # 查询引擎
-│   └── logger.py             # 日志工具
+│   ├── ollama_utils.py      # Ollama 工具
+│   ├── vector_store.py       # 向量数据库管理（多后端）
+│   ├── query_engine.py       # 查询引擎
+│   └── reranker.py           # 重排序
 │
 ├── kb/                      # 知识库模块
+│   ├── __init__.py
 │   ├── registry.py           # 知识库注册表
-│   ├── database.py           # SQLite 数据库
+│   ├── database.py           # SQLite 数据库管理
 │   ├── task_queue.py         # 任务队列
 │   ├── task_executor.py      # 任务执行器
 │   ├── task_lock.py          # 去重数据库锁（Semaphore）
 │   ├── parallel_embedding.py  # 并行 Embedding 处理器
 │   ├── ingest_vdb.py         # LanceDB 写入队列
 │   ├── obsidian_processor.py # Obsidian 笔记导入
+│   ├── obsidian_reader.py    # Obsidian 笔记读取
+│   ├── obsidian_config.py    # Obsidian 配置
 │   ├── deduplication.py      # 去重管理
+│   ├── category_classifier.py # 分类器
+│   ├── sync_state.py         # 同步状态
+│   ├── document_processor.py  # 文档处理器
+│   ├── generic_processor.py   # 通用文件处理器
+│   ├── zotero_processor.py    # Zotero 导入器
+│   ├── zotero_reader.py      # Zotero 读取器
+│   ├── websocket_manager.py   # WebSocket 管理
 │   └── services.py           # 统一服务层
 │
 └── docs/
@@ -135,16 +160,16 @@ llamaindex-study/
 
 ## 核心功能
 
-### 1. 真正的并行 Embedding
+### 1. 真正的并行 Embedding（竞争模式）
 
 ```
 Chunk 1 ──→ 本地 Ollama  ─┐
-Chunk 2 ──→ 远程 Ollama  ──┼──→ 并行执行
+Chunk 2 ──→ 远程 Ollama  ──┼──→ 谁先完成用谁的结果
 Chunk 3 ──→ 本地 Ollama  ──┤
 Chunk 4 ──→ 远程 Ollama  ─┘
 ```
 
-使用 `asyncio + ThreadPoolExecutor` 实现，两个端点同时工作。
+使用 `asyncio + ThreadPoolExecutor` 实现，两个端点同时竞争，先完成的使用。
 
 ### 2. 资源保护机制
 
@@ -258,13 +283,58 @@ print(f"结果: {task.result}")
 
 详细 API 文档请参考 [docs/API.md](docs/API.md)
 
+## 环境变量配置
+
+所有配置都通过环境变量控制，支持以下变量：
+
+### 存储路径配置
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `OBSIDIAN_VAULT_ROOT` | `~/Documents/Obsidian Vault` | Obsidian Vault 根目录 |
+| `OBSIDIAN_STORAGE_DIR` | `~/.llamaindex/storage` | Obsidian 存储目录 |
+| `ZOTERO_STORAGE_DIR` | `~/.llamaindex/storage/zotero` | Zotero 存储目录 |
+| `PERSIST_DIR` | 从环境变量获取 | 通用存储目录 |
+
+### Embedding 配置
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `OLLAMA_EMBED_MODEL` | `bge-m3` | Embedding 模型名称 |
+| `EMBEDDING_DIM` | `1024` | Embedding 向量维度 |
+| `OLLAMA_LOCAL_URL` | `http://localhost:11434` | 本地 Ollama 地址 |
+| `OLLAMA_REMOTE_URL` | `http://localhost:11434` | 远程 Ollama 地址 |
+
+### 任务处理配置
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `CHUNK_SIZE` | `512` | 文本分块大小 |
+| `CHUNK_OVERLAP` | `50` | 文本分块重叠 |
+| `PROGRESS_UPDATE_INTERVAL` | `10` | 进度更新间隔 |
+| `MAX_CONCURRENT_TASKS` | `10` | 最大并发任务数 |
+
+### 并行 Embedding 配置
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `MAX_RETRIES` | `3` | 每个端点最大重试次数 |
+| `RETRY_DELAY` | `1.0` | 重试延迟（秒） |
+
 ## 存储位置
 
 ```
-/Volumes/online/llamaindex/           # 向量数据
-~/.llamaindex/                       # SQLite 数据库
-├── project.db                      # 项目数据、去重状态
-└── tasks.db                        # 任务队列
+~/.llamaindex/                    # 本地存储根目录
+├── storage/                      # 向量数据（可配置）
+│   ├── kb_swine_nutrition/      # 知识库存储
+│   └── kb_tech_tools/
+├── project.db                   # SQLite 数据库
+│   ├── sync_states              # 同步状态
+│   ├── dedup_records            # 去重记录
+│   ├── progress                 # 处理进度
+│   ├── knowledge_bases          # 知识库元数据
+│   └── kb_category_rules         # 分类规则
+└── tasks.db                     # 任务队列
 ```
 
 ## 硅基流动模型推荐
@@ -274,3 +344,11 @@ print(f"结果: {task.result}")
 | `Pro/deepseek-ai/DeepSeek-V3.2` | 通用强模型，低成本 | 日常问答、文档总结 |
 | `deepseek-ai/DeepSeek-R1` | 推理能力强，思维链 | 复杂推理，分析任务 |
 | `Qwen/Qwen2.5-7B-Instruct` | 开源稳定 | 通用对话 |
+
+## 代码质量
+
+- ✅ 完整的类型注解
+- ✅ 统一的日志管理（使用 logging 模块）
+- ✅ 参数化查询（防 SQL 注入）
+- ✅ 配置常量集中管理
+- ✅ 模块化设计

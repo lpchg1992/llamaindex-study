@@ -89,17 +89,17 @@ async def start_scheduler():
     from kb.task_executor import TaskScheduler
     scheduler = TaskScheduler()
     _scheduler_ref = asyncio.create_task(scheduler.run())
-    print("✅ 任务调度器已启动", flush=True)
+    logger.info("任务调度器已启动")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
-    print("🚀 应用启动中...", flush=True)
+    logger.info("应用启动中...")
     await start_scheduler()
-    print("✅ 应用启动完成", flush=True)
+    logger.info("应用启动完成")
     yield
-    print("👋 应用关闭", flush=True)
+    logger.info("应用关闭")
 
 
 # ============== FastAPI 应用 ==============
@@ -762,8 +762,8 @@ async def ws_tasks(websocket):
     try:
         while True:
             await websocket.receive_text()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"WebSocket 连接关闭: {e}")
     finally:
         ws_manager.disconnect(websocket)
 
@@ -776,8 +776,8 @@ async def websocket_endpoint(websocket):
         while True:
             data = await websocket.receive_text()
             await websocket.send_text(f"收到: {data}")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"WebSocket 连接关闭: {e}")
 
 
 if __name__ == "__main__":

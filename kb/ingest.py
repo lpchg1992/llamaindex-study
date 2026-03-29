@@ -22,6 +22,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from kb.registry import KnowledgeBaseRegistry
 from kb.obsidian_reader import ObsidianReader
+from llamaindex_study.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 def configure_embed_model():
@@ -79,9 +82,11 @@ def build_index_incremental(documents, persist_dir, show_progress=False, max_ret
                 if attempt < max_retries - 1:
                     wait_time = (attempt + 1) * 10
                     print(f"\n      ⚠️ 批次 {batch_idx+1} 失败，{wait_time}秒后重试 ({attempt+1}/{max_retries})")
+                    logger.warning(f"批次 {batch_idx+1} 失败，将重试: {e}")
                     time.sleep(wait_time)
                 else:
                     print(f"\n      ❌ 批次 {batch_idx+1} 最终失败: {e}")
+                    logger.error(f"批次 {batch_idx+1} 最终失败: {e}")
                     raise
 
         total_nodes += len(batch_nodes)
@@ -106,6 +111,7 @@ def ingest_kb(kb_id: str, rebuild: bool = False, verbose: bool = False) -> bool:
 
     if kb is None:
         print(f"❌ 知识库不存在: {kb_id}")
+        logger.error(f"知识库不存在: {kb_id}")
         return False
 
     if registry.is_indexed(kb_id) and not rebuild:
@@ -125,6 +131,7 @@ def ingest_kb(kb_id: str, rebuild: bool = False, verbose: bool = False) -> bool:
     for source_path in kb.source_paths_abs(vault_root):
         if not source_path.exists():
             print(f"⚠️  路径不存在，跳过: {source_path}")
+            logger.warning(f"路径不存在: {source_path}")
             continue
 
         rel_path = str(source_path.relative_to(vault_root))
@@ -138,6 +145,7 @@ def ingest_kb(kb_id: str, rebuild: bool = False, verbose: bool = False) -> bool:
 
     if not all_docs:
         print(f"❌ 没有找到文档: {kb.name}")
+        logger.error(f"没有找到文档: {kb.name}")
         return False
 
     print(f"\n   📊 共 {len(all_docs)} 个文档")
@@ -154,6 +162,7 @@ def ingest_kb(kb_id: str, rebuild: bool = False, verbose: bool = False) -> bool:
         )
     except Exception as e:
         print(f"❌ 索引构建最终失败: {e}")
+        logger.error(f"索引构建失败: {e}", exc_info=True)
         return False
 
     elapsed = time.time() - start_time
@@ -161,6 +170,8 @@ def ingest_kb(kb_id: str, rebuild: bool = False, verbose: bool = False) -> bool:
     print(f"\n   ✅ 索引已保存: {kb.persist_dir}")
     print(f"   ⏱️  耗时: {elapsed:.1f}秒")
     print(f"   📝 文档数: {len(all_docs)}, 节点数: {node_count}")
+    
+    logger.info(f"知识库 {kb_id} 导入完成: {len(all_docs)} 文档, {node_count} 节点, 耗时 {elapsed:.1f}秒")
 
     return True
 
@@ -210,6 +221,11 @@ def main():
                 fail_count += 1
 
         print(f"\n\n🎉 导入完成: {success_count} 成功, {fail_count} 失败")
+        
+        if fail_count > 0:
+            logger.warning(f"批量导入完成: {success_count} 成功, {fail_count} 失败")
+        else:
+            logger.info(f"批量导入完成: {success_count} 成功")
 
 
 if __name__ == "__main__":

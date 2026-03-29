@@ -61,6 +61,22 @@ class LanceDBWriteQueue:
         self._workers.clear()
         logger.info("写入线程已停止")
     
+    async def wait_until_empty(self, timeout: Optional[float] = None) -> bool:
+        """等待队列清空
+        
+        Args:
+            timeout: 超时时间（秒），None 表示无限等待
+            
+        Returns:
+            是否在超时前清空
+        """
+        try:
+            await asyncio.wait_for(self._queue.join(), timeout=timeout)
+            return True
+        except asyncio.TimeoutError:
+            logger.warning("写入队列等待超时")
+            return False
+    
     async def enqueue(self, lance_store: Any, nodes: list, kb_id: str):
         """入队"""
         await self._queue.put((lance_store, nodes, kb_id))

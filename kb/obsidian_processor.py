@@ -236,7 +236,7 @@ class ObsidianImporter:
             )
 
         except Exception as e:
-            print(f"   ⚠️  解析失败: {file_path.name} - {e}")
+            logger.warning(f"解析失败: {file_path.name} - {e}")
             return None
 
     def collect_files(
@@ -296,9 +296,7 @@ class ObsidianImporter:
         Returns:
             导入统计
         """
-        print(f"\n{'='*60}")
-        print(f"📓 Obsidian: {directory.name}")
-        print(f"{'='*60}")
+        logger.info(f"开始导入 Obsidian: {directory.name}")
 
         self.processor.set_embed_model(embed_model)
         node_parser = self.processor.node_parser
@@ -310,7 +308,7 @@ class ObsidianImporter:
 
         # 收集文件
         files = self.collect_files(directory, recursive=recursive)
-        print(f"   找到 {len(files)} 个笔记")
+        logger.info(f"找到 {len(files)} 个笔记")
 
         if not files:
             return {"files": 0, "nodes": 0, "failed": 0}
@@ -321,8 +319,8 @@ class ObsidianImporter:
             to_add, to_update, to_delete, unchanged = dedup_manager.detect_changes(
                 files, self.vault_root
             )
-            print(f"   增量同步: 新增 {len(to_add)}, 更新 {len(to_update)}, "
-                  f"删除 {len(to_delete)}, 未变 {len(unchanged)}")
+            logger.info(f"增量同步: 新增 {len(to_add)}, 更新 {len(to_update)}, "
+                        f"删除 {len(to_delete)}, 未变 {len(unchanged)}")
 
             # 过滤文件列表，只处理新增和更新的
             files_to_process = []
@@ -340,11 +338,11 @@ class ObsidianImporter:
         else:
             processed_rel_paths = set()
             if rebuild and dedup_manager:
-                print(f"   🔄 重建模式：清空去重状态")
+                logger.info(f"重建模式：清空去重状态")
                 dedup_manager.clear()
 
         if not files:
-            print(f"   ⏭️  没有变更需要处理")
+            logger.info(f"没有变更需要处理")
             return {"files": 0, "nodes": 0, "failed": 0}
 
         if progress:
@@ -374,8 +372,8 @@ class ObsidianImporter:
 
             if i % 10 == 0:
                 elapsed = time.time() - (progress.started_at if progress else time.time())
-                print(f"\n   进度: {i+1}/{len(files)} ({100*(i+1)//len(files)}%)")
-                print(f"   节点: {stats['nodes']}, 耗时: {elapsed:.0f}s")
+                logger.info(f"进度: {i+1}/{len(files)} ({100*(i+1)//len(files)}%), "
+                            f"节点: {stats['nodes']}, 耗时: {elapsed:.0f}s")
 
             if on_progress:
                 on_progress(i + 1, len(files), file_path.name)
@@ -465,7 +463,7 @@ class ObsidianImporter:
                         vault_root=self.vault_root,
                     )
                 except Exception as e:
-                    print(f"   ⚠️  更新去重状态失败: {e}")
+                    logger.warning(f"更新去重状态失败: {e}")
 
             if progress:
                 progress.processed_items.append(str(file_path))
@@ -474,7 +472,7 @@ class ObsidianImporter:
         # ========== 保存去重状态 ==========
         if dedup_manager:
             dedup_manager._save()
-            print(f"   💾 去重状态已保存")
+            logger.debug("去重状态已保存")
 
         # 处理 PDF 附件
         pdf_stats = self.import_pdf_attachments(directory, vector_store, embed_model, progress)
@@ -495,13 +493,13 @@ class ObsidianImporter:
         """
         导入目录中的 PDF 附件
         """
-        print(f"\n   🔍 扫描 PDF 附件...")
+        logger.debug("扫描 PDF 附件...")
 
         pdf_files = list(directory.rglob("*.pdf"))
         if not pdf_files:
             return {"files": 0, "nodes": 0}
 
-        print(f"   找到 {len(pdf_files)} 个 PDF")
+        logger.debug(f"找到 {len(pdf_files)} 个 PDF")
 
         self.processor.set_embed_model(embed_model)
 

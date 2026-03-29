@@ -14,8 +14,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 
+from llamaindex_study.logger import get_logger
+
+logger = get_logger(__name__)
+
 # 项目根目录
 PROJECT_ROOT = Path(__file__).parent.parent
+
+# 存储配置常量（可配置）
+DEFAULT_STORAGE_ROOT = Path.home() / ".llamaindex" / "storage"
+DEFAULT_VAULT_ROOT = Path.home() / "Documents" / "Obsidian Vault"
 
 
 def get_storage_root() -> Path:
@@ -30,8 +38,42 @@ def get_storage_root() -> Path:
     persist_dir = os.getenv("PERSIST_DIR")
     if persist_dir:
         return Path(persist_dir)
-    # 默认使用统一存储目录
-    return Path("/Volumes/online/llamaindex/obsidian")
+    
+    # 尝试从环境变量获取（兼容性）
+    obsidian_storage = os.getenv("OBSIDIAN_STORAGE_DIR")
+    if obsidian_storage:
+        return Path(obsidian_storage)
+    
+    # 默认使用本地存储目录
+    return DEFAULT_STORAGE_ROOT
+
+
+def get_zotero_storage_root() -> Path:
+    """获取 Zotero 存储根目录"""
+    from dotenv import load_dotenv
+    env_path = PROJECT_ROOT / ".env"
+    if env_path.exists():
+        load_dotenv(env_path, override=True)
+    
+    zotero_dir = os.getenv("ZOTERO_STORAGE_DIR")
+    if zotero_dir:
+        return Path(zotero_dir)
+    
+    return DEFAULT_STORAGE_ROOT / "zotero"
+
+
+def get_vault_root() -> Path:
+    """获取 Obsidian Vault 根目录"""
+    from dotenv import load_dotenv
+    env_path = PROJECT_ROOT / ".env"
+    if env_path.exists():
+        load_dotenv(env_path, override=True)
+    
+    vault_root = os.getenv("OBSIDIAN_VAULT_ROOT")
+    if vault_root:
+        return Path(vault_root)
+    
+    return DEFAULT_VAULT_ROOT
 
 
 @dataclass
@@ -41,7 +83,7 @@ class KnowledgeBase:
     id: str  # 唯一标识（如 "swine_nutrition"）
     name: str  # 显示名称（如 "猪营养技术库"）
     description: str  # 描述
-    source_paths: List[str]  # Obsidian 源路径列表
+    source_paths: List[str]  # Obsidian 源路径列表（相对于 vault_root）
     persist_name: str  # 存储目录名
     tags: List[str] = field(default_factory=list)  # 标签（描述用）
     source_tags: List[str] = field(default_factory=list)  # 用于分类的标签列表
@@ -51,19 +93,18 @@ class KnowledgeBase:
         """获取持久化目录路径
         
         Obsidian 知识库使用 get_storage_root()
-        Zotero 知识库使用 ZOTERO_PERSIST_DIR
+        Zotero 知识库使用 get_zotero_storage_root()
         """
         # Zotero 知识库的 persist_name 以 zotero_ 开头
         if self.id.startswith("zotero_"):
-            zotero_root = os.getenv("ZOTERO_PERSIST_DIR", "/Volumes/online/llamaindex/zotero")
-            return Path(zotero_root) / self.id
+            return get_zotero_storage_root() / self.id
         
         return get_storage_root() / self.persist_name
 
     def source_paths_abs(self, vault_root: Optional[Path] = None) -> List[Path]:
         """获取源路径的绝对路径列表"""
         if vault_root is None:
-            vault_root = Path.home() / "Documents" / "Obsidian Vault"
+            vault_root = get_vault_root()
         return [vault_root / p for p in self.source_paths]
 
     def to_dict(self) -> Dict[str, Any]:
@@ -80,6 +121,8 @@ class KnowledgeBase:
 
 
 # ==================== 知识库定义（默认值，用于初始化数据库） ====================
+# 注意：source_paths 使用相对于 vault_root 的相对路径
+# 可通过环境变量配置实际路径：OBSIDIAN_VAULT_ROOT
 
 KNOWLEDGE_BASES: List[KnowledgeBase] = [
     KnowledgeBase(
@@ -87,9 +130,9 @@ KNOWLEDGE_BASES: List[KnowledgeBase] = [
         name="🏢 高新历史项目库",
         description="高新技术企业历史研发项目资料（2022-2024）",
         source_paths=[
-            "/Volumes/online/nutsync/2025年工作/【A】高新技术企业专项工作/AAA202501整改要求/2022年",
-            "/Volumes/online/nutsync/2025年工作/【A】高新技术企业专项工作/AAA202501整改要求/2023年",
-            "/Volumes/online/nutsync/2025年工作/【A】高新技术企业专项工作/AAA202501整改要求/2024年",
+            "高新历史/2022年",
+            "高新历史/2023年",
+            "高新历史/2024年",
         ],
         persist_name="hitech_history",
         tags=["高新", "研发项目", "历史资料"],
@@ -192,7 +235,6 @@ KNOWLEDGE_BASES: List[KnowledgeBase] = [
             "#AI新闻", "#畜牧", "#市场",
         ],
     ),
-    # Zotero 知识库
     KnowledgeBase(
         id="zotero_nutrition",
         name="📚 Zotero 营养文献库",
@@ -214,20 +256,20 @@ class KnowledgeBaseRegistry:
     优先使用数据库中的规则，如果数据库为空则使用硬编码的 KNOWLEDGE_BASES。
     """
 
-    def __init__(self):
-        self._bases = {kb.id: kb for kb in KNOWLEDGE_BASES}
-        self._rule_db = None
-        self._rules_loaded = False
+    def __init__(self) -> None:
+        self._bases: Dict[str, KnowledgeBase] = {kb.id: kb for kb in KNOWLEDGE_BASES}
+        self._rule_db: Optional[Any] = None
+        self._rules_loaded: bool = False
     
     @property
-    def rule_db(self):
+    def rule_db(self) -> Any:
         """延迟加载规则数据库"""
         if self._rule_db is None:
             from kb.database import init_category_rule_db
             self._rule_db = init_category_rule_db()
         return self._rule_db
     
-    def _load_rules_from_db(self):
+    def _load_rules_from_db(self) -> None:
         """从数据库加载分类规则到 KnowledgeBase"""
         if self._rules_loaded:
             return
@@ -258,11 +300,11 @@ class KnowledgeBaseRegistry:
                         if rules["tag"]:
                             kb.source_tags = rules["tag"]
                 
-                print(f"   📋 从数据库加载了 {len(all_rules)} 条分类规则")
+                logger.info(f"从数据库加载了 {len(all_rules)} 条分类规则")
             else:
-                print("   📋 数据库暂无分类规则，使用默认配置")
+                logger.debug("数据库暂无分类规则，使用默认配置")
         except Exception as e:
-            print(f"   ⚠️  加载分类规则失败: {e}")
+            logger.warning(f"加载分类规则失败: {e}")
         
         self._rules_loaded = True
     
@@ -302,7 +344,7 @@ class KnowledgeBaseRegistry:
             self._rules_loaded = False  # 重置，下次重新加载
             return count
         except Exception as e:
-            print(f"   ⚠️  同步规则到数据库失败: {e}")
+            logger.warning(f"同步规则到数据库失败: {e}")
             return 0
 
 

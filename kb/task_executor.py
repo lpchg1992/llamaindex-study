@@ -5,38 +5,46 @@
 """
 
 import asyncio
-import traceback
-from typing import Optional
+import os
+from pathlib import Path
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from llamaindex_study.logger import get_logger
-from llamaindex_study.ollama_utils import create_ollama_embedding
-from llamaindex_study.embedding_service import OllamaEndpoint, get_embedding_service
 
 logger = get_logger(__name__)
 
-try:
-    from kb.task_queue import TaskQueue, TaskStatus
-except ImportError:
-    TaskQueue = None
-    TaskStatus = None
+# 配置常量
+CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "512"))
+CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "50"))
+PROGRESS_UPDATE_INTERVAL = int(os.getenv("PROGRESS_UPDATE_INTERVAL", "10"))
+DEFAULT_MAX_CONCURRENT = int(os.getenv("MAX_CONCURRENT_TASKS", "10"))
+
+if TYPE_CHECKING:
+    from kb.task_queue import Task, TaskQueue, TaskStatus
+    from llamaindex_study.vector_store import LanceDBVectorStore
+    from kb.deduplication import DeduplicationManager
 
 
 class TaskExecutor:
     """任务执行器 - 支持本地/远程 Ollama 并行处理"""
     
-    def __init__(self):
+    def __init__(self) -> None:
         from kb.task_queue import TaskQueue
-        self.queue = TaskQueue()
-        self._running_tasks: dict = {}
-        self._cancel_events: dict = {}
+        self.queue: TaskQueue = TaskQueue()
+        self._running_tasks: Dict[str, asyncio.Task] = {}
+        self._cancel_events: Dict[str, asyncio.Event] = {}
     
-    async def execute_task(self, task_id: str):
+    async def execute_task(self, task_id: str) -> None:
         """执行任务"""
+        from kb.task_queue import TaskStatus
+        
         task = self.queue.get_task(task_id)
         if not task:
+            logger.warning(f"任务不存在: {task_id}")
             return
         
         if task.status != TaskStatus.PENDING.value:
+            logger.debug(f"任务状态不是 pending: {task_id} ({task.status})")
             return
         
         self._cancel_events[task_id] = asyncio.Event()
@@ -48,7 +56,6 @@ class TaskExecutor:
             if task.task_type == "zotero":
                 await self._execute_zotero(task)
             elif task.task_type in ("obsidian", "obsidian_folder"):
-                # obsidian_folder 使用相同的逻辑
                 await self._execute_obsidian(task)
             elif task.task_type == "generic":
                 await self._execute_generic(task)
@@ -57,27 +64,26 @@ class TaskExecutor:
             else:
                 raise ValueError(f"Unknown task type: {task.task_type}")
             
-            # 注意：_execute_obsidian 等方法会自行调用 complete_task
-            
         except asyncio.CancelledError:
             self.queue.complete_task(task_id, error="任务被取消")
+            logger.info(f"任务已取消: {task_id}")
         except Exception as e:
             error_msg = f"{type(e).__name__}: {str(e)}"
-            traceback.print_exc()
+            logger.error(f"任务执行失败: {task_id} - {error_msg}", exc_info=True)
             self.queue.complete_task(task_id, error=error_msg)
         finally:
             self._running_tasks.pop(task_id, None)
             self._cancel_events.pop(task_id, None)
     
-    async def _notify_progress(self, task_id: str):
+    async def _notify_progress(self, task_id: str) -> None:
         """通知进度更新"""
         try:
             task = self.queue.get_task(task_id)
             if task:
                 from kb.websocket_manager import ws_manager
                 await ws_manager.send_task_update(task_id, task.to_dict())
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"进度通知失败: {e}")
     
     async def _check_cancelled(self, task_id: str) -> bool:
         """检查是否取消"""
@@ -86,17 +92,24 @@ class TaskExecutor:
                 return True
         return False
     
-    def _get_vector_store(self, kb_id: str):
-        """获取向量存储"""
-        from kb.registry import get_storage_root
-        from llamaindex_study.vector_store import LanceDBVectorStore
-        
-        persist_dir = get_storage_root() / kb_id
-        return LanceDBVectorStore(persist_dir=persist_dir, table_name=kb_id)
+    def _get_vector_store(self, kb_id: str) -> "LanceDBVectorStore":
+        """获取向量存储（使用服务层）"""
+        from kb.services import VectorStoreService
+        return VectorStoreService.get_vector_store(kb_id)
+    
+    def _get_vault_root(self) -> Path:
+        """获取 Vault 根目录"""
+        from kb.registry import get_vault_root
+        return get_vault_root()
+    
+    def _get_dedup_manager(self, kb_id: str, persist_dir: Path) -> "DeduplicationManager":
+        """获取去重管理器"""
+        from kb.deduplication import DeduplicationManager
+        return DeduplicationManager(kb_id, persist_dir)
     
     # ==================== Obsidian 导入 ====================
     
-    async def _execute_obsidian(self, task):
+    async def _execute_obsidian(self, task: "Task") -> None:
         """
         执行 Obsidian 导入（并行多端点版本）
         
@@ -109,7 +122,8 @@ class TaskExecutor:
         from kb.task_lock import DedupLock
         from llama_index.core.node_parser import SentenceSplitter
         from llama_index.core.schema import Document as LlamaDocument
-        from pathlib import Path
+        from kb.parallel_embedding import get_parallel_processor
+        from kb.ingest_vdb import lance_write_queue
         
         kb_id = task.kb_id
         params = task.params
@@ -124,7 +138,7 @@ class TaskExecutor:
         if not kb:
             raise ValueError(f"知识库不存在: {kb_id}")
         
-        vault_root = Path.home() / "Documents" / "Obsidian Vault"
+        vault_root = self._get_vault_root()
         persist_dir = kb.persist_dir
         
         # 向量存储
@@ -134,13 +148,16 @@ class TaskExecutor:
         dedup_manager = self._get_dedup_manager(kb_id, persist_dir)
         
         # 收集文件
-        all_files = []
+        all_files: List[Path] = []
         for source_path in kb.source_paths_abs(vault_root):
             if source_path.exists():
                 all_files.extend(source_path.rglob("*.md"))
         
-        self.queue.update_progress(task.task_id, total=len(all_files),
-                                  message=f"扫描到 {len(all_files)} 个文件")
+        self.queue.update_progress(
+            task.task_id, 
+            total=len(all_files),
+            message=f"扫描到 {len(all_files)} 个文件"
+        )
         
         # ===== 去重阶段（串行访问）=====
         async with DedupLock():
@@ -150,11 +167,13 @@ class TaskExecutor:
                 try:
                     vs.delete_table()
                     self.queue.update_progress(task.task_id, message="已清空旧数据")
-                except:
-                    pass
+                except Exception as e:
+                    logger.warning(f"清空旧数据失败: {e}")
             
             # 检测变更
-            to_add, to_update, to_delete, unchanged = dedup_manager.detect_changes(all_files, vault_root)
+            to_add, to_update, to_delete, unchanged = dedup_manager.detect_changes(
+                all_files, vault_root
+            )
             
             if not to_add and not to_update:
                 self.queue.complete_task(task.task_id, result={"message": "没有变更"})
@@ -165,17 +184,16 @@ class TaskExecutor:
                 self._process_deletes(persist_dir, kb_id, to_delete, dedup_manager)
             
             # 收集要处理的文档
-            all_docs = [(c.rel_path, c.abs_path) for c in to_add + to_update]
+            all_docs: List[tuple] = [(c.rel_path, c.abs_path) for c in to_add + to_update]
             
-            self.queue.update_progress(task.task_id,
-                                      message=f"新增{len(to_add)} 更新{len(to_update)}")
+            self.queue.update_progress(
+                task.task_id,
+                message=f"新增{len(to_add)} 更新{len(to_update)}"
+            )
         
         # ===== 并行处理阶段（embedding + LanceDB 写入）=====
-        from kb.parallel_embedding import get_parallel_processor
-        from kb.ingest_vdb import lance_write_queue
-        
         lance_store = vs._get_lance_vector_store()
-        node_parser = SentenceSplitter(chunk_size=512, chunk_overlap=50)
+        node_parser = SentenceSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
         
         # 启动写入队列
         await lance_write_queue.start()
@@ -186,7 +204,10 @@ class TaskExecutor:
         processed_files = 0
         processed_chunks = 0
         
-        self.queue.update_progress(task.task_id, message=f"开始处理 {len(all_docs)} 个文件")
+        self.queue.update_progress(
+            task.task_id, 
+            message=f"开始处理 {len(all_docs)} 个文件"
+        )
         
         for rel_path, abs_path in all_docs:
             try:
@@ -194,8 +215,11 @@ class TaskExecutor:
                 
                 doc = LlamaDocument(
                     text=content,
-                    metadata={"source": "obsidian", "file_path": str(abs_path),
-                             "relative_path": rel_path},
+                    metadata={
+                        "source": "obsidian", 
+                        "file_path": str(abs_path),
+                        "relative_path": rel_path
+                    },
                     id_=rel_path,
                 )
                 
@@ -229,15 +253,18 @@ class TaskExecutor:
                 
                 processed_files += 1
                 
-                if processed_files % 10 == 0:
-                    self.queue.update_progress(task.task_id,
-                                              message=f"处理 {processed_files}/{len(all_docs)} ({processed_chunks} chunks)")
+                # 定期更新进度
+                if processed_files % PROGRESS_UPDATE_INTERVAL == 0:
+                    self.queue.update_progress(
+                        task.task_id,
+                        message=f"处理 {processed_files}/{len(all_docs)} ({processed_chunks} chunks)"
+                    )
                 
             except Exception as e:
                 logger.warning(f"处理失败 {rel_path}: {e}")
         
-        # 等待写入队列清空
-        await lance_write_queue._queue.join()
+        # 等待写入队列清空（使用公共方法）
+        await lance_write_queue.wait_until_empty()
         
         # 保存去重状态（串行访问）
         async with DedupLock():
@@ -245,7 +272,8 @@ class TaskExecutor:
         
         # 统计端点使用情况
         stats = embed_processor.get_stats()
-        logger.info(f"端点使用统计: {stats}")
+        failure_stats = embed_processor.get_failure_stats()
+        logger.info(f"端点使用统计: {stats}, 失败统计: {failure_stats}")
         
         self.queue.complete_task(task.task_id, result={
             "kb_id": kb_id,
@@ -254,14 +282,16 @@ class TaskExecutor:
             "endpoint_stats": stats,
         })
     
-    def _get_dedup_manager(self, kb_id, persist_dir):
-        """获取去重管理器"""
-        from kb.deduplication import DeduplicationManager
-        return DeduplicationManager(kb_id, persist_dir)
-    
-    def _process_deletes(self, persist_dir, kb_id, to_delete, dedup_manager):
+    def _process_deletes(
+        self, 
+        persist_dir: Path, 
+        kb_id: str, 
+        to_delete: List[Any],
+        dedup_manager: "DeduplicationManager"
+    ) -> None:
         """处理删除的文件"""
         import lancedb
+        
         doc_ids = [c.doc_id for c in to_delete if c.doc_id]
         
         try:
@@ -285,11 +315,11 @@ class TaskExecutor:
     
     # ==================== 其他任务类型 ====================
     
-    async def _execute_zotero(self, task):
+    async def _execute_zotero(self, task: "Task") -> None:
         """执行 Zotero 导入"""
         from kb.zotero_processor import ZoteroImporter
         from kb.document_processor import DocumentProcessorConfig, ProcessingProgress
-        from pathlib import Path
+        from llamaindex_study.ollama_utils import create_ollama_embedding
         
         kb_id = task.kb_id
         params = task.params
@@ -298,12 +328,18 @@ class TaskExecutor:
         collection_name = params.get("collection_name", "Unknown")
         rebuild = params.get("rebuild", False)
         
-        self.queue.update_progress(task.task_id, message=f"准备导入 Zotero: {collection_name}")
+        self.queue.update_progress(
+            task.task_id, 
+            message=f"准备导入 Zotero: {collection_name}"
+        )
         
         vs = self._get_vector_store(kb_id)
         embed_model = create_ollama_embedding()
         
-        config = DocumentProcessorConfig(chunk_size=512, chunk_overlap=50)
+        config = DocumentProcessorConfig(
+            chunk_size=CHUNK_SIZE, 
+            chunk_overlap=CHUNK_OVERLAP
+        )
         importer = ZoteroImporter(config=config)
         
         if not collection_id and params.get("collection_name"):
@@ -321,7 +357,10 @@ class TaskExecutor:
             vs.delete_table()
             progress = ProcessingProgress()
         
-        self.queue.update_progress(task.task_id, message=f"开始导入 {collection_name}...")
+        self.queue.update_progress(
+            task.task_id, 
+            message=f"开始导入 {collection_name}..."
+        )
         
         try:
             stats = importer.import_collection(
@@ -335,8 +374,11 @@ class TaskExecutor:
             
             progress_file.unlink(missing_ok=True)
             
-            self.queue.update_progress(task.task_id, progress=100,
-                                      message=f"完成! {stats.get('items', 0)} 文献, {stats.get('nodes', 0)} 节点")
+            self.queue.update_progress(
+                task.task_id, 
+                progress=100,
+                message=f"完成! {stats.get('items', 0)} 文献, {stats.get('nodes', 0)} 节点"
+            )
             
         except Exception as e:
             self.queue.update_progress(task.task_id, message=f"导入失败: {str(e)}")
@@ -344,10 +386,10 @@ class TaskExecutor:
         finally:
             importer.close()
     
-    async def _execute_generic(self, task):
+    async def _execute_generic(self, task: "Task") -> None:
         """执行通用文件导入"""
         from kb.generic_processor import GenericImporter
-        from pathlib import Path
+        from llamaindex_study.ollama_utils import create_ollama_embedding
         
         kb_id = task.kb_id
         params = task.params
@@ -355,7 +397,7 @@ class TaskExecutor:
         vs = self._get_vector_store(kb_id)
         
         paths = params.get("paths", [])
-        all_files = []
+        all_files: List[Path] = []
         
         for path_str in paths:
             p = Path(path_str)
@@ -369,8 +411,11 @@ class TaskExecutor:
         
         total_files = len(all_files)
         
-        self.queue.update_progress(task.task_id, total=total_files,
-                                  message=f"找到 {total_files} 个文件")
+        self.queue.update_progress(
+            task.task_id, 
+            total=total_files,
+            message=f"找到 {total_files} 个文件"
+        )
         
         importer = GenericImporter()
         
@@ -379,20 +424,29 @@ class TaskExecutor:
                 return
             
             try:
-                importer.process_file(path=file_path, vector_store=vs,
-                                   embed_model=create_ollama_embedding())
+                importer.process_file(
+                    path=file_path, 
+                    vector_store=vs,
+                    embed_model=create_ollama_embedding()
+                )
                 
                 progress = int((i + 1) / total_files * 100) if total_files > 0 else 0
-                self.queue.update_progress(task.task_id, progress=progress,
-                                         message=f"处理: {file_path.name}")
+                self.queue.update_progress(
+                    task.task_id, 
+                    progress=progress,
+                    message=f"处理: {file_path.name}"
+                )
                 
             except Exception as e:
                 logger.warning(f"处理文件失败 {file_path}: {e}")
         
-        self.queue.update_progress(task.task_id, progress=100,
-                                  message=f"完成! 处理 {total_files} 个文件")
+        self.queue.update_progress(
+            task.task_id, 
+            progress=100,
+            message=f"完成! 处理 {total_files} 个文件"
+        )
     
-    async def _execute_rebuild(self, task):
+    async def _execute_rebuild(self, task: "Task") -> None:
         """执行重建知识库"""
         kb_id = task.kb_id
         
@@ -410,27 +464,17 @@ class TaskExecutor:
             return True
         return False
     
-    def submit_and_start(self, task_id: str, loop=None):
+    def submit_and_start(self, task_id: str, loop: Optional[asyncio.AbstractEventLoop] = None) -> None:
         """提交并启动任务（API 兼容性）"""
-        import asyncio
         import threading
         
-        # 在新线程中创建并运行事件循环
-        def run_in_thread():
+        def run_in_thread() -> None:
             asyncio.set_event_loop(asyncio.new_event_loop())
             asyncio.get_event_loop().run_until_complete(self.execute_task(task_id))
         
         thread = threading.Thread(target=run_in_thread, daemon=True)
         thread.start()
-        self._running_tasks[task_id] = thread
-    
-    def _run_loop(self, loop):
-        """运行事件循环"""
-        asyncio.set_event_loop(loop)
-        try:
-            loop.run_forever()
-        finally:
-            loop.close()
+        self._running_tasks[task_id] = thread  # type: ignore
 
 
 # 全局实例
@@ -440,14 +484,14 @@ task_executor = TaskExecutor()
 class TaskScheduler:
     """任务调度器"""
     
-    def __init__(self, max_concurrent: int = 10):
+    def __init__(self, max_concurrent: int = DEFAULT_MAX_CONCURRENT) -> None:
         from kb.task_queue import TaskQueue
-        self.queue = TaskQueue()
-        self.executor = task_executor  # 使用全局实例！
-        self._running = True
-        self.max_concurrent = max_concurrent
+        self.queue: TaskQueue = TaskQueue()
+        self.executor: TaskExecutor = task_executor
+        self._running: bool = True
+        self.max_concurrent: int = max_concurrent
     
-    async def run(self):
+    async def run(self) -> None:
         """运行调度器"""
         logger.info(f"任务调度器已启动 (最大并发: {self.max_concurrent})")
         
@@ -458,7 +502,9 @@ class TaskScheduler:
                 
                 # 如果还有并发余量，提交新任务
                 if running_count < self.max_concurrent:
-                    pending = self.queue.get_pending(limit=self.max_concurrent - running_count)
+                    pending = self.queue.get_pending(
+                        limit=self.max_concurrent - running_count
+                    )
                     
                     for task in pending:
                         if task.task_id in self.executor._running_tasks:
@@ -469,14 +515,8 @@ class TaskScheduler:
                         )
                         logger.info(f"启动任务: {task.task_id[:8]} ({task.kb_id})")
                 
-                # 清理已完成的任务引用（检查 asyncio.Task）
-                try:
-                    done = [tid for tid, t in list(self.executor._running_tasks.items()) 
-                           if isinstance(t, asyncio.Task) and t.done()]
-                    for tid in done:
-                        self.executor._running_tasks.pop(tid, None)
-                except Exception:
-                    pass  # 忽略清理错误
+                # 清理已完成的任务引用
+                self._cleanup_completed_tasks()
                 
             except Exception as e:
                 logger.error(f"调度器错误: {e}")
@@ -485,6 +525,18 @@ class TaskScheduler:
         
         logger.info("任务调度器已停止")
     
-    def stop(self):
+    def _cleanup_completed_tasks(self) -> None:
+        """清理已完成的任务引用"""
+        try:
+            done = [
+                tid for tid, t in list(self.executor._running_tasks.items())
+                if isinstance(t, asyncio.Task) and t.done()
+            ]
+            for tid in done:
+                self.executor._running_tasks.pop(tid, None)
+        except Exception as e:
+            logger.debug(f"清理已完成任务失败: {e}")
+    
+    def stop(self) -> None:
         """停止调度器"""
         self._running = False

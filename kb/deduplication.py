@@ -45,6 +45,10 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Callable, Any
 from enum import Enum
 
+from llamaindex_study.logger import get_logger
+
+logger = get_logger(__name__)
+
 
 class ChangeType(Enum):
     """变更类型"""
@@ -196,7 +200,7 @@ class DeduplicationManager:
                 for r in records
             }
         except Exception as e:
-            print(f"   ⚠️  从 SQLite 加载去重状态失败: {e}")
+            logger.warning(f"从 SQLite 加载去重状态失败: {e}")
             self._records = {}
 
     def _load_json(self):
@@ -211,7 +215,7 @@ class DeduplicationManager:
                         for path, record in data.items()
                     }
             except Exception as e:
-                print(f"   ⚠️  加载去重状态失败: {e}")
+                logger.warning(f"加载去重状态失败: {e}")
                 self._records = {}
 
     def _save(self):
@@ -239,7 +243,7 @@ class DeduplicationManager:
             if records:
                 self._dedup_db.bulk_add(self.kb_id, records)
         except Exception as e:
-            print(f"   ⚠️  保存去重状态到 SQLite 失败: {e}")
+            logger.warning(f"保存去重状态到 SQLite 失败: {e}")
 
     def _save_json(self):
         """保存状态到 JSON 文件（向后兼容）"""
@@ -254,7 +258,7 @@ class DeduplicationManager:
                     indent=2,
                 )
         except Exception as e:
-            print(f"   ⚠️  保存去重状态失败: {e}")
+            logger.warning(f"保存去重状态失败: {e}")
 
     @staticmethod
     def compute_hash(content: str) -> str:
@@ -471,11 +475,9 @@ class DeduplicationManager:
                     chunk_count=chunk_count,
                 )
                 if not result:
-                    print(f"   ⚠️  保存去重记录返回 False")
+                    logger.warning("保存去重记录返回 False")
             except Exception as e:
-                print(f"   ⚠️  保存去重记录失败: {e}")
-                import traceback
-                traceback.print_exc()
+                logger.warning(f"保存去重记录失败: {e}", exc_info=True)
 
     def mark_deleted(self, rel_path: str):
         """
@@ -598,7 +600,7 @@ class DeduplicationManager:
             return len(nodes)
 
         except Exception as e:
-            print(f"   ⚠️  Upsert 失败: {e}")
+            logger.warning(f"LanceDB Upsert 失败: {e}")
             return 0
 
     def delete_by_doc_ids(self, doc_ids: List[str]) -> int:
@@ -629,7 +631,7 @@ class DeduplicationManager:
             return deleted
 
         except Exception as e:
-            print(f"   ⚠️  删除失败: {e}")
+            logger.warning(f"LanceDB 删除失败: {e}")
             return 0
 
     def get_existing_doc_ids(self) -> Set[str]:
@@ -708,8 +710,8 @@ class IncrementalProcessor:
             files, vault_root
         )
 
-        print(f"   增量: 新增 {len(to_add)}, 更新 {len(to_update)}, "
-              f"删除 {len(to_delete)}, 未变 {len(unchanged)}")
+        logger.info(f"增量: 新增 {len(to_add)}, 更新 {len(to_update)}, "
+                    f"删除 {len(to_delete)}, 未变 {len(unchanged)}")
 
         stats = {"files": 0, "nodes": 0, "failed": 0, "skipped": 0}
 
@@ -738,7 +740,7 @@ class IncrementalProcessor:
                     )
             except Exception as e:
                 stats["failed"] += 1
-                print(f"   ⚠️  处理失败: {change.rel_path} - {e}")
+                logger.warning(f"处理失败: {change.rel_path} - {e}")
 
         # 处理更新
         for change in to_update:
@@ -765,7 +767,7 @@ class IncrementalProcessor:
                     )
             except Exception as e:
                 stats["failed"] += 1
-                print(f"   ⚠️  更新失败: {change.rel_path} - {e}")
+                logger.warning(f"更新失败: {change.rel_path} - {e}")
 
         # 跳过未变更的文件
         stats["skipped"] = len(unchanged)
@@ -825,7 +827,7 @@ class IncrementalProcessor:
                         node.get_content()
                     )
                 except Exception as e:
-                    print(f"   ⚠️  Embedding 失败: {e}")
+                    logger.warning(f"Embedding 失败: {e}")
                     continue
 
         return nodes
@@ -838,5 +840,5 @@ class IncrementalProcessor:
         try:
             return self.manager.upsert_nodes(nodes)
         except Exception as e:
-            print(f"   ⚠️  保存失败: {e}")
+            logger.warning(f"保存节点失败: {e}")
             return 0
