@@ -173,7 +173,7 @@ class TaskResponse(BaseModel):
     status: str
     kb_id: str
     message: str = ""
-    progress: int = 0
+    progress: Optional[int] = 0
     result: Optional[Dict] = None
     error: Optional[str] = None
 
@@ -352,7 +352,7 @@ def ingest(kb_id: str, req: IngestRequest):
         source=req.path,
     )
 
-    task_executor.submit_and_start(task_id, _get_or_create_loop())
+    # 任务由调度器启动
 
     return IngestResponse(
         status="pending",
@@ -421,7 +421,7 @@ def ingest_zotero(kb_id: str, req: ZoteroIngestRequest):
         source=f"zotero:{collection_name}",
     )
 
-    task_executor.submit_and_start(task_id, _get_or_create_loop())
+    # 任务由调度器启动
 
     return IngestResponse(
         status="pending",
@@ -485,7 +485,7 @@ def ingest_obsidian(kb_id: str, req: ObsidianIngestRequest):
         source=f"obsidian:{import_dir.name}",
     )
 
-    task_executor.submit_and_start(task_id, _get_or_create_loop())
+    # 任务由调度器启动
 
     return IngestResponse(
         status="pending",
@@ -543,7 +543,7 @@ def import_obsidian_all():
                 source=f"obsidian:{folder}",
             )
 
-            task_executor.submit_and_start(task_id, _get_or_create_loop())
+            # 任务由调度器启动
 
             task_ids.append({
                 "kb_id": mapping.kb_id,
@@ -572,7 +572,7 @@ def rebuild_kb(kb_id: str, async_mode: bool = True):
             source=f"rebuild:{kb_id}",
         )
 
-        task_executor.submit_and_start(task_id, _get_or_create_loop())
+        # 任务由调度器启动
 
         return {
             "status": "pending",

@@ -100,10 +100,13 @@ class TaskExecutor:
         """
         执行 Obsidian 导入（并行多端点版本）
         
-        使用本地和远程 Ollama 同时处理文件
+        架构：
+        - 去重数据库：串行访问（保护共享资源）
+        - Embedding：并行处理（本地+远程同时工作）
+        - LanceDB 写入：串行（通过 WriteQueue）
         """
         from kb.registry import KnowledgeBaseRegistry
-        from llama_index.embeddings.ollama import OllamaEmbedding
+        from kb.task_lock import DedupLock
         from llama_index.core.node_parser import SentenceSplitter
         from llama_index.core.schema import Document as LlamaDocument
         from pathlib import Path
@@ -139,124 +142,111 @@ class TaskExecutor:
         self.queue.update_progress(task.task_id, total=len(all_files),
                                   message=f"扫描到 {len(all_files)} 个文件")
         
-        # 重建模式
-        if rebuild:
-            dedup_manager.clear()
-            try:
-                vs.delete_table()
-                self.queue.update_progress(task.task_id, message="已清空旧数据")
-            except:
-                pass
+        # ===== 去重阶段（串行访问）=====
+        async with DedupLock():
+            # 重建模式
+            if rebuild:
+                dedup_manager.clear()
+                try:
+                    vs.delete_table()
+                    self.queue.update_progress(task.task_id, message="已清空旧数据")
+                except:
+                    pass
+            
+            # 检测变更
+            to_add, to_update, to_delete, unchanged = dedup_manager.detect_changes(all_files, vault_root)
+            
+            if not to_add and not to_update:
+                self.queue.complete_task(task.task_id, result={"message": "没有变更"})
+                return
+            
+            # 处理删除
+            if to_delete and params.get("force_delete", True):
+                self._process_deletes(persist_dir, kb_id, to_delete, dedup_manager)
+            
+            # 收集要处理的文档
+            all_docs = [(c.rel_path, c.abs_path) for c in to_add + to_update]
+            
+            self.queue.update_progress(task.task_id,
+                                      message=f"新增{len(to_add)} 更新{len(to_update)}")
         
-        # 检测变更
-        from kb.deduplication import DeduplicationManager
-        dedup_manager = DeduplicationManager(kb_id, persist_dir)
-        to_add, to_update, to_delete, unchanged = dedup_manager.detect_changes(all_files, vault_root)
-        
-        if not to_add and not to_update:
-            self.queue.complete_task(task.task_id, result={"message": "没有变更"})
-            return
-        
-        # 处理删除
-        if to_delete and params.get("force_delete", True):
-            self._process_deletes(persist_dir, kb_id, to_delete, dedup_manager)
-        
-        # 收集要处理的文档
-        all_docs = [(c.rel_path, c.abs_path) for c in to_add + to_update]
-        
-        self.queue.update_progress(task.task_id,
-                                  message=f"新增{len(to_add)} 更新{len(to_update)}")
-        
-        # ===== 并行处理阶段 =====
-        # 端点配置
-        endpoints = [
-            {"name": "本地", "url": "http://localhost:11434"},
-            {"name": "远程", "url": "http://192.168.31.169:11434"},
-        ]
+        # ===== 并行处理阶段（embedding + LanceDB 写入）=====
+        from kb.parallel_embedding import get_parallel_processor
+        from kb.ingest_vdb import lance_write_queue
         
         lance_store = vs._get_lance_vector_store()
         node_parser = SentenceSplitter(chunk_size=512, chunk_overlap=50)
         
-        # 分配文件
-        files_per_ep = len(all_docs) // len(endpoints) + 1
+        # 启动写入队列
+        await lance_write_queue.start()
         
-        async def process_endpoint(endpoint, files):
-            """处理一个端点的文件"""
-            self.queue.update_progress(task.task_id, 
-                                      message=f"[{endpoint['name']}] 处理 {len(files)} 个文件")
-            
-            embed_model = OllamaEmbedding(model_name="bge-m3", base_url=endpoint["url"])
-            processed = 0
-            total_nodes = 0
-            
-            for rel_path, abs_path in files:
-                try:
-                    content = abs_path.read_text(encoding="utf-8", errors="ignore")
+        # 获取并行处理器
+        embed_processor = get_parallel_processor()
+        
+        processed_files = 0
+        processed_chunks = 0
+        
+        self.queue.update_progress(task.task_id, message=f"开始处理 {len(all_docs)} 个文件")
+        
+        for rel_path, abs_path in all_docs:
+            try:
+                content = abs_path.read_text(encoding="utf-8", errors="ignore")
+                
+                doc = LlamaDocument(
+                    text=content,
+                    metadata={"source": "obsidian", "file_path": str(abs_path),
+                             "relative_path": rel_path},
+                    id_=rel_path,
+                )
+                
+                nodes = node_parser.get_nodes_from_documents([doc])
+                
+                if nodes:
+                    # 收集所有文本
+                    texts = [node.get_content() for node in nodes]
                     
-                    doc = LlamaDocument(
-                        text=content,
-                        metadata={"source": "obsidian", "file_path": str(abs_path),
-                                 "relative_path": rel_path},
-                        id_=rel_path,
-                    )
+                    # 真正并行获取 embeddings（两个端点同时工作）
+                    results = await embed_processor.process_batch(texts)
                     
-                    nodes = node_parser.get_nodes_from_documents([doc])
+                    # 赋值 embeddings
+                    for j, (ep_name, embedding, error) in enumerate(results):
+                        nodes[j].id_ = f"{rel_path}_{j}"
+                        nodes[j].embedding = embedding
                     
-                    # 生成 embeddings
-                    for j, node in enumerate(nodes):
-                        node.id_ = f"{rel_path}_{j}"
-                        try:
-                            embedding = embed_model.get_text_embedding(node.get_content())
-                            node.embedding = embedding
-                        except Exception as e:
-                            logger.warning(f"[{endpoint['name']}] Embedding 失败: {e}")
-                            node.embedding = [0.0] * 1024
-                    
-                    if nodes:
-                        lance_store.add(nodes)
-                        total_nodes += len(nodes)
-                    
+                    # 发送到写入队列（串行执行）
+                    await lance_write_queue.enqueue(lance_store, nodes, kb_id)
+                    processed_chunks += len(nodes)
+                
+                # 更新去重状态（串行访问）
+                async with DedupLock():
                     dedup_manager.mark_processed(abs_path, content, rel_path,
                                                chunk_count=len(nodes), vault_root=vault_root)
-                    
-                    processed += 1
-                    
-                    if processed % 10 == 0:
-                        self.queue.update_progress(task.task_id,
-                                                  message=f"[{endpoint['name']}] {processed}/{len(files)}")
-                    
-                except Exception as e:
-                    logger.warning(f"[{endpoint['name']}] 失败 {rel_path}: {e}")
-            
-            self.queue.update_progress(task.task_id,
-                                       message=f"[{endpoint['name']}] 完成: {processed} 文件")
-            return processed, total_nodes
+                
+                processed_files += 1
+                
+                if processed_files % 10 == 0:
+                    self.queue.update_progress(task.task_id,
+                                              message=f"处理 {processed_files}/{len(all_docs)} ({processed_chunks} chunks)")
+                
+            except Exception as e:
+                logger.warning(f"处理失败 {rel_path}: {e}")
         
-        # 准备并发任务
-        worker_tasks = []
-        for i, ep in enumerate(endpoints):
-            start = i * files_per_ep
-            end = min((i + 1) * files_per_ep, len(all_docs))
-            ep_files = all_docs[start:end]
-            
-            if ep_files:
-                self.queue.update_progress(task.task_id, message=f"• {ep['name']}: {len(ep_files)} 个文件")
-                worker_tasks.append(process_endpoint(ep, ep_files))
+        # 等待写入队列清空
+        await lance_write_queue._queue.join()
         
-        # 并发执行
-        results = await asyncio.gather(*worker_tasks, return_exceptions=True)
+        # 保存去重状态（串行访问）
+        async with DedupLock():
+            dedup_manager._save()
         
-        # 保存去重状态
-        dedup_manager._save()
-        
-        # 统计
-        total_files = sum(r[0] for r in results if isinstance(r, tuple))
-        total_nodes = sum(r[1] for r in results if isinstance(r, tuple))
+        # 统计端点使用情况
+        stats = embed_processor.get_stats()
+        logger.info(f"端点使用统计: {stats}")
         
         self.queue.complete_task(task.task_id, result={
             "kb_id": kb_id,
-            "files": total_files,
-            "nodes": total_nodes,
+            "files": processed_files,
+            "nodes": processed_chunks,
+            "endpoint_stats": stats,
         })
     
     def _get_dedup_manager(self, kb_id, persist_dir):
@@ -445,33 +435,43 @@ task_executor = TaskExecutor()
 class TaskScheduler:
     """任务调度器"""
     
-    def __init__(self):
+    def __init__(self, max_concurrent: int = 10):
         from kb.task_queue import TaskQueue
         self.queue = TaskQueue()
-        self.executor = TaskExecutor()
+        self.executor = task_executor  # 使用全局实例！
         self._running = True
+        self.max_concurrent = max_concurrent
     
     async def run(self):
         """运行调度器"""
-        logger.info("任务调度器已启动")
+        logger.info(f"任务调度器已启动 (最大并发: {self.max_concurrent})")
         
         while self._running:
             try:
-                pending = self.queue.get_pending(limit=10)
+                # 获取当前运行中的任务数
+                running_count = len(self.executor._running_tasks)
                 
-                for task in pending:
-                    if task.task_id in self.executor._running_tasks:
-                        continue
+                # 如果还有并发余量，提交新任务
+                if running_count < self.max_concurrent:
+                    pending = self.queue.get_pending(limit=self.max_concurrent - running_count)
                     
-                    self.executor._running_tasks[task.task_id] = asyncio.create_task(
-                        self.executor.execute_task(task.task_id)
-                    )
-                    logger.info(f"启动任务: {task.task_id[:8]}...")
+                    for task in pending:
+                        if task.task_id in self.executor._running_tasks:
+                            continue
+                        
+                        self.executor._running_tasks[task.task_id] = asyncio.create_task(
+                            self.executor.execute_task(task.task_id)
+                        )
+                        logger.info(f"启动任务: {task.task_id[:8]} ({task.kb_id})")
                 
-                # 清理已完成的任务引用
-                done = [tid for tid, t in self.executor._running_tasks.items() if t.done()]
-                for tid in done:
-                    self.executor._running_tasks.pop(tid, None)
+                # 清理已完成的任务引用（检查 asyncio.Task）
+                try:
+                    done = [tid for tid, t in list(self.executor._running_tasks.items()) 
+                           if isinstance(t, asyncio.Task) and t.done()]
+                    for tid in done:
+                        self.executor._running_tasks.pop(tid, None)
+                except Exception:
+                    pass  # 忽略清理错误
                 
             except Exception as e:
                 logger.error(f"调度器错误: {e}")

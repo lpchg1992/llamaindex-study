@@ -210,16 +210,10 @@ class ParallelIngestExecutor:
             task_queue.update_progress(task_id,
                                      message=f"新增{len(to_add)} 更新{len(to_update)}")
             
-            # ===== Chunk 级并行处理（轮流使用两个端点）=====
-            from llama_index.embeddings.ollama import OllamaEmbedding
+            # ===== 真正并行处理（asyncio + ThreadPool）=====
             from llama_index.core.node_parser import SentenceSplitter
             from llama_index.core.schema import Document as LlamaDocument
-            
-            # 端点配置
-            endpoints = [
-                {"name": "本地", "url": "http://localhost:11434"},
-                {"name": "远程", "url": "http://192.168.31.169:11434"},
-            ]
+            from kb.parallel_embedding import get_parallel_processor
             
             lance_store = vs._get_lance_vector_store()
             node_parser = SentenceSplitter(chunk_size=512, chunk_overlap=50)
@@ -227,15 +221,11 @@ class ParallelIngestExecutor:
             # 启动写入队列
             await lance_write_queue.start()
             
-            # 为每个端点创建 embed 模型
-            embed_models = {
-                ep["name"]: OllamaEmbedding(model_name="bge-m3", base_url=ep["url"])
-                for ep in endpoints
-            }
+            # 获取并行处理器
+            embed_processor = get_parallel_processor()
             
             processed_files = 0
             processed_chunks = 0
-            endpoint_idx = 0  # 轮流使用端点
             
             task_queue.update_progress(task_id, message=f"开始处理 {len(all_docs)} 个文件")
             
@@ -252,22 +242,18 @@ class ParallelIngestExecutor:
                     
                     nodes = node_parser.get_nodes_from_documents([doc])
                     
-                    # 为每个 chunk 轮流使用端点
-                    for j, node in enumerate(nodes):
-                        node.id_ = f"{rel_path}_{j}"
-                        
-                        # 轮流选择端点
-                        ep = endpoints[endpoint_idx % len(endpoints)]
-                        endpoint_idx += 1
-                        
-                        try:
-                            embedding = embed_models[ep["name"]].get_text_embedding(node.get_content())
-                            node.embedding = embedding
-                        except Exception as e:
-                            logger.warning(f"[{ep['name']}] Embedding 失败: {e}")
-                            node.embedding = [0.0] * 1024
-                    
                     if nodes:
+                        # 收集所有文本
+                        texts = [node.get_content() for node in nodes]
+                        
+                        # 真正并行获取 embeddings（两个端点同时工作）
+                        results = await embed_processor.process_batch(texts)
+                        
+                        # 赋值 embeddings
+                        for j, (ep_name, embedding, error) in enumerate(results):
+                            nodes[j].id_ = f"{rel_path}_{j}"
+                            nodes[j].embedding = embedding
+                        
                         # 发送到写入队列（串行执行）
                         await lance_write_queue.enqueue(lance_store, nodes, kb_id)
                         processed_chunks += len(nodes)
@@ -290,18 +276,18 @@ class ParallelIngestExecutor:
             # 保存去重状态
             dedup_manager._save()
             
+            # 统计端点使用情况
+            stats = embed_processor.get_stats()
+            logger.info(f"端点使用统计: {stats}")
+            
             task_queue.complete_task(task_id, result={
                 "kb_id": kb_id,
                 "files": processed_files,
                 "nodes": processed_chunks,
+                "endpoint_stats": stats,
             })
             
             logger.info(f"任务完成: {task_id}, {processed_files} 文件, {processed_chunks} chunks")
-            
-        except Exception as e:
-            logger.error(f"任务失败 {task_id}: {e}")
-            task_queue.complete_task(task_id, error=str(e))
-
             
         except Exception as e:
             logger.error(f"任务失败 {task_id}: {e}")
