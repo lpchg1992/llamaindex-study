@@ -223,21 +223,35 @@ class LanceDBVectorStore(BaseVectorStore):
 
     def get_stats(self) -> dict:
         """获取统计信息"""
-        if not self.exists():
+        uri = self._get_uri()
+        if not uri:
             return {"exists": False}
 
         try:
             import lancedb
-            db = lancedb.connect(self._get_uri())
-            table = db.open_table(self.table_name)
+            db = lancedb.connect(uri)
+            
+            # 获取表列表
+            result = db.list_tables()
+            table_names = result.tables if hasattr(result, 'tables') else []
+            
+            # 尝试使用配置的表名，或者使用第一个可用的表
+            table_name = self.table_name
+            if table_name not in table_names and table_names:
+                table_name = table_names[0]  # 使用第一个表
+            
+            if table_name not in table_names:
+                return {"exists": False, "reason": f"表 {table_name} 不存在"}
+            
+            table = db.open_table(table_name)
             return {
                 "exists": True,
-                "uri": self._get_uri(),
-                "table_name": self.table_name,
+                "uri": uri,
+                "table_name": table_name,
                 "row_count": table.count_rows(),
             }
-        except Exception:
-            return {"exists": False}
+        except Exception as e:
+            return {"exists": False, "error": str(e)}
 
 
 class ChromaVectorStore(BaseVectorStore):
