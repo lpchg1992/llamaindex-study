@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 
+from llamaindex_study.config import get_settings
 from llamaindex_study.logger import get_logger
 
 logger = get_logger(__name__)
@@ -28,38 +29,14 @@ DEFAULT_VAULT_ROOT = Path.home() / "Documents" / "Obsidian Vault"
 
 def get_storage_root() -> Path:
     """获取存储根目录（延迟加载，支持环境变量配置）"""
-    # 确保 dotenv 已加载
-    from dotenv import load_dotenv
-    env_path = PROJECT_ROOT / ".env"
-    if env_path.exists():
-        load_dotenv(env_path, override=True)
-    
-    # 尝试从环境变量获取
-    persist_dir = os.getenv("PERSIST_DIR")
-    if persist_dir:
-        return Path(persist_dir)
-    
-    # 尝试从环境变量获取（兼容性）
-    obsidian_storage = os.getenv("OBSIDIAN_STORAGE_DIR")
-    if obsidian_storage:
-        return Path(obsidian_storage)
-    
-    # 默认使用本地存储目录
-    return DEFAULT_STORAGE_ROOT
+    settings = get_settings()
+    return Path(settings.persist_dir)
 
 
 def get_zotero_storage_root() -> Path:
     """获取 Zotero 存储根目录"""
-    from dotenv import load_dotenv
-    env_path = PROJECT_ROOT / ".env"
-    if env_path.exists():
-        load_dotenv(env_path, override=True)
-    
-    zotero_dir = os.getenv("ZOTERO_STORAGE_DIR")
-    if zotero_dir:
-        return Path(zotero_dir)
-    
-    return DEFAULT_STORAGE_ROOT / "zotero"
+    settings = get_settings()
+    return Path(settings.zotero_persist_dir)
 
 
 def get_vault_root() -> Path:

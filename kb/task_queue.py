@@ -116,7 +116,7 @@ class TaskQueue:
         
         # 数据库路径
         settings = get_settings()
-        self.db_path = Path(settings.data_dir or "/Users/luopingcheng/.llamaindex").expanduser()
+        self.db_path = Path(settings.data_dir).expanduser()
         self.db_path.mkdir(parents=True, exist_ok=True)
         self.db_path = self.db_path / "tasks.db"
         

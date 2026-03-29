@@ -134,12 +134,12 @@ class TaskExecutor:
         # ===== 准备阶段 =====
         registry = KnowledgeBaseRegistry()
         kb = registry.get(kb_id)
-        
-        if not kb:
-            raise ValueError(f"知识库不存在: {kb_id}")
-        
-        vault_root = self._get_vault_root()
-        persist_dir = kb.persist_dir
+        vault_root = Path(params.get("vault_path")).expanduser() if params.get("vault_path") else self._get_vault_root()
+        folder_path = params.get("folder_path") or params.get("folder")
+        recursive = params.get("recursive", True)
+        if not kb and not folder_path:
+            raise ValueError(f"知识库不存在且未提供 folder_path: {kb_id}")
+        persist_dir = Path(params.get("persist_dir")).expanduser() if params.get("persist_dir") else self._get_vector_store(kb_id).persist_dir
         
         # 向量存储
         vs = self._get_vector_store(kb_id)
@@ -149,9 +149,15 @@ class TaskExecutor:
         
         # 收集文件
         all_files: List[Path] = []
-        for source_path in kb.source_paths_abs(vault_root):
+        if folder_path:
+            source_paths = [vault_root / folder_path]
+        else:
+            source_paths = kb.source_paths_abs(vault_root)
+
+        for source_path in source_paths:
             if source_path.exists():
-                all_files.extend(source_path.rglob("*.md"))
+                pattern = source_path.rglob("*.md") if recursive else source_path.glob("*.md")
+                all_files.extend(pattern)
         
         self.queue.update_progress(
             task.task_id, 
@@ -319,7 +325,8 @@ class TaskExecutor:
         """执行 Zotero 导入"""
         from kb.zotero_processor import ZoteroImporter
         from kb.document_processor import DocumentProcessorConfig, ProcessingProgress
-        from llamaindex_study.ollama_utils import create_ollama_embedding
+        from kb.parallel_embedding import get_parallel_processor
+        from llamaindex_study.ollama_utils import create_parallel_ollama_embedding
         
         kb_id = task.kb_id
         params = task.params
@@ -334,7 +341,8 @@ class TaskExecutor:
         )
         
         vs = self._get_vector_store(kb_id)
-        embed_model = create_ollama_embedding()
+        embed_model = create_parallel_ollama_embedding()
+        embed_processor = get_parallel_processor()
         
         config = DocumentProcessorConfig(
             chunk_size=CHUNK_SIZE, 
@@ -379,6 +387,12 @@ class TaskExecutor:
                 progress=100,
                 message=f"完成! {stats.get('items', 0)} 文献, {stats.get('nodes', 0)} 节点"
             )
+            self.queue.complete_task(task.task_id, result={
+                "kb_id": kb_id,
+                "items": stats.get("items", 0),
+                "nodes": stats.get("nodes", 0),
+                "endpoint_stats": embed_processor.get_stats(),
+            })
             
         except Exception as e:
             self.queue.update_progress(task.task_id, message=f"导入失败: {str(e)}")
@@ -389,14 +403,21 @@ class TaskExecutor:
     async def _execute_generic(self, task: "Task") -> None:
         """执行通用文件导入"""
         from kb.generic_processor import GenericImporter
-        from llamaindex_study.ollama_utils import create_ollama_embedding
+        from kb.parallel_embedding import get_parallel_processor
+        from llamaindex_study.ollama_utils import create_parallel_ollama_embedding
         
         kb_id = task.kb_id
         params = task.params
         
         vs = self._get_vector_store(kb_id)
+        embed_model = create_parallel_ollama_embedding()
+        embed_processor = get_parallel_processor()
         
-        paths = params.get("paths", [])
+        raw_paths = params.get("paths")
+        if raw_paths is None:
+            single_path = params.get("path")
+            raw_paths = [single_path] if single_path else []
+        paths = raw_paths
         all_files: List[Path] = []
         
         for path_str in paths:
@@ -416,19 +437,33 @@ class TaskExecutor:
             total=total_files,
             message=f"找到 {total_files} 个文件"
         )
+
+        if total_files == 0:
+            self.queue.complete_task(task.task_id, result={
+                "kb_id": kb_id,
+                "files": 0,
+                "nodes": 0,
+                "failed": 0,
+                "endpoint_stats": embed_processor.get_stats(),
+            })
+            return
         
         importer = GenericImporter()
+        stats = {"files": 0, "nodes": 0, "failed": 0}
         
         for i, file_path in enumerate(all_files):
             if await self._check_cancelled(task.task_id):
                 return
             
             try:
-                importer.process_file(
+                file_stats = importer.process_file(
                     path=file_path, 
                     vector_store=vs,
-                    embed_model=create_ollama_embedding()
+                    embed_model=embed_model,
                 )
+                stats["files"] += file_stats.get("files", 0)
+                stats["nodes"] += file_stats.get("nodes", 0)
+                stats["failed"] += file_stats.get("failed", 0)
                 
                 progress = int((i + 1) / total_files * 100) if total_files > 0 else 0
                 self.queue.update_progress(
@@ -439,12 +474,15 @@ class TaskExecutor:
                 
             except Exception as e:
                 logger.warning(f"处理文件失败 {file_path}: {e}")
+                stats["failed"] += 1
         
-        self.queue.update_progress(
-            task.task_id, 
-            progress=100,
-            message=f"完成! 处理 {total_files} 个文件"
-        )
+        self.queue.complete_task(task.task_id, result={
+            "kb_id": kb_id,
+            "files": stats["files"],
+            "nodes": stats["nodes"],
+            "failed": stats["failed"],
+            "endpoint_stats": embed_processor.get_stats(),
+        })
     
     async def _execute_rebuild(self, task: "Task") -> None:
         """执行重建知识库"""

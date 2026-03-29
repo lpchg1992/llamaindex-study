@@ -6,13 +6,15 @@
 """
 
 import asyncio
+import time
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Callable
 
+from llamaindex_study.config import get_settings
 from llamaindex_study.logger import get_logger
 from llamaindex_study.vector_store import LanceDBVectorStore
-from llamaindex_study.ollama_utils import create_ollama_embedding, configure_global_embed_model
-from kb.registry import get_storage_root
+from llamaindex_study.ollama_utils import create_parallel_ollama_embedding, configure_global_embed_model
+from kb.registry import get_storage_root, get_zotero_storage_root
 from kb.deduplication import DeduplicationManager
 
 logger = get_logger(__name__)
@@ -28,11 +30,8 @@ class VectorStoreService:
         Obsidian 知识库使用 get_storage_root()
         Zotero 知识库使用 ZOTERO_PERSIST_DIR
         """
-        import os
-        
-        # 检查是否是 Zotero 知识库（数据存在于 ZOTERO_PERSIST_DIR）
-        zotero_root = os.getenv("ZOTERO_PERSIST_DIR", "/Volumes/online/llamaindex/zotero")
-        zotero_path = Path(zotero_root) / kb_id
+        settings = get_settings()
+        zotero_path = Path(settings.zotero_persist_dir) / kb_id
         
         if zotero_path.exists():
             # Zotero 知识库
@@ -51,10 +50,8 @@ class VectorStoreService:
     @staticmethod
     def get_persist_dir(kb_id: str) -> Path:
         """获取知识库持久化目录"""
-        import os
-        
-        zotero_root = os.getenv("ZOTERO_PERSIST_DIR", "/Volumes/online/llamaindex/zotero")
-        zotero_path = Path(zotero_root) / kb_id
+        settings = get_settings()
+        zotero_path = Path(settings.zotero_persist_dir) / kb_id
         
         if zotero_path.exists():
             return zotero_path
@@ -187,7 +184,7 @@ class ObsidianService:
             stats = importer.import_directory(
                 directory=import_dir,
                 vector_store=vs,
-                embed_model=create_ollama_embedding(),
+                embed_model=create_parallel_ollama_embedding(),
                 progress=None,
                 rebuild=rebuild,
                 exclude_patterns=exclude_patterns,
@@ -290,7 +287,7 @@ class ZoteroService:
                 collection_id=collection_id,
                 collection_name=collection_name,
                 vector_store=vs,
-                embed_model=create_ollama_embedding(),
+                embed_model=create_parallel_ollama_embedding(),
                 progress=progress,
                 rebuild=rebuild,
             )
@@ -342,7 +339,7 @@ class GenericService:
             stats = importer.process_file(
                 path=file_path,
                 vector_store=vs,
-                embed_model=create_ollama_embedding(),
+                embed_model=create_parallel_ollama_embedding(),
             )
             
             if progress_callback:
@@ -363,9 +360,11 @@ class KnowledgeBaseService:
     def list_all() -> List[Dict[str, Any]]:
         """列出所有知识库"""
         from kb.registry import registry
+        from kb.database import init_kb_meta_db
         
         kbs = registry.list_all()
         result = []
+        seen: set[str] = set()
         
         for kb in kbs:
             persist_dir = kb.persist_dir
@@ -387,6 +386,30 @@ class KnowledgeBaseService:
                 "status": "indexed" if row_count > 0 else "empty",
                 "row_count": row_count,
             })
+            seen.add(kb.id)
+
+        kb_meta_db = init_kb_meta_db()
+        for kb_meta in kb_meta_db.get_all():
+            kb_id = kb_meta["kb_id"]
+            if kb_id in seen:
+                continue
+            persist_dir = Path(kb_meta.get("persist_path") or (get_storage_root() / kb_id))
+            info = {
+                "id": kb_id,
+                "name": kb_meta.get("name", kb_id),
+                "description": kb_meta.get("description", ""),
+                "status": "empty",
+                "row_count": 0,
+            }
+            if persist_dir.exists():
+                try:
+                    vs = LanceDBVectorStore(persist_dir=persist_dir, table_name=kb_id)
+                    stats = vs.get_stats()
+                    info["status"] = "indexed" if stats.get("row_count", 0) > 0 else "empty"
+                    info["row_count"] = stats.get("row_count", 0)
+                except Exception:
+                    info["status"] = "error"
+            result.append(info)
         
         return result
     
@@ -394,23 +417,32 @@ class KnowledgeBaseService:
     def get_info(kb_id: str) -> Optional[Dict[str, Any]]:
         """获取知识库详情"""
         from kb.registry import registry
+        from kb.database import init_kb_meta_db
         
         kb = registry.get(kb_id)
-        if not kb:
-            return None
-        
-        persist_dir = kb.persist_dir
-        
-        info = {
-            "id": kb.id,
-            "name": kb.name,
-            "description": kb.description,
-            "persist_dir": str(persist_dir),
-        }
+        if kb:
+            persist_dir = kb.persist_dir
+            info = {
+                "id": kb.id,
+                "name": kb.name,
+                "description": kb.description,
+                "persist_dir": str(persist_dir),
+            }
+        else:
+            kb_meta = init_kb_meta_db().get(kb_id)
+            if not kb_meta:
+                return None
+            persist_dir = Path(kb_meta.get("persist_path") or (get_storage_root() / kb_id))
+            info = {
+                "id": kb_id,
+                "name": kb_meta.get("name", kb_id),
+                "description": kb_meta.get("description", ""),
+                "persist_dir": str(persist_dir),
+            }
         
         if persist_dir.exists():
             try:
-                vs = VectorStoreService.get_vector_store(kb_id)
+                vs = LanceDBVectorStore(persist_dir=persist_dir, table_name=kb_id)
                 stats = vs.get_stats()
                 info["status"] = "indexed" if stats.get("row_count", 0) > 0 else "empty"
                 info["row_count"] = stats.get("row_count", 0)
@@ -425,15 +457,20 @@ class KnowledgeBaseService:
     def create(kb_id: str, name: str, description: str = "") -> Dict[str, Any]:
         """创建知识库"""
         from kb.registry import registry
+        from kb.database import init_kb_meta_db
         
-        if registry.exists(kb_id):
+        if registry.exists(kb_id) or init_kb_meta_db().get(kb_id):
             raise ValueError(f"知识库 {kb_id} 已存在")
         
         persist_dir = get_storage_root() / kb_id
         persist_dir.mkdir(parents=True, exist_ok=True)
-        
-        # 创建空的向量存储
-        vs = VectorStoreService.get_vector_store(kb_id)
+        init_kb_meta_db().upsert(
+            kb_id=kb_id,
+            name=name or kb_id,
+            description=description,
+            source_type="manual",
+            persist_path=str(persist_dir),
+        )
         
         return {
             "id": kb_id,
@@ -445,17 +482,24 @@ class KnowledgeBaseService:
     @staticmethod
     def delete(kb_id: str) -> bool:
         """删除知识库"""
-        persist_dir = get_storage_root() / kb_id
-        
-        if not persist_dir.exists():
+        from kb.database import init_kb_meta_db
+
+        info = KnowledgeBaseService.get_info(kb_id)
+        if not info:
             return False
-        
-        vs = VectorStoreService.get_vector_store(kb_id)
-        vs.delete_table()
-        
+
+        persist_dir = Path(info["persist_dir"])
+        vs = LanceDBVectorStore(persist_dir=persist_dir, table_name=kb_id)
+        try:
+            vs.delete_table()
+        except Exception:
+            pass
+
         import shutil
-        shutil.rmtree(persist_dir)
-        
+        if persist_dir.exists():
+            shutil.rmtree(persist_dir)
+
+        init_kb_meta_db().delete(kb_id)
         return True
     
     @staticmethod
@@ -519,3 +563,231 @@ class SearchService:
                 for r in response.source_nodes
             ],
         }
+
+
+class TaskService:
+    """任务服务"""
+
+    @staticmethod
+    def submit(task_type: str, kb_id: str, params: Dict[str, Any], source: str = "") -> Dict[str, Any]:
+        from kb.task_queue import TaskQueue
+
+        queue = TaskQueue()
+        task_id = queue.submit_task(
+            task_type=task_type,
+            kb_id=kb_id,
+            params=params,
+            source=source,
+        )
+        return {
+            "task_id": task_id,
+            "status": "pending",
+            "kb_id": kb_id,
+            "message": "任务已提交",
+        }
+
+    @staticmethod
+    def list_tasks(
+        kb_id: Optional[str] = None,
+        status: Optional[str] = None,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        from kb.task_queue import TaskQueue
+
+        queue = TaskQueue()
+        return [task.to_dict() for task in queue.list_tasks(kb_id=kb_id, status=status, limit=limit)]
+
+    @staticmethod
+    def get_task(task_id: str) -> Optional[Dict[str, Any]]:
+        from kb.task_queue import TaskQueue
+
+        queue = TaskQueue()
+        task = queue.get_task(task_id)
+        return task.to_dict() if task else None
+
+    @staticmethod
+    def cancel(task_id: str) -> Dict[str, Any]:
+        from kb.task_queue import TaskQueue
+        from kb.task_executor import task_executor
+
+        queue = TaskQueue()
+        if queue.cancel_task(task_id):
+            return {"status": "cancelled", "task_id": task_id, "message": "已取消等待中的任务"}
+        if task_executor.cancel_task(task_id):
+            return {"status": "cancelled", "task_id": task_id, "message": "已请求取消运行中的任务"}
+
+        task = queue.get_task(task_id)
+        if task:
+            return {
+                "status": task.status,
+                "task_id": task_id,
+                "message": f"任务当前状态为 {task.status}，无法取消",
+            }
+        raise ValueError(f"任务不存在: {task_id}")
+
+    @staticmethod
+    def run_task(task_id: str) -> Dict[str, Any]:
+        from kb.task_executor import task_executor
+
+        asyncio.run(task_executor.execute_task(task_id))
+        task = TaskService.get_task(task_id)
+        if task is None:
+            raise ValueError(f"任务不存在: {task_id}")
+        return task
+
+    @staticmethod
+    def wait_for_task(task_id: str, interval: float = 1.0, timeout: float = 0) -> Dict[str, Any]:
+        start = time.time()
+        while True:
+            task = TaskService.get_task(task_id)
+            if task is None:
+                raise ValueError(f"任务不存在: {task_id}")
+            if task["status"] in {"completed", "failed", "cancelled"}:
+                return task
+            if timeout > 0 and time.time() - start >= timeout:
+                return task
+            time.sleep(interval)
+
+
+class CategoryService:
+    """分类规则服务"""
+
+    @staticmethod
+    def list_rules() -> Dict[str, Any]:
+        from kb.database import init_category_rule_db
+
+        rule_db = init_category_rule_db()
+        rules = rule_db.get_all_rules()
+        return {"rules": rules, "total": len(rules)}
+
+    @staticmethod
+    def sync_rules() -> Dict[str, Any]:
+        from kb.obsidian_config import seed_mappings_to_db
+
+        count = seed_mappings_to_db()
+        return {"status": "success", "message": f"已同步 {count} 条分类规则到数据库", "count": count}
+
+    @staticmethod
+    def add_rule(
+        kb_id: str,
+        rule_type: str,
+        pattern: str,
+        description: str = "",
+        priority: int = 0,
+    ) -> Dict[str, Any]:
+        from kb.database import init_category_rule_db
+
+        rule_db = init_category_rule_db()
+        success = rule_db.add_rule(
+            kb_id=kb_id,
+            rule_type=rule_type,
+            pattern=pattern,
+            description=description,
+            priority=priority,
+        )
+        return {
+            "status": "success" if success else "error",
+            "message": f"规则添加{'成功' if success else '失败'}",
+        }
+
+    @staticmethod
+    def delete_rule(kb_id: str, rule_type: str, pattern: str) -> Dict[str, Any]:
+        from kb.database import init_category_rule_db
+
+        rule_db = init_category_rule_db()
+        success = rule_db.delete_rule(kb_id, rule_type, pattern)
+        return {
+            "status": "success" if success else "error",
+            "message": f"规则删除{'成功' if success else '失败'}",
+        }
+
+    @staticmethod
+    def classify(folder_path: str, folder_description: str = "", use_llm: bool = True) -> Dict[str, Any]:
+        from kb.category_classifier import CategoryClassifier
+        from kb.obsidian_config import find_kb_by_path
+
+        matched_kbs = find_kb_by_path(folder_path)
+        if matched_kbs and not use_llm:
+            return {
+                "kb_id": matched_kbs[0],
+                "matched_by": "rule",
+                "confidence": 1.0,
+                "reason": f"文件夹路径匹配: {folder_path}",
+            }
+
+        if use_llm:
+            try:
+                classifier = CategoryClassifier()
+                result = classifier.classify_folder_llm(
+                    folder_path=folder_path,
+                    folder_description=folder_description,
+                )
+                return {
+                    "kb_id": result["kb_id"],
+                    "matched_by": "llm",
+                    "confidence": result["confidence"],
+                    "reason": result["reason"],
+                    "alternatives": matched_kbs if matched_kbs else None,
+                }
+            except Exception as e:
+                return {
+                    "error": f"LLM 分类失败: {str(e)}",
+                    "alternatives": matched_kbs,
+                }
+
+        return {
+            "kb_id": None,
+            "matched_by": "none",
+            "confidence": 0.0,
+            "reason": "未找到匹配的知识库",
+            "suggestion": "请手动指定知识库或使用 LLM 分类",
+        }
+
+
+class AdminService:
+    """管理服务"""
+
+    @staticmethod
+    def list_tables() -> Dict[str, Any]:
+        tables: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+
+        for kb in KnowledgeBaseService.list_all():
+            info = KnowledgeBaseService.get_info(kb["id"])
+            if not info:
+                continue
+            persist_dir = Path(info["persist_dir"])
+            tables.append(
+                {
+                    "kb_id": kb["id"],
+                    "path": str(persist_dir),
+                    "status": info.get("status", "unknown"),
+                    "row_count": info.get("row_count", 0),
+                }
+            )
+            seen.add(kb["id"])
+
+        for root in [get_storage_root(), get_zotero_storage_root()]:
+            if not root.exists():
+                continue
+            for child in root.iterdir():
+                if not child.is_dir() or child.name in seen:
+                    continue
+                tables.append(
+                    {
+                        "kb_id": child.name,
+                        "path": str(child),
+                        "status": "unregistered",
+                        "row_count": None,
+                    }
+                )
+
+        return {"tables": tables}
+
+    @staticmethod
+    def get_table_info(kb_id: str) -> Optional[Dict[str, Any]]:
+        return KnowledgeBaseService.get_info(kb_id)
+
+    @staticmethod
+    def delete_table(kb_id: str) -> bool:
+        return KnowledgeBaseService.delete(kb_id)

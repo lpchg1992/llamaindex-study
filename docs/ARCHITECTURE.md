@@ -321,7 +321,7 @@ API 提交任务
 ### 文档导入流程
 
 ```
-1. CLI: poetry run python -m kb.ingest_vdb --kb tech_tools
+1. CLI: poetry run llamaindex-study ingest obsidian tech_tools --folder-path IT
    或
    API: POST /kbs/tech_tools/ingest/obsidian
 

@@ -117,8 +117,8 @@ class LanceDBVectorStore(BaseVectorStore):
         """获取 LanceDB URI"""
         if self.persist_dir:
             return str(self.persist_dir)
-        # 默认使用统一存储目录
-        return "/Volumes/online/llamaindex/obsidian"
+        settings = __import__("llamaindex_study.config", fromlist=["get_settings"]).get_settings()
+        return settings.persist_dir
 
     def _get_lance_vector_store(self):
         """获取底层的 LlamaIndex LanceDBVectorStore"""

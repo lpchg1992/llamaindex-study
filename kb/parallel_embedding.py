@@ -6,22 +6,22 @@
 """
 
 import asyncio
-import os
-from concurrent.futures import ThreadPoolExecutor, Future
-from typing import List, Dict, Optional, Tuple, Any
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+from typing import Dict, List, Optional, Tuple
 
 from llama_index.embeddings.ollama import OllamaEmbedding
+from llamaindex_study.config import get_settings
 from llamaindex_study.logger import get_logger
 
 logger = get_logger(__name__)
 
-# 配置常量
-EMBEDDING_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "bge-m3")
-EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "1024"))
-DEFAULT_LOCAL_URL = os.getenv("OLLAMA_LOCAL_URL", "http://localhost:11434")
-DEFAULT_REMOTE_URL = os.getenv("OLLAMA_REMOTE_URL", "http://localhost:11434")
-MAX_RETRIES = 3
-RETRY_DELAY = 1.0
+settings = get_settings()
+EMBEDDING_MODEL = settings.ollama_embed_model
+EMBEDDING_DIM = 1024
+MAX_RETRIES = settings.ollama_max_retries
+RETRY_DELAY = settings.ollama_retry_delay
 
 
 # Embedding 结果类型
@@ -34,6 +34,8 @@ class EmbeddingEndpoint:
     def __init__(self, name: str, url: str) -> None:
         self.name = name
         self.url = url
+        self.avg_latency = 0.0
+        self.inflight = 0
 
 
 class ParallelEmbeddingProcessor:
@@ -59,33 +61,23 @@ class ParallelEmbeddingProcessor:
         if self._initialized:
             return
         self._initialized = True
-        
-        # 端点配置
-        self.endpoints: List[EmbeddingEndpoint] = [
-            EmbeddingEndpoint("本地", DEFAULT_LOCAL_URL),
-            EmbeddingEndpoint("远程", DEFAULT_REMOTE_URL),
-        ]
-        
-        # 过滤重复的端点 URL
-        seen_urls: set = set()
-        unique_endpoints: List[EmbeddingEndpoint] = []
-        for ep in self.endpoints:
-            if ep.url not in seen_urls:
-                seen_urls.add(ep.url)
-                unique_endpoints.append(ep)
-        self.endpoints = unique_endpoints
-        
-        # 线程池大小 = 端点数量
+
+        endpoint_configs = settings.get_ollama_endpoints()
+        self.endpoints = [EmbeddingEndpoint(name, url) for name, url in endpoint_configs]
+        if not self.endpoints:
+            self.endpoints = [EmbeddingEndpoint("本地", settings.ollama_base_url)]
+
+        if settings.ollama_remote_url and settings.ollama_remote_url == settings.ollama_local_url:
+            logger.warning("OLLAMA_REMOTE_URL 与 OLLAMA_LOCAL_URL 相同，并行模式将退化为单端点")
+
         self._executor = ThreadPoolExecutor(max_workers=len(self.endpoints))
-        
-        # 缓存 embed 模型（避免重复创建）
         self._models: Dict[str, OllamaEmbedding] = {}
-        
-        # 统计
         self._stats: Dict[str, int] = {ep.name: 0 for ep in self.endpoints}
         self._failures: Dict[str, int] = {ep.name: 0 for ep in self.endpoints}
-        
-        logger.info(f"并行 Embedding 处理器初始化完成，线程数: {len(self.endpoints)}")
+        self._lock = threading.Lock()
+
+        endpoint_info = ", ".join(f"{ep.name}:{ep.url}" for ep in self.endpoints)
+        logger.info(f"并行 Embedding 处理器初始化完成，端点: {endpoint_info}")
     
     def _get_model(self, ep_url: str) -> OllamaEmbedding:
         """获取或创建 embed 模型"""
@@ -99,28 +91,77 @@ class ParallelEmbeddingProcessor:
     def _get_embedding_with_retry(self, text: str, ep: EmbeddingEndpoint) -> EmbeddingResult:
         """带重试的 embedding 获取"""
         last_error: Optional[str] = None
-        
+
         for attempt in range(MAX_RETRIES):
             try:
+                start = time.perf_counter()
+                with self._lock:
+                    ep.inflight += 1
                 model = self._get_model(ep.url)
                 embedding = model.get_text_embedding(text)
-                self._stats[ep.name] += 1
+                latency = time.perf_counter() - start
+                with self._lock:
+                    self._stats[ep.name] += 1
+                    ep.avg_latency = (
+                        latency if ep.avg_latency == 0 else (ep.avg_latency * 0.7 + latency * 0.3)
+                    )
                 return (ep.name, embedding, None)
             except Exception as e:
                 last_error = str(e)
                 if attempt < MAX_RETRIES - 1:
                     logger.debug(f"[{ep.name}] Embedding 失败 (尝试 {attempt + 1}/{MAX_RETRIES}): {e}")
+                    time.sleep(RETRY_DELAY)
+                else:
+                    with self._lock:
+                        self._failures[ep.name] += 1
+            finally:
+                with self._lock:
+                    ep.inflight = max(0, ep.inflight - 1)
         
-        # 所有重试都失败了
-        self._failures[ep.name] += 1
         logger.warning(f"[{ep.name}] Embedding 最终失败: {last_error}")
         return (ep.name, [0.0] * EMBEDDING_DIM, f"重试{MAX_RETRIES}次后失败: {last_error}")
+
+    def _rank_endpoints(self, planned_counts: Optional[Dict[str, int]] = None) -> List[EmbeddingEndpoint]:
+        """按当前负载和历史延迟对端点排序"""
+        planned_counts = planned_counts or {}
+        with self._lock:
+            return sorted(
+                self.endpoints,
+                key=lambda ep: (
+                    planned_counts.get(ep.name, 0),
+                    ep.inflight,
+                    self._failures.get(ep.name, 0),
+                    self._stats.get(ep.name, 0),
+                    ep.avg_latency if ep.avg_latency > 0 else 0,
+                    ep.name,
+                ),
+            )
+
+    def _should_fanout(self, text: str) -> bool:
+        """判断是否值得多端点竞争"""
+        if len(self.endpoints) <= 1:
+            return False
+        text_length = len(text)
+        return text_length >= settings.ollama_fanout_text_threshold
+
+    def _select_endpoints_for_text(
+        self,
+        text: str,
+        planned_counts: Optional[Dict[str, int]] = None,
+    ) -> List[EmbeddingEndpoint]:
+        """为文本选择最合适的端点策略"""
+        ranked = self._rank_endpoints(planned_counts)
+        if not ranked:
+            return self.endpoints[:1]
+        if self._should_fanout(text):
+            return ranked[: min(2, len(ranked))]
+        return ranked[:1]
     
     async def get_embedding(self, text: str, ep_name: str) -> EmbeddingResult:
         """异步获取单个 embedding"""
         ep = next((e for e in self.endpoints if e.name == ep_name), self.endpoints[0])
-        
-        loop = asyncio.get_event_loop()
+
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             self._executor,
             lambda: self._get_embedding_with_retry(text, ep)
@@ -141,39 +182,87 @@ class ParallelEmbeddingProcessor:
         """
         if not texts:
             return []
-        
-        async def get_embedding_from_any_endpoint(text: str) -> EmbeddingResult:
+
+        async def get_embedding_from_any_endpoint(
+            text: str,
+            selected_endpoints: List[EmbeddingEndpoint],
+        ) -> EmbeddingResult:
             """向所有端点并发请求，返回最快成功的"""
-            async def try_endpoint(ep: EmbeddingEndpoint) -> EmbeddingResult:
-                """尝试从指定端点获取 embedding"""
-                loop = asyncio.get_event_loop()
-                return await loop.run_in_executor(
+            if len(selected_endpoints) == 1:
+                return await self.get_embedding(text, selected_endpoints[0].name)
+
+            loop = asyncio.get_running_loop()
+            tasks = [
+                loop.run_in_executor(
                     self._executor,
-                    lambda: self._get_embedding_with_retry(text, ep)
+                    lambda ep=ep: self._get_embedding_with_retry(text, ep),
                 )
-            
-            # 同时向所有端点发送请求
-            tasks = [try_endpoint(ep) for ep in self.endpoints]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            
-            # 找出最快成功的
-            for r in results:
-                if isinstance(r, Exception):
-                    continue
-                ep_name, embedding, error = r
+                for ep in selected_endpoints
+            ]
+
+            fallback: Optional[EmbeddingResult] = None
+            for future in asyncio.as_completed(tasks):
+                result = await future
+                if fallback is None:
+                    fallback = result
+                _, embedding, error = result
                 if error is None and embedding:
-                    return (ep_name, embedding, None)
-            
-            # 所有端点都失败了，返回第一个失败结果供调试
-            first_result = next(
-                (r for r in results if isinstance(r, tuple)),
-                (self.endpoints[0].name, [0.0] * EMBEDDING_DIM, "所有端点都失败")
-            )
-            return first_result
-        
-        # 并发处理所有文本
-        tasks = [get_embedding_from_any_endpoint(text) for text in texts]
+                    for pending in tasks:
+                        if not pending.done():
+                            pending.cancel()
+                    return result
+
+            return fallback or (self.endpoints[0].name, [0.0] * EMBEDDING_DIM, "所有端点都失败")
+
+        planned_counts = {ep.name: 0 for ep in self.endpoints}
+        tasks = []
+        for text in texts:
+            selected_endpoints = self._select_endpoints_for_text(text, planned_counts)
+            for ep in selected_endpoints:
+                planned_counts[ep.name] = planned_counts.get(ep.name, 0) + 1
+            tasks.append(get_embedding_from_any_endpoint(text, selected_endpoints))
         return await asyncio.gather(*tasks)
+
+    async def aget_text_embedding(self, text: str) -> List[float]:
+        """异步获取单条文本的 embedding"""
+        _, embedding, _ = (await self.process_batch([text]))[0]
+        return embedding
+
+    async def aget_text_embeddings(self, texts: List[str]) -> List[List[float]]:
+        """异步批量获取 embeddings"""
+        return [embedding for _, embedding, _ in await self.process_batch(texts)]
+
+    def _run_sync(self, coro):
+        """在同步环境中运行协程"""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(coro)
+
+        result: Dict[str, object] = {}
+        error: Dict[str, BaseException] = {}
+
+        def runner() -> None:
+            try:
+                result["value"] = asyncio.run(coro)
+            except BaseException as exc:
+                error["value"] = exc
+
+        thread = threading.Thread(target=runner, daemon=True)
+        thread.start()
+        thread.join()
+
+        if "value" in error:
+            raise error["value"]
+        return result.get("value")
+
+    def get_text_embedding(self, text: str) -> List[float]:
+        """同步获取单条文本的 embedding"""
+        return self._run_sync(self.aget_text_embedding(text))
+
+    def get_text_embeddings(self, texts: List[str]) -> List[List[float]]:
+        """同步批量获取 embeddings"""
+        return self._run_sync(self.aget_text_embeddings(texts))
     
     def get_stats(self) -> Dict[str, int]:
         """获取统计信息"""
@@ -182,6 +271,21 @@ class ParallelEmbeddingProcessor:
     def get_failure_stats(self) -> Dict[str, int]:
         """获取失败统计"""
         return self._failures.copy()
+
+    def get_endpoint_snapshot(self) -> List[Dict[str, float | int | str]]:
+        """获取端点负载快照"""
+        with self._lock:
+            return [
+                {
+                    "name": ep.name,
+                    "url": ep.url,
+                    "avg_latency": round(ep.avg_latency, 4),
+                    "inflight": ep.inflight,
+                    "success": self._stats.get(ep.name, 0),
+                    "failure": self._failures.get(ep.name, 0),
+                }
+                for ep in self.endpoints
+            ]
     
     def reset_stats(self) -> None:
         """重置统计"""
@@ -205,3 +309,8 @@ def get_parallel_processor() -> ParallelEmbeddingProcessor:
     if _parallel_processor is None:
         _parallel_processor = ParallelEmbeddingProcessor()
     return _parallel_processor
+
+
+def create_parallel_embedding_model() -> ParallelEmbeddingProcessor:
+    """创建兼容 LlamaIndex 接口的并行 Embedding 模型"""
+    return get_parallel_processor()

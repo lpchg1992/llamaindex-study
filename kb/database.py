@@ -55,7 +55,7 @@ logger = get_logger(__name__)
 def get_db_path() -> Path:
     """获取数据库路径"""
     settings = get_settings()
-    data_dir = Path(settings.data_dir or "/Users/luopingcheng/.llamaindex").expanduser()
+    data_dir = Path(settings.data_dir).expanduser()
     data_dir.mkdir(parents=True, exist_ok=True)
     return data_dir / "project.db"
 
@@ -235,6 +235,7 @@ class DatabaseManager:
             self._local.conn.row_factory = sqlite3.Row
         try:
             yield self._local.conn
+            self._local.conn.commit()
         except Exception:
             self._local.conn.rollback()
             raise

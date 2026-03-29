@@ -4,7 +4,8 @@ Ollama 工具模块
 提供统一的 Ollama 配置接口，消除重复的 embedding 模型初始化代码。
 """
 
-from typing import Optional, List
+import asyncio
+from typing import Any, List, Optional
 
 from llama_index.embeddings.ollama import OllamaEmbedding
 from llama_index.core import Settings as LlamaSettings
@@ -63,6 +64,12 @@ def configure_global_embed_model(
     LlamaSettings.embed_batch_size = embed_batch_size
     
     return embed_model
+
+
+def create_parallel_ollama_embedding():
+    """创建支持多端点调度的 Embedding 模型适配器"""
+    from kb.parallel_embedding import create_parallel_embedding_model
+    return create_parallel_embedding_model()
 
 
 def configure_llamaindex_for_siliconflow() -> None:
@@ -138,10 +145,15 @@ class BatchEmbeddingHelper:
         """
         if not texts:
             return []
-        
+
+        if hasattr(self.embed_model, "get_text_embeddings"):
+            try:
+                return self.embed_model.get_text_embeddings(texts)
+            except Exception as e:
+                print(f"      ⚠️  批量 Embedding 失败，回退逐条模式: {e}")
+
         results = []
-        
-        # 分批处理，使用同步方法避免异步问题
+
         for i in range(0, len(texts), self.batch_size):
             batch = texts[i:i + self.batch_size]
             for text in batch:
@@ -150,9 +162,8 @@ class BatchEmbeddingHelper:
                     results.append(embedding)
                 except Exception as e:
                     print(f"      ⚠️  Embedding 失败: {e}")
-                    # 返回零向量作为占位
                     results.append([0.0] * 1024)
-        
+
         return results
     
     async def embed_documents_async(self, texts: List[str]) -> List[List[float]]:
@@ -169,7 +180,13 @@ class BatchEmbeddingHelper:
         """
         if not texts:
             return []
-        
+
+        if hasattr(self.embed_model, "aget_text_embeddings"):
+            try:
+                return await self.embed_model.aget_text_embeddings(texts)
+            except Exception as e:
+                print(f"      ⚠️  异步批量 Embedding 失败，回退并发模式: {e}")
+
         semaphore = asyncio.Semaphore(self.max_concurrency)
         
         async def embed_with_semaphore(text: str) -> List[float]:
@@ -223,6 +240,7 @@ class BatchEmbeddingHelper:
 
 __all__ = [
     "create_ollama_embedding",
+    "create_parallel_ollama_embedding",
     "configure_global_embed_model",
     "configure_llamaindex_for_siliconflow",
     "BatchEmbeddingHelper",

@@ -14,6 +14,8 @@ import sys
 # 添加项目路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from llamaindex_study.config import get_settings
+
 
 async def check_endpoint(name: str, url: str) -> dict:
     """检查单个端点"""
@@ -78,11 +80,11 @@ async def main():
     print("=" * 60)
     print("Ollama 健康检查")
     print("=" * 60)
-    
-    endpoints = [
-        ("本地", "http://localhost:11434"),
-        ("远程 3080", "http://192.168.31.63:11434"),
-    ]
+
+    settings = get_settings()
+    endpoints = settings.get_ollama_endpoints()
+    if not endpoints:
+        endpoints = [("本地", settings.ollama_base_url)]
     
     # 检查所有端点
     results = []
@@ -97,7 +99,7 @@ async def main():
             print(f"  📦 模型: {', '.join(http_result.get('models', []))}")
             
             # Embedding 测试
-            emb_result = await check_embedding(name, url)
+            emb_result = await check_embedding(name, url, model=settings.ollama_embed_model)
             if emb_result["embedding_working"]:
                 print(f"  ✅ Embedding 正常 (延迟: {emb_result['embedding_latency_ms']:.0f}ms)")
                 results.append((name, emb_result["embedding_latency_ms"]))

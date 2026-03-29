@@ -12,7 +12,7 @@
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.core.schema import Document as LlamaDocument
@@ -122,7 +122,7 @@ class GenericImporter:
         vector_store,
         embed_model,
         progress: ProcessingProgress = None,
-        on_progress: Optional[callable] = None,
+        on_progress: Optional[Callable[[int, int, str], None]] = None,
     ) -> dict:
         """
         导入文件列表
@@ -218,7 +218,7 @@ class GenericImporter:
         rebuild: bool = False,
         exclude_patterns: List[str] = None,
         recursive: bool = True,
-        on_progress: Optional[callable] = None,
+        on_progress: Optional[Callable[[int, int, str], None]] = None,
     ) -> dict:
         """
         导入整个目录
@@ -249,6 +249,21 @@ class GenericImporter:
 
         return self.import_files(files, vector_store, embed_model, progress, on_progress)
 
+    def process_file(
+        self,
+        path: Path,
+        vector_store,
+        embed_model,
+        progress: ProcessingProgress = None,
+    ) -> dict:
+        """导入单个文件"""
+        return self.import_files(
+            file_paths=[path],
+            vector_store=vector_store,
+            embed_model=embed_model,
+            progress=progress,
+        )
+
     def import_paths(
         self,
         paths: List[str],
@@ -258,7 +273,7 @@ class GenericImporter:
         rebuild: bool = False,
         exclude_patterns: List[str] = None,
         recursive: bool = True,
-        on_progress: Optional[callable] = None,
+        on_progress: Optional[Callable[[int, int, str], None]] = None,
     ) -> dict:
         """
         从路径列表导入（文件和目录混合）

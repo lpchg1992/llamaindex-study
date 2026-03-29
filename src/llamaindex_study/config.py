@@ -9,13 +9,14 @@
 
 import os
 from pathlib import Path
-from typing import Optional, ClassVar
+from typing import ClassVar, Optional
 
 from dotenv import load_dotenv
 
 from llamaindex_study.logger import get_logger
 
 logger = get_logger(__name__)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 class Settings:
@@ -30,9 +31,10 @@ class Settings:
     _DEFAULT_SILICONFLOW_MODEL: ClassVar[str] = "Pro/deepseek-ai/DeepSeek-V3.2"
     _DEFAULT_OLLAMA_BASE_URL: ClassVar[str] = "http://localhost:11434"
     _DEFAULT_OLLAMA_EMBED_MODEL: ClassVar[str] = "bge-m3"
-    _DEFAULT_PERSIST_DIR: ClassVar[str] = "/Volumes/online/llamaindex/obsidian"
-    _DEFAULT_ZOTERO_PERSIST_DIR: ClassVar[str] = "/Volumes/online/llamaindex/zotero"
-    _DEFAULT_DATA_DIR: ClassVar[str] = "/Users/luopingcheng/.llamaindex"
+    _DEFAULT_OLLAMA_REMOTE_URL: ClassVar[str] = ""
+    _DEFAULT_PERSIST_DIR: ClassVar[str] = str(PROJECT_ROOT / ".llamaindex" / "storage")
+    _DEFAULT_ZOTERO_PERSIST_DIR: ClassVar[str] = str(PROJECT_ROOT / ".llamaindex" / "storage" / "zotero")
+    _DEFAULT_DATA_DIR: ClassVar[str] = str(PROJECT_ROOT / ".llamaindex")
     _DEFAULT_TOP_K: ClassVar[int] = 5
     _DEFAULT_RERANK_MODEL: ClassVar[str] = "Pro/BAAI/bge-reranker-v2-m3"
     _DEFAULT_USE_RERANKER: ClassVar[bool] = False
@@ -56,27 +58,41 @@ class Settings:
             "SILICONFLOW_MODEL", self._DEFAULT_SILICONFLOW_MODEL
         )
 
-        # ========== Embedding 配置（本地 Ollama）==========
-        self.ollama_base_url: str = os.getenv(
-            "OLLAMA_BASE_URL", self._DEFAULT_OLLAMA_BASE_URL
+        # ========== Embedding 配置（Ollama 多端点）==========
+        base_url = os.getenv("OLLAMA_BASE_URL")
+        self.ollama_local_url: str = os.getenv(
+            "OLLAMA_LOCAL_URL",
+            base_url or self._DEFAULT_OLLAMA_BASE_URL,
         )
+        self.ollama_remote_url: str = os.getenv(
+            "OLLAMA_REMOTE_URL",
+            self._DEFAULT_OLLAMA_REMOTE_URL,
+        ).strip()
+        self.ollama_base_url: str = base_url or self.ollama_local_url
         self.ollama_embed_model: str = os.getenv(
             "OLLAMA_EMBED_MODEL", self._DEFAULT_OLLAMA_EMBED_MODEL
         )
+        self.ollama_max_retries: int = int(os.getenv("MAX_RETRIES", "3"))
+        self.ollama_retry_delay: float = float(os.getenv("RETRY_DELAY", "1.0"))
+        self.ollama_short_text_threshold: int = int(os.getenv("OLLAMA_SHORT_TEXT_THRESHOLD", "600"))
+        self.ollama_fanout_text_threshold: int = int(os.getenv("OLLAMA_FANOUT_TEXT_THRESHOLD", "1800"))
 
         # ========== 索引配置 ==========
-        self.persist_dir: str = os.getenv(
-            "PERSIST_DIR", self._DEFAULT_PERSIST_DIR
+        self.persist_dir: str = self._resolve_dir(
+            os.getenv("PERSIST_DIR", self._DEFAULT_PERSIST_DIR),
+            self._DEFAULT_PERSIST_DIR,
         )
 
         # Zotero 向量数据存储目录
-        self.zotero_persist_dir: str = os.getenv(
-            "ZOTERO_PERSIST_DIR", self._DEFAULT_ZOTERO_PERSIST_DIR
+        self.zotero_persist_dir: str = self._resolve_dir(
+            os.getenv("ZOTERO_PERSIST_DIR", self._DEFAULT_ZOTERO_PERSIST_DIR),
+            self._DEFAULT_ZOTERO_PERSIST_DIR,
         )
 
         # 任务队列数据目录
-        self.data_dir: str = os.getenv(
-            "DATA_DIR", self._DEFAULT_DATA_DIR
+        self.data_dir: str = self._resolve_dir(
+            os.getenv("DATA_DIR", self._DEFAULT_DATA_DIR),
+            self._DEFAULT_DATA_DIR,
         )
 
         # ========== 检索配置 ==========
@@ -109,6 +125,37 @@ class Settings:
             f"embed=ollama:{self.ollama_embed_model}, "
             f"top_k={self.top_k})"
         )
+
+    def get_ollama_endpoints(self) -> list[tuple[str, str]]:
+        """返回去重后的 Ollama 端点列表"""
+        endpoints = [("本地", self.ollama_local_url)]
+        if self.ollama_remote_url:
+            endpoints.append(("远程", self.ollama_remote_url))
+
+        unique_endpoints: list[tuple[str, str]] = []
+        seen_urls: set[str] = set()
+        for name, url in endpoints:
+            normalized_url = url.strip()
+            if not normalized_url or normalized_url in seen_urls:
+                continue
+            seen_urls.add(normalized_url)
+            unique_endpoints.append((name, normalized_url))
+
+        return unique_endpoints
+
+    def _resolve_dir(self, configured_dir: str, fallback_dir: str) -> str:
+        candidate = Path(configured_dir).expanduser()
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            probe = candidate / ".write_probe"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink()
+            return str(candidate)
+        except OSError as exc:
+            fallback = Path(fallback_dir).expanduser()
+            fallback.mkdir(parents=True, exist_ok=True)
+            logger.warning(f"目录不可写，回退到本地目录: {candidate} -> {fallback} ({exc})")
+            return str(fallback)
 
 
 # 全局配置实例（延迟加载）

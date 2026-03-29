@@ -108,8 +108,8 @@
 | 脚本 | 命令 | 说明 |
 |------|------|------|
 | API 服务 | `poetry run python api.py` | FastAPI 服务 |
-| 主程序 | `poetry run python main.py` | 交互式查询 CLI |
-| 向量导入 | `poetry run python -m kb.ingest_vdb` | CLI 向量数据库导入 |
+| 统一 CLI | `poetry run llamaindex-study --help` | 统一命令入口 |
+| 交互模式 | `poetry run llamaindex-study` | 交互式查询 CLI |
 | 知识库导入 | `poetry run python -m kb.ingest` | 知识库导入脚本 |
 | Zotero 导入 | `poetry run python -m kb.ingest_zotero` | CLI Zotero 导入 |
 | 高新历史 | `poetry run python -m kb.ingest_hitech_history` | CLI 历史项目导入 |
@@ -167,8 +167,9 @@ curl -X POST "http://localhost:8000/kbs/my_kb/query" \
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `OLLAMA_EMBED_MODEL` | `bge-m3` | Embedding 模型 |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | 默认 Ollama 地址 |
 | `OLLAMA_LOCAL_URL` | `http://localhost:11434` | 本地 Ollama |
-| `OLLAMA_REMOTE_URL` | `http://localhost:11434` | 远程 Ollama |
+| `OLLAMA_REMOTE_URL` | 空 | 远程 Ollama，留空表示禁用 |
 | `OBSIDIAN_VAULT_ROOT` | `~/Documents/Obsidian Vault` | Vault 目录 |
 | `OBSIDIAN_STORAGE_DIR` | `~/.llamaindex/storage` | 存储目录 |
 | `CHUNK_SIZE` | `512` | 分块大小 |

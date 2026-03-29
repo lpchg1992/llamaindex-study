@@ -38,7 +38,7 @@ Chunk 4 ──→ 远程 Ollama  ─┘
 
 配置文件（环境变量）：
 - 本地: `OLLAMA_LOCAL_URL` (默认: `http://localhost:11434`)
-- 远程: `OLLAMA_REMOTE_URL` (默认: `http://localhost:11434`)
+- 远程: `OLLAMA_REMOTE_URL` (默认: 空，留空表示禁用第二端点)
 - 重试次数: `MAX_RETRIES` (默认: 3)
 
 ### 任务队列
@@ -488,8 +488,9 @@ curl -X POST "http://localhost:8000/kbs/tech_tools/search" \
 |------|--------|------|
 | `OLLAMA_EMBED_MODEL` | `bge-m3` | Embedding 模型名称 |
 | `EMBEDDING_DIM` | `1024` | Embedding 向量维度 |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | 默认 Ollama 地址 |
 | `OLLAMA_LOCAL_URL` | `http://localhost:11434` | 本地 Ollama 地址 |
-| `OLLAMA_REMOTE_URL` | `http://localhost:11434` | 远程 Ollama 地址 |
+| `OLLAMA_REMOTE_URL` | 空 | 远程 Ollama 地址，留空表示禁用第二端点 |
 
 ### 任务处理配置
 
@@ -533,14 +534,17 @@ curl -X POST "http://localhost:8000/kbs/tech_tools/search" \
 
 ```bash
 # 列出知识库
-poetry run python -m kb.ingest_vdb --list
+poetry run llamaindex-study kb list
 
-# 查看变更
-poetry run python -m kb.ingest_vdb --show-changes
+# 检索 / 问答
+poetry run llamaindex-study search tech_tools "Python 异步编程" -k 5
+poetry run llamaindex-study query tech_tools "总结当前知识库重点"
 
 # 提交导入任务
-poetry run python -m kb.ingest_vdb --kb tech_tools
+poetry run llamaindex-study ingest obsidian tech_tools --folder-path IT
+poetry run llamaindex-study ingest file tech_tools README.md
 
 # 查看任务状态
-poetry run python -m kb.ingest_vdb --tasks
+poetry run llamaindex-study task list
+poetry run llamaindex-study task show <task_id>
 ```

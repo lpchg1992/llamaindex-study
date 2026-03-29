@@ -94,6 +94,7 @@ SILICONFLOW_MODEL=Pro/deepseek-ai/DeepSeek-V3.2
 
 # ==================== Embedding 配置 ====================
 OLLAMA_EMBED_MODEL=bge-m3
+OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_LOCAL_URL=http://localhost:11434
 OLLAMA_REMOTE_URL=http://192.168.31.169:11434
 
@@ -109,8 +110,8 @@ ZOTERO_STORAGE_DIR=~/.llamaindex/storage/zotero
 # 启动 API 服务
 poetry run python api.py
 
-# 或使用 CLI
-poetry run python main.py
+# 启动交互式查询
+poetry run llamaindex-study
 ```
 
 ## 项目结构
@@ -169,7 +170,7 @@ Chunk 3 ──→ 本地 Ollama  ──┤
 Chunk 4 ──→ 远程 Ollama  ─┘
 ```
 
-使用 `asyncio + ThreadPoolExecutor` 实现，两个端点同时竞争，先完成的使用。
+使用 `asyncio + ThreadPoolExecutor` 实现，所有任务类型共用同一套多端点调度，首个成功结果立即返回。
 
 ### 2. 资源保护机制
 
@@ -207,7 +208,7 @@ curl "http://localhost:8000/tasks/abc12345"
 # 查看变更
 poetry run python -m kb.ingest_vdb --show-changes
 
-# 增量同步（只处理新增/更新）
+# 增量同步（默认提交全部知识库）
 poetry run python -m kb.ingest_vdb
 ```
 
@@ -236,17 +237,39 @@ curl -X POST "http://localhost:8000/kbs/tech_tools/search" \
 ### CLI 方式
 
 ```bash
+# 交互式查询
+poetry run llamaindex-study
+
+# 查看统一 CLI 帮助
+poetry run llamaindex-study --help
+
 # 列出知识库
-poetry run python -m kb.ingest_vdb --list
+poetry run llamaindex-study kb list
+
+# 查看知识库详情
+poetry run llamaindex-study kb show tech_tools
+
+# 向量检索 / RAG 问答
+poetry run llamaindex-study search tech_tools "Python 异步编程" -k 5
+poetry run llamaindex-study query tech_tools "总结当前知识库重点"
 
 # 提交导入任务
-poetry run python -m kb.ingest_vdb --kb tech_tools
+poetry run llamaindex-study ingest obsidian tech_tools --folder-path IT
+poetry run llamaindex-study ingest file tech_tools README.md
+poetry run llamaindex-study ingest zotero zotero_nutrition --collection-name "营养"
 
-# 查看任务状态
-poetry run python -m kb.ingest_vdb --tasks
+# 任务管理
+poetry run llamaindex-study task list
+poetry run llamaindex-study task show <task_id>
+poetry run llamaindex-study task watch <task_id>
 
-# 强制重建
-poetry run python -m kb.ingest_vdb --kb tech_tools --rebuild
+# Obsidian / Zotero 辅助
+poetry run llamaindex-study obsidian mappings
+poetry run llamaindex-study zotero collections --limit 10
+
+# 分类规则与管理命令
+poetry run llamaindex-study category rules list
+poetry run llamaindex-study admin tables
 ```
 
 ### Python 代码方式
@@ -292,9 +315,9 @@ print(f"结果: {task.result}")
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `OBSIDIAN_VAULT_ROOT` | `~/Documents/Obsidian Vault` | Obsidian Vault 根目录 |
-| `OBSIDIAN_STORAGE_DIR` | `~/.llamaindex/storage` | Obsidian 存储目录 |
-| `ZOTERO_STORAGE_DIR` | `~/.llamaindex/storage/zotero` | Zotero 存储目录 |
-| `PERSIST_DIR` | 从环境变量获取 | 通用存储目录 |
+| `PERSIST_DIR` | `./.llamaindex/storage` | 默认向量存储目录 |
+| `ZOTERO_PERSIST_DIR` | `./.llamaindex/storage/zotero` | Zotero 向量存储目录 |
+| `DATA_DIR` | `./.llamaindex` | 任务队列与项目数据库目录 |
 
 ### Embedding 配置
 
@@ -302,8 +325,10 @@ print(f"结果: {task.result}")
 |------|--------|------|
 | `OLLAMA_EMBED_MODEL` | `bge-m3` | Embedding 模型名称 |
 | `EMBEDDING_DIM` | `1024` | Embedding 向量维度 |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | 默认 Ollama 地址 |
 | `OLLAMA_LOCAL_URL` | `http://localhost:11434` | 本地 Ollama 地址 |
-| `OLLAMA_REMOTE_URL` | `http://localhost:11434` | 远程 Ollama 地址 |
+| `OLLAMA_REMOTE_URL` | 空 | 远程 Ollama 地址，留空表示禁用第二端点 |
+| `DATA_DIR` | `./.llamaindex` | 任务队列与项目数据库目录 |
 
 ### 任务处理配置
 
@@ -320,6 +345,8 @@ print(f"结果: {task.result}")
 |------|--------|------|
 | `MAX_RETRIES` | `3` | 每个端点最大重试次数 |
 | `RETRY_DELAY` | `1.0` | 重试延迟（秒） |
+| `OLLAMA_SHORT_TEXT_THRESHOLD` | `600` | 短文本优先单端点阈值 |
+| `OLLAMA_FANOUT_TEXT_THRESHOLD` | `1800` | 长文本触发双端点竞速阈值 |
 
 ## 存储位置
 
