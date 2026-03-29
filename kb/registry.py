@@ -71,7 +71,7 @@ KNOWLEDGE_BASES: List[KnowledgeBase] = [
             "/Volumes/online/nutsync/2025年工作/【A】高新技术企业专项工作/AAA202501整改要求/2023年",
             "/Volumes/online/nutsync/2025年工作/【A】高新技术企业专项工作/AAA202501整改要求/2024年",
         ],
-        persist_name="kb_hitech_history",
+        persist_name="hitech_history",  # 注意：数据实际存储在 /Volumes/online/llamaindex/hitech_history/
         tags=["高新", "研发项目", "历史资料"],
         source_tags=["#高新", "#研发", "#项目"],
     ),
