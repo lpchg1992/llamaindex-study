@@ -97,7 +97,10 @@ class ParallelEmbeddingProcessor:
     
     async def process_batch(self, texts: List[str]) -> List[tuple]:
         """
-        批量处理文本列表，轮流使用端点
+        批量处理文本列表，并行竞争模式
+        
+        每个文本同时向所有端点发送请求，谁先完成用谁的结果
+        这样可以充分利用两个端点的并行能力
         
         Args:
             texts: 文本列表
@@ -108,18 +111,36 @@ class ParallelEmbeddingProcessor:
         if not texts:
             return []
         
-        loop = asyncio.get_event_loop()
+        async def get_embedding_from_any_endpoint(text: str) -> tuple:
+            """向所有端点并发请求，返回最快的结果"""
+            async def try_endpoint(ep: dict) -> tuple:
+                """尝试从指定端点获取 embedding"""
+                try:
+                    model = self._get_model(ep["url"])
+                    embedding = model.get_text_embedding(text)
+                    self._stats[ep["name"]] += 1
+                    return (ep["name"], embedding, None)
+                except Exception as e:
+                    logger.warning(f"[{ep['name']}] Embedding 失败: {e}")
+                    return (ep["name"], [0.0] * 1024, str(e))
+            
+            # 同时向所有端点发送请求
+            tasks = [try_endpoint(ep) for ep in self.endpoints]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # 找出最快成功的
+            for r in results:
+                if isinstance(r, Exception):
+                    continue
+                ep_name, embedding, error = r
+                if error is None and embedding:
+                    return (ep_name, embedding, None)
+            
+            # 所有端点都失败了
+            return (self.endpoints[0]["name"], [0.0] * 1024, "所有端点都失败")
         
-        # 为每个文本分配端点（轮流）
-        tasks = []
-        for i, text in enumerate(texts):
-            ep = self.endpoints[i % len(self.endpoints)]
-            task = loop.run_in_executor(
-                self._executor,
-                lambda t=text, url=ep["url"], name=ep["name"]: self._sync_wrapper(t, url, name)
-            )
-            tasks.append(task)
-        
+        # 并发处理所有文本
+        tasks = [get_embedding_from_any_endpoint(text) for text in texts]
         return await asyncio.gather(*tasks)
     
     def get_stats(self) -> Dict[str, int]:
