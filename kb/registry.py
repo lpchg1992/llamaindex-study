@@ -49,7 +49,18 @@ class KnowledgeBase:
 
     @property
     def persist_dir(self) -> Path:
-        """获取持久化目录路径"""
+        """获取持久化目录路径
+        
+        Obsidian 知识库使用 get_storage_root()
+        Zotero 知识库使用 ZOTERO_PERSIST_DIR
+        """
+        import os
+        
+        # Zotero 知识库的 persist_name 以 zotero_ 开头
+        if self.id.startswith("zotero_"):
+            zotero_root = os.getenv("ZOTERO_PERSIST_DIR", "/Volumes/online/llamaindex/zotero")
+            return Path(zotero_root) / self.id
+        
         return get_storage_root() / self.persist_name
 
     def source_paths_abs(self, vault_root: Optional[Path] = None) -> List[Path]:
@@ -171,6 +182,18 @@ KNOWLEDGE_BASES: List[KnowledgeBase] = [
             "#news", "#daily", "#industry",
             "#AI新闻", "#畜牧", "#市场",
         ],
+    ),
+    # Zotero 知识库
+    KnowledgeBase(
+        id="zotero_nutrition",
+        name="📚 Zotero 营养文献库",
+        description="Zotero 导入的营养学相关文献",
+        source_paths=[
+            "营养饲料理论",
+        ],
+        persist_name="zotero_nutrition",  # 数据存储在 ZOTERO_PERSIST_DIR/zotero_nutrition/
+        tags=["Zotero", "文献", "营养学"],
+        source_tags=["#zotero", "#文献", "#营养"],
     ),
 ]
 

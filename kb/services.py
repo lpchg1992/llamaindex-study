@@ -23,7 +23,25 @@ class VectorStoreService:
     
     @staticmethod
     def get_vector_store(kb_id: str) -> LanceDBVectorStore:
-        """获取知识库的向量存储"""
+        """获取知识库的向量存储
+        
+        Obsidian 知识库使用 get_storage_root()
+        Zotero 知识库使用 ZOTERO_PERSIST_DIR
+        """
+        import os
+        
+        # 检查是否是 Zotero 知识库（数据存在于 ZOTERO_PERSIST_DIR）
+        zotero_root = os.getenv("ZOTERO_PERSIST_DIR", "/Volumes/online/llamaindex/zotero")
+        zotero_path = Path(zotero_root) / kb_id
+        
+        if zotero_path.exists():
+            # Zotero 知识库
+            return LanceDBVectorStore(
+                persist_dir=zotero_path,
+                table_name=kb_id,
+            )
+        
+        # 默认使用 Obsidian 存储
         persist_dir = get_storage_root() / kb_id
         return LanceDBVectorStore(
             persist_dir=persist_dir,
@@ -33,6 +51,14 @@ class VectorStoreService:
     @staticmethod
     def get_persist_dir(kb_id: str) -> Path:
         """获取知识库持久化目录"""
+        import os
+        
+        zotero_root = os.getenv("ZOTERO_PERSIST_DIR", "/Volumes/online/llamaindex/zotero")
+        zotero_path = Path(zotero_root) / kb_id
+        
+        if zotero_path.exists():
+            return zotero_path
+        
         return get_storage_root() / kb_id
 
 
