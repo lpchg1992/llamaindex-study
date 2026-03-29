@@ -4,12 +4,10 @@
 
 基于 FastAPI 的 RAG（检索增强生成）API 服务，支持：
 
-- **并行多端点 Ollama** - 本地 + 远程同时处理，大幅提升导入效率
-- **任务队列** - 异步任务提交和实时进度查询
+- **并行多端点 Ollama** - 本地 + 远程同时处理，chunk 级轮流分配
+- **任务队列** - 异步提交，随时查询状态
 - **增量同步** - 基于文件哈希检测变更
-- **WebSocket 推送** - 任务进度实时推送
-- **Obsidian 笔记导入** - 支持 vault 扫描
-- **Zotero 文献导入** - 支持按 ID 或名称搜索收藏夹
+- **资源保护** - 去重串行访问、LanceDB 串行写入
 
 ## 启动服务
 
@@ -31,9 +29,10 @@ poetry run python api.py
 导入任务使用**本地 + 远程 Ollama 同时处理**：
 
 ```
-文件列表 (100个)
-    ├── 本地 Ollama ──→ 50 个文件
-    └── 远程 Ollama ──→ 50 个文件
+Chunk 1 ──→ 本地 Ollama  ─┐
+Chunk 2 ──→ 远程 Ollama  ──┼──→ 并行执行
+Chunk 3 ──→ 本地 Ollama  ──┤
+Chunk 4 ──→ 远程 Ollama  ─┘
 ```
 
 配置文件路径：
@@ -55,8 +54,20 @@ curl -X POST "http://localhost:8000/kbs/tech_tools/ingest/obsidian"
 curl "http://localhost:8000/tasks/abc12345"
 
 # 返回
-{"task_id": "abc12345", "status": "completed", 
- "progress": 100, "result": {"files": 26, "nodes": 248}}
+{
+  "task_id": "abc12345",
+  "status": "completed",
+  "progress": 100,
+  "result": {
+    "kb_id": "tech_tools",
+    "files": 26,
+    "nodes": 248,
+    "endpoint_stats": {
+      "本地": 124,
+      "远程": 124
+    }
+  }
+}
 ```
 
 ---
@@ -86,11 +97,11 @@ curl "http://localhost:8000/tasks/abc12345"
 | GET | `/kbs/{kb_id}` | 获取知识库详情 |
 | DELETE | `/kbs/{kb_id}` | 删除知识库 |
 
-### 文档导入（并行处理）
+### 文档导入
 
 | 方法 | 端点 | 功能 |
 |------|------|------|
-| POST | `/kbs/{kb_id}/ingest/obsidian` | Obsidian 导入（本地+远程并行） |
+| POST | `/kbs/{kb_id}/ingest/obsidian` | Obsidian 导入（并行） |
 | POST | `/kbs/{kb_id}/ingest/zotero` | Zotero 导入 |
 | POST | `/kbs/{kb_id}/rebuild` | 重建知识库 |
 
@@ -167,8 +178,13 @@ curl http://localhost:8000/tasks/abc12345
   "result": {
     "kb_id": "tech_tools",
     "files": 26,
-    "nodes": 248
-  }
+    "nodes": 248,
+    "endpoint_stats": {
+      "本地": 124,
+      "远程": 124
+    }
+  },
+  "error": null
 }
 ```
 
@@ -298,7 +314,7 @@ ws.onmessage = (event) => {
   "data": {
     "status": "running",
     "progress": 45,
-    "message": "[本地] 20/50"
+    "message": "处理 10/26 (25 chunks)"
   }
 }
 ```
@@ -329,7 +345,12 @@ while True:
         break
     time.sleep(5)
 
-# 3. 搜索
+# 3. 查看端点统计
+if r["result"]:
+    print(f"本地: {r['result']['endpoint_stats']['本地']}")
+    print(f"远程: {r['result']['endpoint_stats']['远程']}")
+
+# 4. 搜索
 r = requests.post(f"{BASE}/kbs/tech_tools/search",
     json={"query": "Python", "top_k": 5})
 print(r.json())
@@ -366,12 +387,32 @@ curl -X POST "http://localhost:8000/kbs/tech_tools/search" \
 
 ---
 
+## 任务结果
+
+成功完成的任务返回：
+
+```json
+{
+  "kb_id": "tech_tools",
+  "files": 26,
+  "nodes": 248,
+  "endpoint_stats": {
+    "本地": 124,
+    "远程": 124
+  }
+}
+```
+
+`endpoint_stats` 显示每个 Ollama 端点处理的 chunk 数量。
+
+---
+
 ## 存储位置
 
 ```
 /Volumes/online/llamaindex/           # 向量数据
 ~/.llamaindex/                       # SQLite 数据库
-├── project.db                      # 项目数据
+├── project.db                      # 项目数据、去重状态
 └── tasks.db                        # 任务队列
 ```
 
