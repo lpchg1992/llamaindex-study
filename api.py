@@ -558,6 +558,129 @@ def import_obsidian_all():
     }
 
 
+# ============== 分类规则管理 ==============
+
+@app.get("/category/rules")
+def list_category_rules():
+    """列出所有分类规则"""
+    from kb.database import init_category_rule_db
+    
+    rule_db = init_category_rule_db()
+    rules = rule_db.get_all_rules()
+    
+    return {
+        "rules": rules,
+        "total": len(rules),
+    }
+
+
+@app.post("/category/rules/sync")
+def sync_category_rules():
+    """同步分类规则到数据库"""
+    from kb.obsidian_config import seed_mappings_to_db
+    
+    count = seed_mappings_to_db()
+    
+    return {
+        "status": "success",
+        "message": f"已同步 {count} 条分类规则到数据库",
+    }
+
+
+@app.post("/category/classify")
+def classify_folder_llm(
+    folder_path: str = "",
+    folder_description: str = "",
+    use_llm: bool = True,
+    request: Optional[Dict] = None,
+):
+    """
+    使用规则或 LLM 分类新文件夹
+    
+    Args:
+        folder_path: 文件夹路径
+        folder_description: 文件夹描述（可选，用于 LLM 分类）
+        use_llm: 是否使用 LLM（True=LLM分类, False=仅规则匹配）
+    """
+    # 支持 JSON body
+    if request is not None:
+        folder_path = request.get("folder_path", folder_path)
+        folder_description = request.get("folder_description", folder_description)
+        use_llm = request.get("use_llm", use_llm)
+    
+    if not folder_path:
+        return {"error": "folder_path is required"}
+    from kb.obsidian_config import find_kb_by_path
+    from kb.category_classifier import CategoryClassifier
+    
+    # 1. 先用规则匹配
+    matched_kbs = find_kb_by_path(folder_path)
+    
+    if matched_kbs and not use_llm:
+        return {
+            "kb_id": matched_kbs[0],
+            "matched_by": "rule",
+            "confidence": 1.0,
+            "reason": f"文件夹路径匹配: {folder_path}",
+        }
+    
+    # 2. 如果规则没匹配或要求使用 LLM
+    if use_llm:
+        try:
+            classifier = CategoryClassifier()
+            result = classifier.classify_folder_llm(
+                folder_path=folder_path,
+                folder_description=folder_description,
+            )
+            
+            return {
+                "kb_id": result["kb_id"],
+                "matched_by": "llm",
+                "confidence": result["confidence"],
+                "reason": result["reason"],
+                "alternatives": matched_kbs if matched_kbs else None,
+            }
+        except Exception as e:
+            return {
+                "error": f"LLM 分类失败: {str(e)}",
+                "alternatives": matched_kbs,
+            }
+    
+    return {
+        "kb_id": None,
+        "matched_by": "none",
+        "confidence": 0.0,
+        "reason": "未找到匹配的知识库",
+        "suggestion": "请手动指定知识库或使用 LLM 分类",
+    }
+
+
+@app.post("/category/rules/add")
+def add_category_rule(
+    kb_id: str,
+    rule_type: str,  # "folder_path" 或 "tag"
+    pattern: str,
+    description: str = "",
+    priority: int = 0,
+):
+    """添加分类规则"""
+    from kb.database import init_category_rule_db
+    
+    rule_db = init_category_rule_db()
+    success = rule_db.add_rule(
+        kb_id=kb_id,
+        rule_type=rule_type,
+        pattern=pattern,
+        description=description,
+        priority=priority,
+    )
+    
+    return {
+        "status": "success" if success else "error",
+        "message": f"规则添加{'成功' if success else '失败'}",
+    }
+
+
 @app.post("/kbs/{kb_id}/rebuild")
 def rebuild_kb(kb_id: str, async_mode: bool = True):
     """重建知识库"""

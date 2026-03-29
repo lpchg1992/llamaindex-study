@@ -5,12 +5,14 @@
 - 来源路径（Obsidian 目录）
 - 持久化路径
 - 名称、描述等元数据
+
+支持从数据库加载分类规则。
 """
 
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 # 项目根目录
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -32,9 +34,6 @@ def get_storage_root() -> Path:
     return Path("/Volumes/online/llamaindex/obsidian")
 
 
-# 不再缓存 STORAGE_ROOT，每次调用 get_storage_root() 获取最新值
-
-
 @dataclass
 class KnowledgeBase:
     """知识库定义"""
@@ -54,8 +53,6 @@ class KnowledgeBase:
         Obsidian 知识库使用 get_storage_root()
         Zotero 知识库使用 ZOTERO_PERSIST_DIR
         """
-        import os
-        
         # Zotero 知识库的 persist_name 以 zotero_ 开头
         if self.id.startswith("zotero_"):
             zotero_root = os.getenv("ZOTERO_PERSIST_DIR", "/Volumes/online/llamaindex/zotero")
@@ -69,8 +66,20 @@ class KnowledgeBase:
             vault_root = Path.home() / "Documents" / "Obsidian Vault"
         return [vault_root / p for p in self.source_paths]
 
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典"""
+        return {
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "source_paths": self.source_paths,
+            "persist_name": self.persist_name,
+            "tags": self.tags,
+            "source_tags": self.source_tags,
+        }
 
-# ==================== 知识库定义 ====================
+
+# ==================== 知识库定义（默认值，用于初始化数据库） ====================
 
 KNOWLEDGE_BASES: List[KnowledgeBase] = [
     KnowledgeBase(
@@ -82,7 +91,7 @@ KNOWLEDGE_BASES: List[KnowledgeBase] = [
             "/Volumes/online/nutsync/2025年工作/【A】高新技术企业专项工作/AAA202501整改要求/2023年",
             "/Volumes/online/nutsync/2025年工作/【A】高新技术企业专项工作/AAA202501整改要求/2024年",
         ],
-        persist_name="hitech_history",  # 注意：数据实际存储在 /Volumes/online/llamaindex/hitech_history/
+        persist_name="hitech_history",
         tags=["高新", "研发项目", "历史资料"],
         source_tags=["#高新", "#研发", "#项目"],
     ),
@@ -191,7 +200,7 @@ KNOWLEDGE_BASES: List[KnowledgeBase] = [
         source_paths=[
             "营养饲料理论",
         ],
-        persist_name="zotero_nutrition",  # 数据存储在 ZOTERO_PERSIST_DIR/zotero_nutrition/
+        persist_name="zotero_nutrition",
         tags=["Zotero", "文献", "营养学"],
         source_tags=["#zotero", "#文献", "#营养"],
     ),
@@ -199,21 +208,77 @@ KNOWLEDGE_BASES: List[KnowledgeBase] = [
 
 
 class KnowledgeBaseRegistry:
-    """知识库注册表"""
+    """知识库注册表
+    
+    支持从数据库加载分类规则（folder_path, tag）。
+    优先使用数据库中的规则，如果数据库为空则使用硬编码的 KNOWLEDGE_BASES。
+    """
 
     def __init__(self):
         self._bases = {kb.id: kb for kb in KNOWLEDGE_BASES}
-
+        self._rule_db = None
+        self._rules_loaded = False
+    
+    @property
+    def rule_db(self):
+        """延迟加载规则数据库"""
+        if self._rule_db is None:
+            from kb.database import init_category_rule_db
+            self._rule_db = init_category_rule_db()
+        return self._rule_db
+    
+    def _load_rules_from_db(self):
+        """从数据库加载分类规则到 KnowledgeBase"""
+        if self._rules_loaded:
+            return
+        
+        try:
+            all_rules = self.rule_db.get_all_rules()
+            
+            if all_rules:
+                # 按 kb_id 分组规则
+                kb_rules: Dict[str, Dict[str, List[str]]] = {}
+                for rule in all_rules:
+                    kb_id = rule["kb_id"]
+                    rule_type = rule["rule_type"]
+                    pattern = rule["pattern"]
+                    
+                    if kb_id not in kb_rules:
+                        kb_rules[kb_id] = {"folder_path": [], "tag": []}
+                    
+                    if rule_type in kb_rules[kb_id]:
+                        kb_rules[kb_id][rule_type].append(pattern)
+                
+                # 更新 KnowledgeBase 的 source_paths 和 source_tags
+                for kb_id, rules in kb_rules.items():
+                    if kb_id in self._bases:
+                        kb = self._bases[kb_id]
+                        if rules["folder_path"]:
+                            kb.source_paths = rules["folder_path"]
+                        if rules["tag"]:
+                            kb.source_tags = rules["tag"]
+                
+                print(f"   📋 从数据库加载了 {len(all_rules)} 条分类规则")
+            else:
+                print("   📋 数据库暂无分类规则，使用默认配置")
+        except Exception as e:
+            print(f"   ⚠️  加载分类规则失败: {e}")
+        
+        self._rules_loaded = True
+    
     def get(self, kb_id: str) -> Optional[KnowledgeBase]:
         """根据 ID 获取知识库"""
+        self._load_rules_from_db()
         return self._bases.get(kb_id)
 
     def list_all(self) -> List[KnowledgeBase]:
         """列出所有知识库"""
+        self._load_rules_from_db()
         return list(self._bases.values())
 
     def get_by_tag(self, tag: str) -> List[KnowledgeBase]:
         """根据标签查找知识库"""
+        self._load_rules_from_db()
         return [kb for kb in self._bases.values() if tag in kb.tags]
 
     def exists(self, kb_id: str) -> bool:
@@ -228,7 +293,23 @@ class KnowledgeBaseRegistry:
         # LlamaIndex 保存为 default__vector_store.json
         vector_store = kb.persist_dir / "default__vector_store.json"
         return vector_store.exists()
+    
+    def seed_rules_to_db(self) -> int:
+        """将硬编码的配置同步到数据库"""
+        try:
+            kb_configs = [kb.to_dict() for kb in KNOWLEDGE_BASES]
+            count = self.rule_db.seed_initial_rules(kb_configs)
+            self._rules_loaded = False  # 重置，下次重新加载
+            return count
+        except Exception as e:
+            print(f"   ⚠️  同步规则到数据库失败: {e}")
+            return 0
 
 
 # 全局注册表实例
 registry = KnowledgeBaseRegistry()
+
+
+def get_registry() -> KnowledgeBaseRegistry:
+    """获取知识库注册表实例"""
+    return registry

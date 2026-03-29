@@ -202,6 +202,29 @@ class DatabaseManager:
             CREATE INDEX IF NOT EXISTS idx_history_kb_id ON task_history(kb_id)
         """)
         
+        # 6. 知识库分类规则表
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS kb_category_rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                kb_id TEXT NOT NULL,
+                rule_type TEXT NOT NULL,
+                pattern TEXT NOT NULL,
+                description TEXT,
+                priority INTEGER DEFAULT 0,
+                is_active INTEGER DEFAULT 1,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                UNIQUE(kb_id, rule_type, pattern)
+            )
+        """)
+        
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_rules_kb_id ON kb_category_rules(kb_id)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_rules_type ON kb_category_rules(rule_type)
+        """)
+        
         conn.commit()
     
     @contextmanager
@@ -1011,6 +1034,147 @@ class KnowledgeBaseMetaDB:
         return data
 
 
+# ==================== 知识库分类规则数据库 ====================
+
+class CategoryRuleDB:
+    """知识库分类规则数据库操作"""
+    
+    def __init__(self, db: DatabaseManager):
+        self.db = db
+    
+    def add_rule(
+        self,
+        kb_id: str,
+        rule_type: str,
+        pattern: str,
+        description: str = "",
+        priority: int = 0,
+    ) -> bool:
+        """
+        添加分类规则
+        
+        Args:
+            kb_id: 知识库 ID
+            rule_type: 规则类型 (folder_path, tag, keyword)
+            pattern: 匹配模式
+            description: 规则描述
+            priority: 优先级（数字越大优先级越高）
+            
+        Returns:
+            是否成功
+        """
+        now = time.time()
+        
+        try:
+            with self.db.get_connection() as conn:
+                conn.execute("""
+                    INSERT OR REPLACE INTO kb_category_rules 
+                    (kb_id, rule_type, pattern, description, priority, is_active, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+                """, (kb_id, rule_type, pattern, description, priority, now, now))
+                
+                conn.commit()
+                return True
+        except Exception as e:
+            print(f"   ⚠️  添加分类规则失败: {e}")
+            return False
+    
+    def get_rules_for_kb(self, kb_id: str) -> List[Dict[str, Any]]:
+        """获取知识库的所有规则"""
+        with self.db.get_connection() as conn:
+            cursor = conn.execute("""
+                SELECT * FROM kb_category_rules 
+                WHERE kb_id = ? AND is_active = 1
+                ORDER BY priority DESC
+            """, (kb_id,))
+            
+            return [dict(row) for row in cursor.fetchall()]
+    
+    def get_rules_by_type(self, rule_type: str) -> List[Dict[str, Any]]:
+        """获取指定类型的所有规则"""
+        with self.db.get_connection() as conn:
+            cursor = conn.execute("""
+                SELECT * FROM kb_category_rules 
+                WHERE rule_type = ? AND is_active = 1
+                ORDER BY kb_id, priority DESC
+            """, (rule_type,))
+            
+            return [dict(row) for row in cursor.fetchall()]
+    
+    def get_all_rules(self) -> List[Dict[str, Any]]:
+        """获取所有规则"""
+        with self.db.get_connection() as conn:
+            cursor = conn.execute("""
+                SELECT * FROM kb_category_rules 
+                WHERE is_active = 1
+                ORDER BY kb_id, priority DESC
+            """)
+            
+            return [dict(row) for row in cursor.fetchall()]
+    
+    def delete_rule(self, kb_id: str, rule_type: str, pattern: str) -> bool:
+        """删除规则"""
+        with self.db.get_connection() as conn:
+            cursor = conn.execute("""
+                DELETE FROM kb_category_rules 
+                WHERE kb_id = ? AND rule_type = ? AND pattern = ?
+            """, (kb_id, rule_type, pattern))
+            
+            conn.commit()
+            return cursor.rowcount > 0
+    
+    def delete_rules_for_kb(self, kb_id: str) -> int:
+        """删除知识库的所有规则"""
+        with self.db.get_connection() as conn:
+            cursor = conn.execute("""
+                DELETE FROM kb_category_rules WHERE kb_id = ?
+            """, (kb_id,))
+            
+            conn.commit()
+            return cursor.rowcount
+    
+    def seed_initial_rules(self, knowledge_bases: List[Dict[str, Any]]) -> int:
+        """
+        初始化默认规则（从现有的 KnowledgeBase 配置迁移）
+        
+        Args:
+            knowledge_bases: 知识库配置列表
+            
+        Returns:
+            添加的规则数量
+        """
+        count = 0
+        
+        for kb in knowledge_bases:
+            kb_id = kb.get("id")
+            source_paths = kb.get("source_paths", [])
+            source_tags = kb.get("source_tags", [])
+            
+            # 添加文件夹路径规则
+            for i, path in enumerate(source_paths):
+                if self.add_rule(
+                    kb_id=kb_id,
+                    rule_type="folder_path",
+                    pattern=path,
+                    description=f"文件夹路径匹配: {path}",
+                    priority=100 - i,  # 路径顺序作为优先级
+                ):
+                    count += 1
+            
+            # 添加标签规则
+            for i, tag in enumerate(source_tags):
+                if self.add_rule(
+                    kb_id=kb_id,
+                    rule_type="tag",
+                    pattern=tag,
+                    description=f"标签匹配: {tag}",
+                    priority=50 - i,
+                ):
+                    count += 1
+        
+        return count
+
+
 # ==================== 便捷函数 ====================
 
 def init_sync_db() -> SyncStateDB:
@@ -1031,3 +1195,8 @@ def init_progress_db() -> ProgressDB:
 def init_kb_meta_db() -> KnowledgeBaseMetaDB:
     """获取知识库元数据数据库操作实例"""
     return KnowledgeBaseMetaDB(get_db())
+
+
+def init_category_rule_db() -> CategoryRuleDB:
+    """获取分类规则数据库操作实例"""
+    return CategoryRuleDB(get_db())

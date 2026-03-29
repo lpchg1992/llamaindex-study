@@ -1,12 +1,12 @@
 """
 Obsidian 知识库配置
 
-定义 Obsidian vault 中不同文件夹到知识库的映射关系
+支持从数据库加载分类规则，也保留硬编码配置作为默认值。
 """
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 
 @dataclass
@@ -14,12 +14,22 @@ class ObsidianKnowledgeMapping:
     """Obsidian 知识库映射"""
     kb_id: str                    # 知识库 ID
     name: str                   # 知识库名称
-    folders: List[str]          # 匹配的文件夹路径（支持子目录匹配）
+    folders: List[str] = field(default_factory=list)  # 匹配的文件夹路径
     tags: List[str] = field(default_factory=list)  # 匹配的标签
     description: str = ""       # 描述
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典"""
+        return {
+            "kb_id": self.kb_id,
+            "name": self.name,
+            "folders": self.folders,
+            "tags": self.tags,
+            "description": self.description,
+        }
 
 
-# Obsidian 知识库映射配置
+# Obsidian 知识库映射配置（默认值，用于初始化数据库）
 OBSIDIAN_KB_MAPPINGS: List[ObsidianKnowledgeMapping] = [
     ObsidianKnowledgeMapping(
         kb_id="swine_nutrition",
@@ -85,95 +95,163 @@ OBSIDIAN_KB_MAPPINGS: List[ObsidianKnowledgeMapping] = [
         tags=["#IT", "#编程", "#服务器", "#AI工具"],
         description="IT技术、AI工具使用、服务器配置",
     ),
-    ObsidianKnowledgeMapping(
-        kb_id="obsidian_main",
-        name="📓 Obsidian 主库",
-        folders=[],  # 默认知识库，匹配所有文件
-        tags=[],
-        description="Obsidian 所有笔记（默认库）",
-    ),
 ]
 
 
-def find_kb_by_path(relative_path: str, mappings: List[ObsidianKnowledgeMapping] = None) -> List[str]:
-    """
-    根据文件路径查找匹配的知识库
+class ObsidianMappingRegistry:
+    """Obsidian 映射注册表（支持数据库加载）"""
     
-    Args:
-        relative_path: 相对于 vault 根目录的路径
-        mappings: 映射配置，默认使用 OBSIDIAN_KB_MAPPINGS
+    def __init__(self):
+        self._mappings: Dict[str, ObsidianKnowledgeMapping] = {
+            m.kb_id: m for m in OBSIDIAN_KB_MAPPINGS
+        }
+        self._db_loaded = False
+    
+    @property
+    def rule_db(self):
+        """延迟加载规则数据库"""
+        from kb.database import init_category_rule_db
+        return init_category_rule_db()
+    
+    def _load_from_db(self):
+        """从数据库加载映射"""
+        if self._db_loaded:
+            return
         
-    Returns:
-        匹配的知识库 ID 列表
-    """
-    if mappings is None:
-        mappings = OBSIDIAN_KB_MAPPINGS
-    
-    matched = []
-    
-    for mapping in mappings:
-        for folder in mapping.folders:
-            # 支持子目录匹配
-            if folder in relative_path or relative_path.startswith(folder + "/"):
-                if mapping.kb_id not in matched:
-                    matched.append(mapping.kb_id)
-                break
-    
-    return matched
-
-
-def find_kb_by_tags(tags: List[str], mappings: List[ObsidianKnowledgeMapping] = None) -> List[str]:
-    """
-    根据标签查找匹配的知识库
-    
-    Args:
-        tags: 文件的标签列表
-        mappings: 映射配置
+        try:
+            all_rules = self.rule_db.get_all_rules()
+            
+            if all_rules:
+                # 按 kb_id 分组
+                kb_rules: Dict[str, Dict[str, List[str]]] = {}
+                for rule in all_rules:
+                    kb_id = rule["kb_id"]
+                    rule_type = rule["rule_type"]
+                    pattern = rule["pattern"]
+                    
+                    if kb_id not in kb_rules:
+                        kb_rules[kb_id] = {"folder_path": [], "tag": []}
+                    
+                    # 转换规则类型
+                    if rule_type == "folder_path":
+                        kb_rules[kb_id]["folder_path"].append(pattern)
+                    elif rule_type == "tag":
+                        kb_rules[kb_id]["tag"].append(pattern)
+                
+                # 更新映射
+                for kb_id, rules in kb_rules.items():
+                    if kb_id in self._mappings:
+                        if rules["folder_path"]:
+                            self._mappings[kb_id].folders = rules["folder_path"]
+                        if rules["tag"]:
+                            self._mappings[kb_id].tags = rules["tag"]
+        except Exception as e:
+            print(f"   ⚠️  加载映射规则失败: {e}")
         
-    Returns:
-        匹配的知识库 ID 列表
-    """
-    if mappings is None:
-        mappings = OBSIDIAN_KB_MAPPINGS
+        self._db_loaded = True
     
-    matched = []
+    def get(self, kb_id: str) -> Optional[ObsidianKnowledgeMapping]:
+        """获取映射"""
+        self._load_from_db()
+        return self._mappings.get(kb_id)
     
-    for mapping in mappings:
-        for source_tag in mapping.tags:
-            for doc_tag in tags:
-                if source_tag == doc_tag or source_tag in doc_tag or doc_tag in source_tag:
+    def list_all(self) -> List[ObsidianKnowledgeMapping]:
+        """列出所有映射"""
+        self._load_from_db()
+        return list(self._mappings.values())
+    
+    def find_by_path(self, relative_path: str) -> List[str]:
+        """根据路径查找匹配的知识库"""
+        self._load_from_db()
+        
+        matched = []
+        for mapping in self._mappings.values():
+            for folder in mapping.folders:
+                if folder in relative_path or relative_path.startswith(folder + "/"):
                     if mapping.kb_id not in matched:
                         matched.append(mapping.kb_id)
                     break
+        
+        return matched
     
-    return matched
+    def find_by_tags(self, tags: List[str]) -> List[str]:
+        """根据标签查找匹配的知识库"""
+        self._load_from_db()
+        
+        matched = []
+        for mapping in self._mappings.values():
+            for source_tag in mapping.tags:
+                for doc_tag in tags:
+                    if source_tag == doc_tag or source_tag in doc_tag:
+                        if mapping.kb_id not in matched:
+                            matched.append(mapping.kb_id)
+                        break
+        
+        return matched
+    
+    def classify(self, relative_path: str, tags: List[str]) -> List[str]:
+        """对笔记进行分类"""
+        # 1. 按路径匹配
+        path_matches = self.find_by_path(relative_path)
+        
+        # 2. 按标签匹配
+        tag_matches = self.find_by_tags(tags)
+        
+        # 3. 合并结果
+        result = path_matches.copy()
+        for kb_id in tag_matches:
+            if kb_id not in result:
+                result.append(kb_id)
+        
+        return result
+
+
+# 全局实例
+mapping_registry = ObsidianMappingRegistry()
+
+
+def find_kb_by_path(relative_path: str) -> List[str]:
+    """根据文件路径查找匹配的知识库"""
+    return mapping_registry.find_by_path(relative_path)
+
+
+def find_kb_by_tags(tags: List[str]) -> List[str]:
+    """根据标签查找匹配的知识库"""
+    return mapping_registry.find_by_tags(tags)
 
 
 def classify_note(relative_path: str, tags: List[str]) -> List[str]:
-    """
-    对笔记进行分类
+    """对笔记进行分类"""
+    return mapping_registry.classify(relative_path, tags)
+
+
+def seed_mappings_to_db() -> int:
+    """将硬编码配置同步到数据库"""
+    rule_db = mapping_registry.rule_db
+    count = 0
     
-    Args:
-        relative_path: 相对路径
-        tags: 标签列表
+    for mapping in OBSIDIAN_KB_MAPPINGS:
+        # 添加文件夹规则
+        for i, folder in enumerate(mapping.folders):
+            if rule_db.add_rule(
+                kb_id=mapping.kb_id,
+                rule_type="folder_path",
+                pattern=folder,
+                description=f"文件夹路径匹配: {folder}",
+                priority=100 - i,
+            ):
+                count += 1
         
-    Returns:
-        匹配的知识库 ID 列表（优先按路径，再按标签）
-    """
-    # 1. 按路径匹配
-    path_matches = find_kb_by_path(relative_path)
+        # 添加标签规则
+        for i, tag in enumerate(mapping.tags):
+            if rule_db.add_rule(
+                kb_id=mapping.kb_id,
+                rule_type="tag",
+                pattern=tag,
+                description=f"标签匹配: {tag}",
+                priority=50 - i,
+            ):
+                count += 1
     
-    # 2. 按标签匹配
-    tag_matches = find_kb_by_tags(tags)
-    
-    # 3. 合并结果
-    result = path_matches.copy()
-    for kb_id in tag_matches:
-        if kb_id not in result:
-            result.append(kb_id)
-    
-    # 4. 如果没有匹配，放入默认库
-    if not result:
-        result = ["obsidian_main"]
-    
-    return result
+    mapping_registry._db_loaded = False  # 重置，下次重新加载
+    return count
