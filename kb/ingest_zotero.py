@@ -32,6 +32,9 @@ load_dotenv(Path(__file__).parent.parent / ".env")
 
 from kb.zotero_reader import create_zotero_reader
 from llamaindex_study.vector_store import VectorStoreType, create_vector_store
+from llamaindex_study.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 # Zotero "营养饲料理论" 收藏夹 ID
@@ -172,7 +175,7 @@ def is_scanned_pdf(pdf_path: str) -> bool:
                     )
                     if image_count > 0:
                         image_pages += 1
-            except:
+            except Exception:
                 pass
 
         # 如果 80% 以上页面有图片，可能是扫描件
@@ -575,7 +578,7 @@ def ingest_zotero_incremental(
         print(f"🔄 重建模式：清空现有数据")
         try:
             vector_store.delete_table()
-        except:
+        except Exception:
             pass
         progress = ProgressState()
 

@@ -14,6 +14,10 @@ from typing import List, Optional, Set, Union
 
 from llama_index.core.schema import Document as LlamaDocument
 
+from llamaindex_study.logger import get_logger
+
+logger = get_logger(__name__)
+
 
 class ObsidianReader:
     """
@@ -161,7 +165,7 @@ class ObsidianReader:
                             try:
                                 tags_list = ast.literal_eval(value)
                                 metadata["tags_list"] = tags_list if isinstance(tags_list, list) else [tags_list]
-                            except:
+                            except (ValueError, SyntaxError):
                                 metadata["tags_list"] = [v.strip() for v in value.strip("[]").split(",")]
                         # 处理逗号分隔: tag1, tag2
                         elif "," in value:

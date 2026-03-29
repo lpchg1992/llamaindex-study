@@ -5,9 +5,13 @@
 支持流式输出、自定义参数、对话模式等功能。
 """
 
-from typing import Any, Optional
+from typing import Any, Optional, List
 
 from llamaindex_study.config import get_settings
+from llamaindex_study.logger import get_logger
+from llamaindex_study.ollama_utils import configure_llamaindex_for_siliconflow
+
+logger = get_logger(__name__)
 
 
 class QueryEngineWrapper:
@@ -52,34 +56,13 @@ class QueryEngineWrapper:
         Returns:
             BaseQueryEngine: 查询引擎实例
         """
-        from llama_index.core import Settings as LlamaSettings
-        from llama_index.llms.openai import OpenAI
-
-        # 配置全局 LLM（硅基流动，OpenAI 兼容格式）
-        # LlamaIndex 内置表不包含 DeepSeek-V3，需注册两处：
-        # 1. 模型上下文窗口
-        from llama_index.llms.openai.utils import ALL_AVAILABLE_MODELS
-        if "Pro/deepseek-ai/DeepSeek-V3.2" not in ALL_AVAILABLE_MODELS:
-            ALL_AVAILABLE_MODELS["Pro/deepseek-ai/DeepSeek-V3.2"] = 128000
-
-        # 2. tiktoken tokenizer（DeepSeek-V3 用 cl100k_base，与 gpt-4 相同）
-        import tiktoken
-        try:
-            tiktoken.encoding_for_model("Pro/deepseek-ai/DeepSeek-V3.2")
-        except KeyError:
-            import tiktoken.model as tm
-            tm.MODEL_TO_ENCODING["Pro/deepseek-ai/DeepSeek-V3.2"] = "cl100k_base"
-
-        LlamaSettings.llm = OpenAI(
-            model=self.settings.siliconflow_model,
-            api_key=self.settings.siliconflow_api_key,
-            api_base=self.settings.siliconflow_base_url,
-        )
+        # 配置 LlamaIndex 使用 SiliconFlow
+        configure_llamaindex_for_siliconflow()
 
         # 构建查询引擎参数
         # similarity_top_k 设置更大，让 reranker 有更多候选
         similarity_k = self.top_k * 3  # 初始检索 3 倍数量的结果
-        kwargs = {"top_k": self.top_k, "similarity_top_k": similarity_k}
+        kwargs: dict[str, Any] = {"top_k": self.top_k, "similarity_top_k": similarity_k}
 
         # 如果启用 reranker，添加后处理器
         if self.use_reranker:
@@ -91,7 +74,7 @@ class QueryEngineWrapper:
                 top_n=self.top_k,
             )
             kwargs["node_postprocessors"] = [reranker]
-            print(f"   🔄 启用 SiliconFlow Reranker: {self.settings.rerank_model}")
+            logger.info(f"启用 SiliconFlow Reranker: {self.settings.rerank_model}")
 
         return self.index.as_query_engine(**kwargs)
 
@@ -185,7 +168,7 @@ class QueryEngineWrapper:
         """
         return self.index.as_retriever(top_k=self.top_k)
 
-    def retrieve(self, query_str: str) -> list:
+    def retrieve(self, query_str: str) -> List[Any]:
         """
         检索相关文档（不经过 LLM）
 
@@ -197,3 +180,49 @@ class QueryEngineWrapper:
         """
         retriever = self.get_retriever()
         return retriever.retrieve(query_str)
+
+
+def create_query_engine(
+    kb_id: str,
+    mode: str = "hybrid",
+    top_k: int = 5,
+) -> Any:
+    """
+    根据知识库 ID 创建查询引擎
+
+    Args:
+        kb_id: 知识库 ID
+        mode: 检索模式 (hybrid, vector, keyword)
+        top_k: 返回结果数量
+
+    Returns:
+        BaseQueryEngine: 查询引擎实例
+    """
+    from llamaindex_study.vector_store import LanceDBVectorStore
+    from pathlib import Path
+
+    settings = get_settings()
+
+    # 获取知识库存储路径
+    from kb.registry import get_storage_root
+    persist_dir = get_storage_root() / kb_id
+
+    # 加载向量存储
+    vector_store = LanceDBVectorStore(
+        persist_dir=persist_dir,
+        table_name=kb_id,
+    )
+
+    # 加载索引
+    index = vector_store.load_index()
+    if index is None:
+        raise ValueError(f"知识库 {kb_id} 不存在或未建立索引")
+
+    # 创建查询引擎
+    wrapper = QueryEngineWrapper(
+        index=index,
+        top_k=top_k,
+        use_reranker=settings.use_reranker,
+    )
+
+    return wrapper._query_engine

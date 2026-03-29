@@ -3,17 +3,18 @@
 ## 概述
 
 基于 FastAPI 的 RAG（检索增强生成）API 服务，支持：
-- **任务队列** - 异步任务提交和进度查询
-- **WebSocket 实时推送** - 任务进度实时推送
-- **增量更新** - 检测文件变化，只导入修改的文件
-- **通用文件导入** - PDF、Word、Excel、PPTX、Markdown 等
-- **Zotero 文献导入** - 支持按 ID 或名称搜索收藏夹，含 OCR 扫描件检测
-- **Obsidian 笔记导入** - 支持 vault 扫描，含 wiki 链接和标签处理
+
+- **并行多端点 Ollama** - 本地 + 远程同时处理，大幅提升导入效率
+- **任务队列** - 异步任务提交和实时进度查询
+- **增量同步** - 基于文件哈希检测变更
+- **WebSocket 推送** - 任务进度实时推送
+- **Obsidian 笔记导入** - 支持 vault 扫描
+- **Zotero 文献导入** - 支持按 ID 或名称搜索收藏夹
 
 ## 启动服务
 
 ```bash
-cd /Users/luopingcheng/Documents/GitHub/llamaindex-study
+cd ~/文档/GitHub/llamaindex-study
 poetry run python api.py
 ```
 
@@ -23,9 +24,52 @@ poetry run python api.py
 
 ---
 
+## 核心功能
+
+### 并行多端点 Ollama
+
+导入任务使用**本地 + 远程 Ollama 同时处理**：
+
+```
+文件列表 (100个)
+    ├── 本地 Ollama ──→ 50 个文件
+    └── 远程 Ollama ──→ 50 个文件
+```
+
+配置文件路径：
+- 本地: `http://localhost:11434`
+- 远程: `http://192.168.31.169:11434`
+
+### 任务队列
+
+任务提交后立即返回 `task_id`，后台异步执行：
+
+```bash
+# 提交任务
+curl -X POST "http://localhost:8000/kbs/tech_tools/ingest/obsidian"
+
+# 返回
+{"task_id": "abc12345", "status": "pending"}
+
+# 查询状态
+curl "http://localhost:8000/tasks/abc12345"
+
+# 返回
+{"task_id": "abc12345", "status": "completed", 
+ "progress": 100, "result": {"files": 26, "nodes": 248}}
+```
+
+---
+
 ## API 端点总览
 
-### 任务队列 + WebSocket ⭐
+### 健康检查
+
+| 方法 | 端点 | 功能 |
+|------|------|------|
+| GET | `/health` | 服务健康检查 |
+
+### 任务队列
 
 | 方法 | 端点 | 功能 |
 |------|------|------|
@@ -33,145 +77,284 @@ poetry run python api.py
 | GET | `/tasks` | 列出任务 |
 | GET | `/tasks/{task_id}` | 查询任务状态 |
 | DELETE | `/tasks/{task_id}` | 取消任务 |
-| WS | `/ws/tasks` | WebSocket 实时进度 |
-| WS | `/ws` | WebSocket 全局广播 |
 
 ### 知识库管理
 
 | 方法 | 端点 | 功能 |
 |------|------|------|
 | GET | `/kbs` | 列出所有知识库 |
-| POST | `/kbs` | 创建新知识库 |
 | GET | `/kbs/{kb_id}` | 获取知识库详情 |
 | DELETE | `/kbs/{kb_id}` | 删除知识库 |
+
+### 文档导入（并行处理）
+
+| 方法 | 端点 | 功能 |
+|------|------|------|
+| POST | `/kbs/{kb_id}/ingest/obsidian` | Obsidian 导入（本地+远程并行） |
+| POST | `/kbs/{kb_id}/ingest/zotero` | Zotero 导入 |
+| POST | `/kbs/{kb_id}/rebuild` | 重建知识库 |
 
 ### 检索查询
 
 | 方法 | 端点 | 功能 |
 |------|------|------|
-| POST | `/kbs/{kb_id}/search` | 向量检索（同步） |
-| POST | `/kbs/{kb_id}/query` | RAG 问答（同步） |
+| POST | `/kbs/{kb_id}/search` | 向量检索 |
+| POST | `/kbs/{kb_id}/query` | RAG 问答 |
 
-### 文档导入
-
-| 方法 | 端点 | 功能 |
-|------|------|------|
-| POST | `/kbs/{kb_id}/ingest` | 通用文件导入 |
-| POST | `/kbs/{kb_id}/ingest/zotero` | Zotero 收藏夹导入 |
-| POST | `/kbs/{kb_id}/ingest/obsidian` | Obsidian vault 导入 |
-| POST | `/kbs/{kb_id}/rebuild` | 重建知识库 |
-
-### Zotero 接口
+### Obsidian
 
 | 方法 | 端点 | 功能 |
 |------|------|------|
-| GET | `/zotero/collections` | 列出所有收藏夹 |
-| GET | `/zotero/collections/search?q=` | 搜索收藏夹 |
+| GET | `/obsidian/vaults` | 列出 vault 位置 |
+| GET | `/obsidian/mappings` | 知识库映射配置 |
+| POST | `/obsidian/import-all` | 全库分类导入 |
 
-### Obsidian 接口
+### 管理
 
 | 方法 | 端点 | 功能 |
 |------|------|------|
-| GET | `/obsidian/vaults` | 列出常见 vault 位置 |
-| GET | `/obsidian/vaults/{name}` | 获取 vault 信息 |
+| GET | `/admin/tables` | 列出向量表 |
+| GET | `/admin/tables/{kb_id}` | 表统计 |
 
 ---
 
-## WebSocket 实时推送 ⭐
+## 详细接口
 
-### 连接方式
+### 健康检查
 
-```javascript
-// 方式1: 接收所有任务更新
-const ws = new WebSocket("ws://localhost:8000/ws/tasks");
-
-// 方式2: 只接收指定任务更新
-const ws = new WebSocket("ws://localhost:8000/ws/tasks?task_id=abc123");
-
-// 方式3: 全局广播（接收所有系统消息）
-const ws = new WebSocket("ws://localhost:8000/ws");
-
-// 接收消息
-ws.onmessage = (event) => {
-    const data = JSON.parse(event.data);
-    console.log(data);
-};
-
-// 发送心跳
-setInterval(() => ws.send("ping"), 30000);
+```bash
+curl http://localhost:8000/health
 ```
-
-### 推送消息格式
 
 ```json
-{
-  "type": "task_update",
-  "task_id": "7695ba61",
-  "data": {
-    "task_id": "7695ba61",
-    "task_type": "zotero",
-    "status": "running",
-    "progress": 45,
-    "current": 50,
-    "total": 108,
-    "message": "处理: 某文献标题..."
-  }
-}
-```
-
-### Python WebSocket 客户端示例
-
-```python
-import asyncio
-import websockets
-import json
-
-async def listen():
-    uri = "ws://localhost:8000/ws/tasks"
-    async with websockets.connect(uri) as ws:
-        while True:
-            msg = await ws.recv()
-            data = json.loads(msg)
-            print(f"进度: {data['data']['progress']}% - {data['data']['message']}")
-
-asyncio.run(listen())
+{"status": "ok", "service": "llamaindex-rag-api", "version": "3.1.0"}
 ```
 
 ---
 
-## 任务队列
+### 任务队列
 
-### 工作流程
-
-```
-1. 提交任务 ──▶ 返回 task_id
-       │
-       ▼
-2. WebSocket 连接 ──▶ 实时推送进度
-       │
-       ▼
-3. 完成/失败 ──▶ 获取结果
-```
-
-### 提交任务 `POST /tasks`
+#### POST /tasks - 提交任务
 
 ```bash
 curl -X POST http://localhost:8000/tasks \
   -H "Content-Type: application/json" \
   -d '{
-    "task_type": "zotero",
-    "kb_id": "my_kb",
-    "params": {"collection_id": 8}
+    "task_type": "obsidian",
+    "kb_id": "tech_tools",
+    "params": {"rebuild": false},
+    "source": "cli"
   }'
 ```
 
-### 查询任务 `GET /tasks/{task_id}`
-
-```bash
-curl http://localhost:8000/tasks/7695ba61
+```json
+{"task_id": "abc12345", "status": "pending", "kb_id": "tech_tools", "message": "任务已提交"}
 ```
 
-### 任务状态
+#### GET /tasks/{task_id} - 查询任务
+
+```bash
+curl http://localhost:8000/tasks/abc12345
+```
+
+```json
+{
+  "task_id": "abc12345",
+  "status": "completed",
+  "kb_id": "tech_tools",
+  "progress": 100,
+  "message": "已完成",
+  "result": {
+    "kb_id": "tech_tools",
+    "files": 26,
+    "nodes": 248
+  }
+}
+```
+
+#### GET /tasks - 列出任务
+
+```bash
+curl "http://localhost:8000/tasks?status=running&limit=10"
+```
+
+---
+
+### 文档导入
+
+#### POST /kbs/{kb_id}/ingest/obsidian
+
+Obsidian vault 导入（本地+远程并行处理）：
+
+```bash
+curl -X POST "http://localhost:8000/kbs/tech_tools/ingest/obsidian" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "vault_path": "/Users/xxx/Documents/Obsidian Vault",
+    "folder_path": "IT",
+    "recursive": true
+  }'
+```
+
+```json
+{
+  "status": "pending",
+  "task_id": "abc12345",
+  "message": "Obsidian IT 导入任务已提交，ID: abc12345",
+  "source": "obsidian"
+}
+```
+
+#### POST /kbs/{kb_id}/ingest/zotero
+
+Zotero 收藏夹导入：
+
+```bash
+curl -X POST "http://localhost:8000/kbs/swine_nutrition/ingest/zotero" \
+  -H "Content-Type: application/json" \
+  -d '{"collection_name": "营养饲料理论"}'
+```
+
+```json
+{
+  "status": "pending",
+  "task_id": "xyz67890",
+  "message": "Zotero 营养饲料理论 导入任务已提交，ID: xyz67890",
+  "source": "zotero"
+}
+```
+
+#### POST /kbs/{kb_id}/rebuild
+
+重建知识库（清空后重新导入）：
+
+```bash
+curl -X POST "http://localhost:8000/kbs/tech_tools/rebuild"
+```
+
+---
+
+### 检索查询
+
+#### POST /kbs/{kb_id}/search
+
+向量检索：
+
+```bash
+curl -X POST "http://localhost:8000/kbs/tech_tools/search" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "Python 异步编程", "top_k": 5}'
+```
+
+```json
+[
+  {
+    "text": "异步编程是 Python 中的重要概念...",
+    "score": 0.85,
+    "metadata": {"file_path": "IT/Python异步.md"}
+  }
+]
+```
+
+#### POST /kbs/{kb_id}/query
+
+RAG 问答：
+
+```bash
+curl -X POST "http://localhost:8000/kbs/tech_tools/query" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "如何优化 Python 性能？", "mode": "hybrid", "top_k": 5}'
+```
+
+```json
+{
+  "response": "优化 Python 性能可以从以下几个方面入手...",
+  "sources": [
+    {"text": "Python 性能优化技巧...", "score": 0.85}
+  ]
+}
+```
+
+---
+
+## WebSocket 实时推送
+
+### 连接
+
+```javascript
+const ws = new WebSocket("ws://localhost:8000/ws/tasks");
+ws.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    console.log(`进度: ${data.progress}% - ${data.message}`);
+};
+```
+
+### 推送消息
+
+```json
+{
+  "type": "task_update",
+  "task_id": "abc12345",
+  "data": {
+    "status": "running",
+    "progress": 45,
+    "message": "[本地] 20/50"
+  }
+}
+```
+
+---
+
+## 完整示例
+
+### Python
+
+```python
+import requests
+import time
+
+BASE = "http://localhost:8000"
+
+# 1. 提交导入任务
+r = requests.post(f"{BASE}/kbs/tech_tools/ingest/obsidian",
+    json={"recursive": True})
+task_id = r.json()["task_id"]
+print(f"任务 ID: {task_id}")
+
+# 2. 轮询查询状态
+while True:
+    r = requests.get(f"{BASE}/tasks/{task_id}").json()
+    print(f"进度: {r['progress']}% - {r['message']}")
+    if r["status"] in ["completed", "failed"]:
+        break
+    time.sleep(5)
+
+# 3. 搜索
+r = requests.post(f"{BASE}/kbs/tech_tools/search",
+    json={"query": "Python", "top_k": 5})
+print(r.json())
+```
+
+### cURL
+
+```bash
+# 提交任务
+curl -X POST "http://localhost:8000/kbs/tech_tools/ingest/obsidian" \
+  -H "Content-Type: application/json" \
+  -d '{"recursive": true}'
+
+# 查询状态
+curl "http://localhost:8000/tasks/{task_id}"
+
+# 搜索
+curl -X POST "http://localhost:8000/kbs/tech_tools/search" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "Python", "top_k": 5}'
+```
+
+---
+
+## 任务状态
 
 | 状态 | 说明 |
 |------|------|
@@ -183,119 +366,31 @@ curl http://localhost:8000/tasks/7695ba61
 
 ---
 
-## 增量更新 ⭐
-
-默认启用增量更新模式：
-- 计算文件 MD5 哈希（仅读取 1MB）
-- 检测文件变化，只导入修改/新增的文件
-- 已处理且未修改的文件自动跳过
-
-```python
-# 禁用增量更新（强制重新导入）
-config = DocumentProcessorConfig(incremental=False)
-```
-
----
-
-## Python 完整示例
-
-```python
-import requests
-import asyncio
-import websockets
-import json
-
-# 1. 提交导入任务
-result = requests.post(
-    "http://localhost:8000/kbs/my_kb/ingest/zotero",
-    json={"collection_name": "营养饲料理论"}
-)
-task_id = result.json()["task_id"]
-print(f"任务 ID: {task_id}")
-
-# 2. WebSocket 监听进度
-async def watch_task(task_id):
-    uri = f"ws://localhost:8000/ws/tasks?task_id={task_id}"
-    async with websockets.connect(uri) as ws:
-        while True:
-            msg = await ws.recv()
-            data = json.loads(msg)
-            task = data["data"]
-            print(f"进度: {task['progress']}% - {task['message']}")
-            
-            if task["status"] in ["completed", "failed"]:
-                break
-
-asyncio.run(watch_task(task_id))
-
-# 3. 查询结果
-task = requests.get(f"http://localhost:8000/tasks/{task_id}").json()
-print(f"状态: {task['status']}")
-if task["error"]:
-    print(f"错误: {task['error']}")
-```
-
----
-
-## JavaScript 完整示例
-
-```javascript
-// 1. 提交任务
-const submit = await fetch("http://localhost:8000/kbs/my_kb/ingest/zotero", {
-  method: "POST",
-  headers: {"Content-Type": "application/json"},
-  body: JSON.stringify({collection_name: "营养饲料理论"})
-});
-const {task_id} = await submit.json();
-
-// 2. WebSocket 监听
-const ws = new WebSocket(`ws://localhost:8000/ws/tasks?task_id=${task_id}`);
-ws.onmessage = (e) => {
-  const data = JSON.parse(e.data);
-  const {progress, message, status} = data.data;
-  console.log(`${progress}% - ${message}`);
-  
-  if (status === "completed" || status === "failed") {
-    ws.close();
-  }
-};
-```
-
----
-
-## 增量导入示例
-
-```bash
-# 首次导入（导入所有文件）
-curl -X POST http://localhost:8000/kbs/my_kb/ingest \
-  -d '{"paths": ["/path/to/docs"]}'
-
-# 第二次导入（只导入修改/新增的文件）
-curl -X POST http://localhost:8000/kbs/my_kb/ingest \
-  -d '{"paths": ["/path/to/docs"]}'
-# 输出: {"status": "success", "message": "成功导入 X 个文件，跳过 Y 个未变化文件"}
-```
-
----
-
 ## 存储位置
 
 ```
-/volumes/online/llamaindex/           # 向量数据
-├── zotero/
-├── hitech_history/
-└── tech_tools/
-
-~/.llamaindex/                        # 任务队列数据
-├── tasks.db                        # SQLite 数据库
-└── *.json                           # 进度记录
+/Volumes/online/llamaindex/           # 向量数据
+~/.llamaindex/                       # SQLite 数据库
+├── project.db                      # 项目数据
+└── tasks.db                        # 任务队列
 ```
 
 ---
 
-## 注意事项
+## CLI 工具
 
-1. **Ollama 服务**: 确保 `ollama serve` 在 `localhost:11434`
-2. **WebSocket 心跳**: 建议每 30 秒发送 `ping`
-3. **增量更新**: 默认启用，禁用需设置 `incremental=False`
-4. **任务持久化**: 重启服务后任务状态仍可查询
+除了 API，还可以用 CLI：
+
+```bash
+# 列出知识库
+poetry run python -m kb.ingest_vdb --list
+
+# 查看变更
+poetry run python -m kb.ingest_vdb --show-changes
+
+# 提交导入任务
+poetry run python -m kb.ingest_vdb --kb tech_tools
+
+# 查看任务状态
+poetry run python -m kb.ingest_vdb --tasks
+```

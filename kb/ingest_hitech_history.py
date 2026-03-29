@@ -25,6 +25,9 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 from llamaindex_study.vector_store import VectorStoreType, create_vector_store
+from llamaindex_study.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 # 高新历史项目库配置
@@ -226,7 +229,7 @@ def ingest_hitech_history(
         print(f"🔄 重建模式：清空现有数据")
         try:
             vector_store.delete_table()
-        except:
+        except Exception:
             pass
         progress = ProgressState()
 

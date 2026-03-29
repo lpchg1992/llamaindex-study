@@ -12,6 +12,10 @@ from typing import Dict, Set
 
 from fastapi import WebSocket
 
+from llamaindex_study.logger import get_logger
+
+logger = get_logger(__name__)
+
 
 class WebSocketManager:
     """
@@ -79,7 +83,7 @@ class WebSocketManager:
                 for ws in self._task_connections[task_id]:
                     try:
                         await ws.send_text(message)
-                    except:
+                    except Exception:
                         dead_connections.add(ws)
                 
                 # 清理死连接
@@ -91,7 +95,7 @@ class WebSocketManager:
             for ws in self._global_connections:
                 try:
                     await ws.send_text(message)
-                except:
+                except Exception:
                     dead_connections.add(ws)
             
             for ws in dead_connections:
@@ -104,7 +108,7 @@ class WebSocketManager:
             for ws in self._global_connections:
                 try:
                     await ws.send_text(message)
-                except:
+                except Exception:
                     dead.add(ws)
             
             for ws in dead:

@@ -129,8 +129,12 @@ class TaskQueue:
     
     def _init_db(self):
         """初始化数据库"""
-        conn = sqlite3.connect(str(self.db_path))
+        conn = sqlite3.connect(str(self.db_path), timeout=30)
         cursor = conn.cursor()
+        
+        # 启用 WAL 模式以支持并发
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA busy_timeout=30000")
         
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS tasks (
@@ -204,7 +208,7 @@ class TaskQueue:
         """
         task_id = str(uuid.uuid4())[:8]
         
-        conn = sqlite3.connect(str(self.db_path))
+        conn = sqlite3.connect(str(self.db_path), timeout=30)
         cursor = conn.cursor()
         
         cursor.execute("""
@@ -228,7 +232,7 @@ class TaskQueue:
     
     def get_task(self, task_id: str) -> Optional[Task]:
         """获取任务"""
-        conn = sqlite3.connect(str(self.db_path))
+        conn = sqlite3.connect(str(self.db_path), timeout=30)
         cursor = conn.cursor()
         
         cursor.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,))
@@ -246,7 +250,7 @@ class TaskQueue:
         limit: int = 50,
     ) -> List[Task]:
         """列出任务"""
-        conn = sqlite3.connect(str(self.db_path))
+        conn = sqlite3.connect(str(self.db_path), timeout=30)
         cursor = conn.cursor()
         
         query = "SELECT * FROM tasks WHERE 1=1"
@@ -278,7 +282,7 @@ class TaskQueue:
         message: str = None,
     ):
         """更新进度"""
-        conn = sqlite3.connect(str(self.db_path))
+        conn = sqlite3.connect(str(self.db_path), timeout=30)
         cursor = conn.cursor()
         
         updates = []
@@ -309,7 +313,7 @@ class TaskQueue:
     
     def start_task(self, task_id: str):
         """开始任务"""
-        conn = sqlite3.connect(str(self.db_path))
+        conn = sqlite3.connect(str(self.db_path), timeout=30)
         cursor = conn.cursor()
         
         cursor.execute("""
@@ -323,7 +327,7 @@ class TaskQueue:
     
     def complete_task(self, task_id: str, result: Dict = None, error: str = None):
         """完成任务"""
-        conn = sqlite3.connect(str(self.db_path))
+        conn = sqlite3.connect(str(self.db_path), timeout=30)
         cursor = conn.cursor()
         
         status = TaskStatus.FAILED.value if error else TaskStatus.COMPLETED.value
@@ -361,7 +365,7 @@ class TaskQueue:
         if task.status != TaskStatus.PENDING.value:
             return False
         
-        conn = sqlite3.connect(str(self.db_path))
+        conn = sqlite3.connect(str(self.db_path), timeout=30)
         cursor = conn.cursor()
         
         cursor.execute("""
@@ -382,9 +386,41 @@ class TaskQueue:
         
         return affected > 0
     
+    def get_pending(self, limit: int = 10) -> List[Task]:
+        """获取待处理任务"""
+        conn = sqlite3.connect(str(self.db_path), timeout=30)
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT * FROM tasks 
+            WHERE status = ?
+            ORDER BY created_at ASC
+            LIMIT ?
+        """, (TaskStatus.PENDING.value, limit))
+        
+        rows = cursor.fetchall()
+        conn.close()
+        
+        return [self._row_to_task(row) for row in rows]
+    
+    def get_running_count(self) -> int:
+        """获取正在运行的任务数量"""
+        conn = sqlite3.connect(str(self.db_path), timeout=30)
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT COUNT(*) FROM tasks 
+            WHERE status = ?
+        """, (TaskStatus.RUNNING.value,))
+        
+        count = cursor.fetchone()[0]
+        conn.close()
+        
+        return count
+    
     def delete_task(self, task_id: str) -> bool:
         """删除任务"""
-        conn = sqlite3.connect(str(self.db_path))
+        conn = sqlite3.connect(str(self.db_path), timeout=30)
         cursor = conn.cursor()
         
         cursor.execute("DELETE FROM tasks WHERE task_id = ?", (task_id,))
@@ -397,7 +433,7 @@ class TaskQueue:
     
     def cleanup_old_tasks(self, days: int = 7):
         """清理旧任务"""
-        conn = sqlite3.connect(str(self.db_path))
+        conn = sqlite3.connect(str(self.db_path), timeout=30)
         cursor = conn.cursor()
         
         cutoff = time.time() - (days * 24 * 60 * 60)

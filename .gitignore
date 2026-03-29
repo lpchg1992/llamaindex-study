@@ -33,7 +33,7 @@ env/
 *.swo
 
 # Poetry
-poetry.lock
+# poetry.lock 已被 git 跟踪，确保依赖一致性
 
 # Environment
 .env

@@ -27,12 +27,16 @@ from llama_index.core import SimpleDirectoryReader
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.core.schema import Document as LlamaDocument
 
+from llamaindex_study.logger import get_logger
+
+logger = get_logger(__name__)
+
 
 @dataclass
 class DocumentProcessorConfig:
     """文档处理器配置"""
-    chunk_size: int = 512
-    chunk_overlap: int = 50
+    chunk_size: int = 1024
+    chunk_overlap: int = 100
     batch_size: int = 50  # 每 N 个节点保存一次
     max_file_size: int = 100 * 1024 * 1024  # 100MB
     pdf_scan_threshold: float = 10.0  # 文字密度阈值 (chars/sq inch)
@@ -95,6 +99,56 @@ class DocumentProcessor:
     def set_embed_model(self, embed_model):
         """设置 embedding 模型"""
         self.embed_model = embed_model
+
+    def _upsert_nodes(self, lance_store, nodes):
+        """
+        使用 merge_insert 实现去重插入
+        
+        Args:
+            lance_store: LanceDB vector store
+            nodes: 节点列表
+        """
+        try:
+            import lancedb
+            import pyarrow as pa
+            
+            # 获取底层 table
+            uri = lance_store.uri
+            table_name = lance_store.table_name
+            
+            # 连接并获取 table
+            db = lancedb.connect(uri)
+            table = db.open_table(table_name)
+            
+            # 将节点转换为 dict
+            data = []
+            for node in nodes:
+                row = {"id": node.id_}
+                row["text"] = node.get_content()
+                row["embedding"] = node.embedding
+                
+                # 添加所有 metadata
+                if node.metadata:
+                    for k, v in node.metadata.items():
+                        if isinstance(v, (str, int, float, bool, type(None))):
+                            row[k] = v
+                        elif isinstance(v, list):
+                            row[k] = ",".join(str(x) for x in v)
+                        else:
+                            row[k] = str(v)
+                data.append(row)
+            
+            # 使用 merge_insert (id 存在则覆盖)
+            df = pa.Table.from_pylist(data)
+            
+            # 执行 merge_insert
+            table.merge_insert("id").when_matched_update_all().execute(df)
+            print(f"   ✅ Upsert {len(nodes)} 节点")
+            
+        except Exception as e:
+            # 如果 upsert 失败，回退到普通 add
+            print(f"   ⚠️  Upsert 失败: {e}")
+            lance_store.add(nodes)
 
     @staticmethod
     def compute_file_hash(file_path: str) -> str:
@@ -195,7 +249,7 @@ class DocumentProcessor:
                         )
                         if image_count > 0:
                             image_pages += 1
-                except:
+                except Exception:
                     pass
 
             if image_pages / pages_to_check > self.config.pdf_image_ratio_threshold:
@@ -319,7 +373,7 @@ class DocumentProcessor:
                             doc.metadata["source"] = "pdf_partial"
                             doc.metadata.update(metadata or {})
                             docs.append(doc)
-                except:
+                except Exception:
                     pass
         else:
             # 正常 PDF
@@ -422,6 +476,8 @@ class DocumentProcessor:
         """
         保存节点到向量存储
 
+        使用批量 embedding 优化性能。
+
         Args:
             vector_store: 向量存储实例
             nodes: 节点列表
@@ -433,38 +489,43 @@ class DocumentProcessor:
         if not nodes:
             return 0
 
+        # 优先使用批量 embedding
+        from llamaindex_study.ollama_utils import BatchEmbeddingHelper
+        batch_helper = BatchEmbeddingHelper(embed_model=self.embed_model, batch_size=self.config.batch_size)
+        
         saved = 0
-        batch = []
+        processed_batch = []
 
         for node in nodes:
             if self.embed_model:
-                try:
-                    node.embedding = self.embed_model.get_text_embedding(node.get_content())
-                    batch.append(node)
-                except Exception as e:
-                    print(f"\n   ⚠️  Embedding 失败: {e}")
-                    continue
+                processed_batch.append(node)
             else:
-                batch.append(node)
+                processed_batch.append(node)
 
-            # 批量保存
-            if len(batch) >= self.config.batch_size:
-                try:
-                    lance_store = vector_store._get_lance_vector_store()
-                    lance_store.add(batch)
-                    saved += len(batch)
-                    batch = []
-                except Exception as e:
-                    print(f"\n   ⚠️  保存失败: {e}")
-
-        # 保存剩余
-        if batch:
+        # 批量处理
+        if processed_batch and self.embed_model:
+            texts = [node.get_content() for node in processed_batch]
             try:
-                lance_store = vector_store._get_lance_vector_store()
-                lance_store.add(batch)
-                saved += len(batch)
+                embeddings = batch_helper.embed_documents(texts)
+                for node, embedding in zip(processed_batch, embeddings):
+                    node.embedding = embedding
             except Exception as e:
-                print(f"\n   ⚠️  保存失败: {e}")
+                print(f"\n   ⚠️  批量 Embedding 失败: {e}")
+                # 回退到逐个 embedding
+                for node in processed_batch:
+                    try:
+                        node.embedding = self.embed_model.get_text_embedding(node.get_content())
+                    except Exception as ex:
+                        print(f"      ⚠️  Embedding 失败: {ex}")
+                        processed_batch.remove(node)
+
+        # 保存所有节点
+        try:
+            lance_store = vector_store._get_lance_vector_store()
+            self._upsert_nodes(lance_store, processed_batch)
+            saved = len(processed_batch)
+        except Exception as e:
+            print(f"\n   ⚠️  保存失败: {e}")
 
         if progress:
             progress.total_nodes += saved

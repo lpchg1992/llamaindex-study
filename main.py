@@ -63,7 +63,8 @@ def main() -> None:
     # 初始化配置
     settings = get_settings()
     print(f"🔧 使用配置: {settings}")
-    print(f"   LLM 后端: {settings.llm_backend}")
+    print(f"   LLM: SiliconFlow ({settings.siliconflow_model})")
+    print(f"   Embedding: Ollama ({settings.ollama_embed_model})")
     
     # 文档目录
     data_dir = Path(__file__).parent / "data"
@@ -92,7 +93,6 @@ def main() -> None:
     # 创建查询引擎
     query_engine = QueryEngineWrapper(
         index=index,
-        llm_backend=settings.llm_backend,
         top_k=settings.top_k,
     )
     
@@ -125,7 +125,6 @@ def main() -> None:
                 index = builder.build_from_documents(documents)
                 query_engine = QueryEngineWrapper(
                     index=index,
-                    llm_backend=settings.llm_backend,
                     top_k=settings.top_k,
                 )
                 print("✅ 索引已重新加载\n")

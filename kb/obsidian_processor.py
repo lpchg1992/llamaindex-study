@@ -7,6 +7,7 @@ Obsidian 文档导入处理器
 - Wiki 链接和标签处理
 - 支持 PDF 附件（含 OCR）
 - 目录结构和标签分类
+- 增量同步（基于 DeduplicationManager）
 """
 
 import ast
@@ -14,11 +15,15 @@ import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, Set
+from typing import List, Optional, Set, Any
 
 from llama_index.core.schema import Document as LlamaDocument
 
 from kb.document_processor import DocumentProcessor, DocumentProcessorConfig, ProcessingProgress
+from kb.deduplication import DeduplicationManager
+from llamaindex_study.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -43,12 +48,16 @@ class ObsidianImporter:
     - 清理 wiki 链接和标签
     - 处理 PDF 附件（含 OCR）
     - 目录结构和标签分类
+    - 增量同步（基于 DeduplicationManager）
     """
 
     def __init__(
         self,
         vault_root: Optional[Path] = None,
         config: Optional[DocumentProcessorConfig] = None,
+        kb_id: Optional[str] = None,
+        persist_dir: Optional[Path] = None,
+        vector_store: Optional[Any] = None,
     ):
         """
         初始化 Obsidian 导入器
@@ -56,9 +65,31 @@ class ObsidianImporter:
         Args:
             vault_root: Obsidian vault 根目录
             config: 文档处理器配置
+            kb_id: 知识库 ID（用于去重管理）
+            persist_dir: 持久化目录（用于去重管理）
+            vector_store: 向量存储（用于去重管理）
         """
         self.vault_root = vault_root or Path.home() / "Documents" / "Obsidian Vault"
         self.processor = DocumentProcessor(config=config)
+        self.kb_id = kb_id
+        self.persist_dir = persist_dir
+        self.vector_store = vector_store
+
+        # 初始化 DeduplicationManager（如果提供了 kb_id 和 persist_dir）
+        self._dedup_manager: Optional[DeduplicationManager] = None
+        if kb_id and persist_dir:
+            uri = str(persist_dir)
+            if vector_store and hasattr(vector_store, '_get_lance_vector_store'):
+                try:
+                    uri = vector_store._get_lance_vector_store().uri
+                except Exception:
+                    pass  # 使用默认路径
+            self._dedup_manager = DeduplicationManager(
+                kb_id=kb_id,
+                persist_dir=persist_dir,
+                uri=uri,
+                table_name=kb_id,
+            )
 
         # 默认排除模式
         self.exclude_patterns = [
@@ -67,6 +98,14 @@ class ObsidianImporter:
             "*/.obsidian/*",
             "*/.trash/*",
         ]
+
+    def get_dedup_manager(self) -> Optional[DeduplicationManager]:
+        """获取去重管理器实例"""
+        return self._dedup_manager
+
+    def set_dedup_manager(self, manager: DeduplicationManager):
+        """设置去重管理器实例"""
+        self._dedup_manager = manager
 
     @staticmethod
     def extract_tags(content: str) -> Set[str]:
@@ -110,7 +149,7 @@ class ObsidianImporter:
                             try:
                                 tags_list = ast.literal_eval(value)
                                 metadata["tags_list"] = tags_list if isinstance(tags_list, list) else [tags_list]
-                            except:
+                            except (ValueError, SyntaxError):
                                 metadata["tags_list"] = [v.strip() for v in value.strip("[]").split(",")]
                         elif "," in value:
                             metadata["tags_list"] = [v.strip() for v in value.split(",")]
@@ -242,7 +281,7 @@ class ObsidianImporter:
         recursive: bool = True,
     ) -> dict:
         """
-        导入整个目录
+        导入整个目录（支持增量同步）
 
         Args:
             directory: 目录路径
@@ -276,16 +315,60 @@ class ObsidianImporter:
         if not files:
             return {"files": 0, "nodes": 0, "failed": 0}
 
+        # ========== 增量同步：检测变更 ==========
+        dedup_manager = self._dedup_manager
+        if dedup_manager and not rebuild:
+            to_add, to_update, to_delete, unchanged = dedup_manager.detect_changes(
+                files, self.vault_root
+            )
+            print(f"   增量同步: 新增 {len(to_add)}, 更新 {len(to_update)}, "
+                  f"删除 {len(to_delete)}, 未变 {len(unchanged)}")
+
+            # 过滤文件列表，只处理新增和更新的
+            files_to_process = []
+            processed_rel_paths = set()
+
+            for change in to_add:
+                files_to_process.append(change.abs_path)
+                processed_rel_paths.add(change.rel_path)
+
+            for change in to_update:
+                files_to_process.append(change.abs_path)
+                processed_rel_paths.add(change.rel_path)
+
+            files = files_to_process
+        else:
+            processed_rel_paths = set()
+            if rebuild and dedup_manager:
+                print(f"   🔄 重建模式：清空去重状态")
+                dedup_manager.clear()
+
+        if not files:
+            print(f"   ⏭️  没有变更需要处理")
+            return {"files": 0, "nodes": 0, "failed": 0}
+
         if progress:
             progress.total_items = len(files)
             if not progress.started_at:
                 progress.started_at = time.time()
 
+        # 兼容旧的 progress.processed_items 方式
         processed_set = set(progress.processed_items) if progress else set()
 
         stats = {"files": 0, "nodes": 0, "failed": 0}
 
         for i, file_path in enumerate(files):
+            # 检查 DeduplicationManager 是否已处理
+            try:
+                rel_path = str(file_path.relative_to(self.vault_root))
+            except ValueError:
+                rel_path = str(file_path)
+
+            # 检查是否在待处理列表中（增量模式下）
+            if processed_rel_paths and rel_path not in processed_rel_paths:
+                continue
+
+            # 检查旧的 progress 方式
             if str(file_path) in processed_set:
                 continue
 
@@ -303,41 +386,95 @@ class ObsidianImporter:
                 stats["failed"] += 1
                 continue
 
-            # 获取相对路径
-            try:
-                rel_path = str(file_path.relative_to(self.vault_root))
-            except ValueError:
-                rel_path = str(file_path)
+            # 获取相对路径（已在上面获取）
+            # rel_path 已在 try-except 块中获取
 
-            # 准备元数据
+            # 准备元数据（确保所有值都是标准类型）
+            def clean_value(v):
+                """清理值为标准类型"""
+                if v is None:
+                    return ""
+                if isinstance(v, (str, int, float, bool)):
+                    return v
+                if isinstance(v, list):
+                    return [clean_value(x) for x in v]
+                return str(v)
+
             metadata = {
                 "source": "obsidian",
                 "file_path": str(file_path),
                 "relative_path": rel_path,
-                "title": note.title,
-                "tags": ", ".join(note.tags),
-                "obsidian_tags": list(note.tags),
-                **note.frontmatter,
+                "title": str(note.title) if note.title else "",
+                "tags": ", ".join(str(t) for t in note.tags),
+                "tag_list": ",".join(str(t) for t in note.tags),  # 用逗号分隔的字符串
             }
+            # 添加 frontmatter（转换为标准类型）
+            for key, value in note.frontmatter.items():
+                metadata[str(key)] = clean_value(value)
+
+            # ========== 修复：统一 Doc ID 生成方式 ==========
+            # 使用 rel_path 作为 ID，与 ingest_vdb.py 保持一致
+            doc_id = rel_path
 
             # 创建文档
             doc = LlamaDocument(
                 text=note.content,
                 metadata=metadata,
-                id_=f"obsidian_{rel_path}",
+                id_=doc_id,
             )
 
             # 解析为节点
             nodes = node_parser.get_nodes_from_documents([doc])
+
+            # 清理节点 metadata，确保所有值都是标准类型且长度合适
+            def clean_node_metadata(node):
+                """清理节点 metadata"""
+                MAX_STR_LENGTH = 500  # 最大字符串长度
+
+                for key in list(node.metadata.keys()):
+                    value = node.metadata[key]
+                    if value is None:
+                        node.metadata[key] = ""
+                    elif isinstance(value, str):
+                        # 截断过长的字符串
+                        if len(value) > MAX_STR_LENGTH:
+                            node.metadata[key] = value[:MAX_STR_LENGTH] + "..."
+                    elif not isinstance(value, (str, int, float, bool)):
+                        try:
+                            node.metadata[key] = str(value)[:MAX_STR_LENGTH]
+                        except Exception:
+                            del node.metadata[key]
+                return node
+
+            nodes = [clean_node_metadata(n) for n in nodes]
 
             # 保存
             saved = self.processor.save_nodes(vector_store, nodes, progress)
             stats["nodes"] += saved
             stats["files"] += 1
 
+            # ========== 更新去重状态 ==========
+            if dedup_manager:
+                try:
+                    content = file_path.read_text(encoding="utf-8", errors="ignore")
+                    dedup_manager.mark_processed(
+                        file_path,
+                        content,
+                        doc_id,
+                        chunk_count=len(nodes),
+                        vault_root=self.vault_root,
+                    )
+                except Exception as e:
+                    print(f"   ⚠️  更新去重状态失败: {e}")
+
             if progress:
                 progress.processed_items.append(str(file_path))
                 progress.save(Path.home() / ".llamaindex" / "obsidian_progress.json")
+
+        # ========== 保存去重状态 ==========
+        if dedup_manager:
+            dedup_manager._save()
+            print(f"   💾 去重状态已保存")
 
         # 处理 PDF 附件
         pdf_stats = self.import_pdf_attachments(directory, vector_store, embed_model, progress)

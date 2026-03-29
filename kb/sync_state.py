@@ -1,6 +1,10 @@
 """
 同步状态管理器
 
+支持两种存储方式：
+1. SQLite 数据库（推荐）- 使用 kb/database.py
+2. JSON 文件（向后兼容）
+
 基于文件哈希的增量同步机制：
 1. 记录每个文件的 hash 和修改时间
 2. 检测文件变更、新增、删除
@@ -13,6 +17,7 @@ import time
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Dict, List, Optional, Set
+
 from llama_index.core.schema import Document
 
 
@@ -43,34 +48,68 @@ class SyncState:
     同步状态管理器
     
     维护知识库中每个文件的同步状态，支持增量同步。
+    
+    使用 SQLite 数据库存储状态。
     """
 
-    # 同步状态文件后缀
+    # 同步状态文件后缀（向后兼容）
     STATE_FILE = ".sync_state.json"
 
-    def __init__(self, kb_id: str, persist_dir: Path):
+    def __init__(self, kb_id: str, persist_dir: Path, use_sqlite: bool = True):
         """
         初始化同步状态管理器
         
         Args:
             kb_id: 知识库 ID
             persist_dir: 持久化目录
+            use_sqlite: 是否使用 SQLite（默认 True）
         """
         self.kb_id = kb_id
         self.persist_dir = Path(persist_dir)
-        self.state_file = self.persist_dir / self.STATE_FILE
-        
+        self.use_sqlite = use_sqlite
+
         # 内存中的状态：{file_path: FileState}
         self._states: Dict[str, FileState] = {}
         
-        # 加载已有状态
-        self._load()
+        # SQLite 数据库操作
+        self._sync_db = None
+        
+        if use_sqlite:
+            self._init_sqlite()
+        else:
+            self._load_json()
 
-    def _load(self):
-        """从磁盘加载状态"""
-        if self.state_file.exists():
+    def _init_sqlite(self):
+        """初始化 SQLite 数据库"""
+        from kb.database import init_sync_db
+        self._sync_db = init_sync_db()
+        self._load_sqlite()
+
+    def _load_sqlite(self):
+        """从 SQLite 加载状态"""
+        try:
+            records = self._sync_db.get_records(self.kb_id)
+            self._states = {
+                r["file_path"]: FileState(
+                    file_path=r["file_path"],
+                    absolute_path="",  # SQLite 不存储这个字段
+                    hash=r["hash"],
+                    mtime=r["mtime"],
+                    last_synced=r["last_synced"],
+                    doc_id=r["doc_id"],
+                )
+                for r in records
+            }
+        except Exception as e:
+            print(f"   ⚠️  从 SQLite 加载同步状态失败: {e}")
+            self._states = {}
+
+    def _load_json(self):
+        """从 JSON 文件加载状态（向后兼容）"""
+        state_file = self.persist_dir / self.STATE_FILE
+        if state_file.exists():
             try:
-                with open(self.state_file, "r", encoding="utf-8") as f:
+                with open(state_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     self._states = {
                         path: FileState.from_dict(state)
@@ -80,11 +119,11 @@ class SyncState:
                 print(f"   ⚠️  加载同步状态失败: {e}")
                 self._states = {}
 
-    def _save(self):
-        """保存状态到磁盘"""
+    def _save_json(self):
+        """保存状态到 JSON 文件（向后兼容）"""
         self.persist_dir.mkdir(parents=True, exist_ok=True)
         try:
-            with open(self.state_file, "w", encoding="utf-8") as f:
+            with open(self.persist_dir / self.STATE_FILE, "w", encoding="utf-8") as f:
                 json.dump(
                     {path: state.to_dict() for path, state in self._states.items()},
                     f,
@@ -144,6 +183,19 @@ class SyncState:
             doc_id=doc_id,
         )
         self._states[file_path] = state
+
+        # 持久化
+        if self.use_sqlite and self._sync_db:
+            self._sync_db.update_state(
+                kb_id=self.kb_id,
+                file_path=file_path,
+                hash=state.hash,
+                mtime=state.mtime,
+                doc_id=doc_id,
+            )
+        else:
+            self._save_json()
+
         return state
 
     def remove_state(self, file_path: str) -> Optional[FileState]:
@@ -156,7 +208,15 @@ class SyncState:
         Returns:
             被移除的 FileState 或 None
         """
-        return self._states.pop(file_path, None)
+        state = self._states.pop(file_path, None)
+        
+        if state:
+            if self.use_sqlite and self._sync_db:
+                self._sync_db.remove(self.kb_id, file_path)
+            else:
+                self._save_json()
+        
+        return state
 
     def has_changed(self, file_path: str, absolute_path: str, content: str) -> bool:
         """
@@ -240,7 +300,11 @@ class SyncState:
     def clear(self):
         """清空所有状态"""
         self._states.clear()
-        self._save()
+        
+        if self.use_sqlite and self._sync_db:
+            self._sync_db.clear(self.kb_id)
+        else:
+            self._save_json()
 
     def cleanup_orphaned(self, valid_doc_ids: Set[str]):
         """
@@ -258,7 +322,6 @@ class SyncState:
             self.remove_state(file_path)
         
         if orphaned:
-            self._save()
             print(f"   🗑️  清理了 {len(orphaned)} 条孤立记录")
 
     def get_stats(self) -> dict:

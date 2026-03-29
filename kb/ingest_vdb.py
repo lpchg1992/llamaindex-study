@@ -1,511 +1,578 @@
 #!/usr/bin/env python3
 """
-知识库导入脚本 - 向量数据库版本
+知识库导入脚本 - 并行多端点版本
 
-支持增量同步：
-- 基于文件哈希检测变更
-- 自动处理新增、更新、删除
-- 手动触发
+支持增量同步 + 本地/远程 Ollama 并行处理：
+- 任务提交和执行分离
+- 本地和远程 Ollama 同时处理
+- 实时进度查询
 
 用法:
-    python -m kb.ingest_vdb                    # 增量导入所有知识库
-    python -m kb.ingest_vdb --list            # 列出所有知识库状态
-    python -m kb.ingest_vdb --kb swine_nutrition  # 只导入指定知识库
-    python -m kb.ingest_vdb --rebuild          # 重建所有知识库（强制全量）
-    python -m kb.ingest_vdb --stats            # 查看统计信息
-    python -m kb.ingest_vdb --show-changes     # 显示变更但不执行
+    python -m kb.ingest_vdb                    # 提交所有知识库导入任务
+    python -m kb.ingest_vdb --kb tech_tools   # 提交指定知识库导入任务
+    python -m kb.ingest_vdb --tasks           # 查看任务状态
+    python -m kb.ingest_vdb --list            # 列出知识库
+    python -m kb.ingest_vdb --show-changes    # 显示变更
 """
 
 import argparse
+import asyncio
 import sys
 import time
 from pathlib import Path
 
-# 添加项目根目录到 path
 sys.path.insert(0, str(Path(__file__).parent.parent))
-
-# 加载环境变量
 from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
 
+from llamaindex_study.logger import get_logger
+logger = get_logger(__name__)
+
+
+# ==================== LanceDB 写入队列 ====================
+
+class LanceDBWriteQueue:
+    """
+    LanceDB 写入队列
+    
+    确保串行写入，避免数据库锁定
+    """
+    _instance = None
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+    
+    def __init__(self):
+        if self._initialized:
+            return
+        self._initialized = True
+        self._queue = asyncio.Queue()
+        self._running = True
+        self._worker_task = None
+        import concurrent.futures
+        self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    
+    async def _worker(self):
+        """写入 worker"""
+        while self._running:
+            try:
+                item = await asyncio.wait_for(self._queue.get(), timeout=0.5)
+                lance_store, nodes, kb_id = item
+                
+                if lance_store and nodes:
+                    try:
+                        # 在线程池中执行同步写入
+                        loop = asyncio.get_event_loop()
+                        await loop.run_in_executor(
+                            self._executor,
+                            lambda: lance_store.add(nodes)
+                        )
+                    except Exception as e:
+                        logger.error(f"LanceDB 写入失败 ({kb_id}): {e}")
+                
+                self._queue.task_done()
+            except asyncio.TimeoutError:
+                continue
+            except Exception as e:
+                logger.error(f"写入队列错误: {e}")
+    
+    async def start(self):
+        """启动写入 worker"""
+        if self._worker_task is None:
+            self._worker_task = asyncio.create_task(self._worker())
+    
+    def stop(self):
+        """停止写入 worker"""
+        self._running = False
+        if self._worker_task:
+            self._worker_task.cancel()
+    
+    async def enqueue(self, lance_store, nodes, kb_id: str):
+        """添加写入任务"""
+        await self._queue.put((lance_store, nodes, kb_id))
+
+
+# 全局写入队列
+lance_write_queue = LanceDBWriteQueue()
+
 from kb.registry import KnowledgeBaseRegistry
-from kb.obsidian_reader import ObsidianReader
-from kb.sync_state import SyncState
-from llamaindex_study.vector_store import (
-    VectorStoreType,
-    create_vector_store,
-    get_default_vector_store,
-)
+from kb.deduplication import DeduplicationManager
+from kb.task_queue import TaskQueue, TaskType, TaskStatus
+from kb.task_executor import TaskExecutor
+from llamaindex_study.vector_store import VectorStoreType, create_vector_store, get_default_vector_store
 
 
-def configure_embed_model():
-    """配置全局 Embedding 模型"""
-    from llama_index.core import Settings
-    from llama_index.embeddings.ollama import OllamaEmbedding
+# ==================== 任务提交 ====================
 
-    Settings.embed_model = OllamaEmbedding(
-        model_name="bge-m3",
-        base_url="http://localhost:11434",
+def submit_ingest_task(kb_id: str, rebuild: bool = False, force_delete: bool = True) -> str:
+    """提交知识库导入任务"""
+    task_queue = TaskQueue()
+    
+    task_id = task_queue.submit_task(
+        task_type=TaskType.OBSIDIAN.value,
+        kb_id=kb_id,
+        params={"rebuild": rebuild, "force_delete": force_delete, "engine": "lancedb"},
+        source=f"obsidian ingest: {kb_id}",
     )
-    Settings.chunk_size = 512
-    Settings.embed_batch_size = 3  # 极小批量
+    
+    return task_id
 
 
-def delete_nodes_by_ids(vector_store, doc_ids: list):
-    """
-    根据 doc_id 删除节点
+def submit_all_ingest_tasks(rebuild: bool = False) -> list:
+    """提交所有知识库的导入任务"""
+    registry = KnowledgeBaseRegistry()
+    results = []
     
-    Args:
-        vector_store: 向量存储
-        doc_ids: 要删除的 doc_id 列表
-    """
-    if not doc_ids:
-        return 0
+    for kb in registry.list_all():
+        task_id = submit_ingest_task(kb.id, rebuild=rebuild)
+        results.append((kb.id, task_id, kb.name))
     
-    lance_store = vector_store._get_lance_vector_store()
+    return results
+
+
+# ==================== 并行任务执行器 ====================
+
+class ParallelIngestExecutor:
+    """并行导入执行器 - 本地/远程 Ollama 同时工作"""
     
-    try:
-        # 读取现有数据
-        existing = lance_store.get_all_doc_ids()
-        to_keep = [id for id in existing if id not in doc_ids]
+    def __init__(self):
+        pass
+    
+    async def execute(self, task_id: str):
+        """执行导入任务"""
+        task_queue = TaskQueue()
+        task = task_queue.get_task(task_id)
         
-        # 删除整个表重建
-        table_name = vector_store.table_name
-        persist_dir = vector_store.persist_dir
+        if not task or task.status != TaskStatus.PENDING.value:
+            return
         
-        import lancedb
-        db = lancedb.connect(str(persist_dir))
-        db.drop_table(table_name, ignore_missing=True)
-        
-        # 重新添加保留的数据
-        if to_keep:
-            # 重新查询并添加
-            for doc_id in to_keep:
+        try:
+            task_queue.start_task(task_id)
+            
+            kb_id = task.kb_id
+            params = task.params
+            rebuild = params.get("rebuild", False)
+            force_delete = params.get("force_delete", True)
+            
+            task_queue.update_progress(task_id, message=f"开始导入: {kb_id}")
+            
+            # ===== 准备阶段 =====
+            registry = KnowledgeBaseRegistry()
+            kb = registry.get(kb_id)
+            
+            if not kb:
+                raise ValueError(f"知识库不存在: {kb_id}")
+            
+            vault_root = Path.home() / "Documents" / "Obsidian Vault"
+            persist_dir = kb.persist_dir
+            
+            # 向量存储
+            vs = create_vector_store(VectorStoreType.LANCEDB, persist_dir=persist_dir, table_name=kb_id)
+            
+            # 去重管理器
+            dedup_manager = DeduplicationManager(kb_id, persist_dir)
+            
+            # 收集文件
+            all_files = []
+            for source_path in kb.source_paths_abs(vault_root):
+                if source_path.exists():
+                    all_files.extend(source_path.rglob("*.md"))
+            
+            task_queue.update_progress(task_id, total=len(all_files),
+                                     message=f"扫描到 {len(all_files)} 个文件")
+            
+            # 重建模式
+            if rebuild:
+                dedup_manager.clear()
                 try:
-                    # 获取节点并重新添加
-                    pass  # 简化处理：删除后重建
+                    vs.delete_table()
+                    task_queue.update_progress(task_id, message="已清空旧数据")
                 except:
                     pass
-        
-        return len(doc_ids)
-    except Exception as e:
-        print(f"   ⚠️  删除节点失败: {e}")
-        return 0
-
-
-def ingest_kb(
-    kb_id: str,
-    rebuild: bool = False,
-    verbose: bool = False,
-    vector_store_type: VectorStoreType = VectorStoreType.LANCEDB,
-    show_changes_only: bool = False,
-    force_delete: bool = True,
-) -> bool:
-    """
-    导入单个知识库到向量数据库（支持增量同步）
-    
-    Args:
-        kb_id: 知识库 ID
-        rebuild: 强制重建
-        verbose: 显示详细信息
-        vector_store_type: 向量数据库类型
-        show_changes_only: 只显示变更，不执行
-        force_delete: 是否删除已移除的文件
-    
-    Returns:
-        bool: 是否成功
-    """
-    registry = KnowledgeBaseRegistry()
-    kb = registry.get(kb_id)
-
-    if kb is None:
-        print(f"❌ 知识库不存在: {kb_id}")
-        return False
-
-    persist_dir = kb.persist_dir
-    vault_root = Path.home() / "Documents" / "Obsidian Vault"
-
-    # 创建向量存储
-    try:
-        vector_store = create_vector_store(
-            store_type=vector_store_type,
-            persist_dir=persist_dir,
-            table_name=kb_id,
-        )
-    except Exception as e:
-        print(f"❌ 创建向量存储失败: {e}")
-        return False
-
-    # 初始化同步状态
-    sync_state = SyncState(kb_id, persist_dir)
-
-    # 收集所有源路径的文件
-    all_files = []
-    for source_path in kb.source_paths_abs(vault_root):
-        if not source_path.exists():
-            continue
-        # 递归收集所有 md 文件
-        all_files.extend(source_path.rglob("*.md"))
-
-    print(f"\n📚 知识库: {kb.name}")
-    print(f"   Vault: {vault_root}")
-    print(f"   存储: {persist_dir}")
-
-    # 强制重建模式
-    if rebuild:
-        print(f"\n   🔄 强制重建模式：清空现有索引")
-        sync_state.clear()
-        try:
-            lance_store = vector_store._get_lance_vector_store()
-            table_name = vector_store.table_name
-            import lancedb
-            db = lancedb.connect(str(persist_dir))
-            db.drop_table(table_name, ignore_missing=True)
-            print(f"   ✅ 已清空现有数据")
-        except Exception as e:
-            print(f"   ⚠️  清空失败: {e}")
-
-    # 检测变更
-    to_add, to_update, to_delete = sync_state.detect_changes(all_files, vault_root)
-
-    print(f"\n   📊 文件状态:")
-    print(f"      当前文件: {len(all_files)}")
-    print(f"      已同步: {len(sync_state.get_doc_ids())}")
-    print(f"      新增: {len(to_add)}")
-    print(f"      更新: {len(to_update)}")
-    print(f"      删除: {len(to_delete)}")
-
-    if show_changes_only:
-        if to_add:
-            print(f"\n   📝 新增文件:")
-            for rel_path, _ in to_add[:10]:
-                print(f"      + {rel_path}")
-            if len(to_add) > 10:
-                print(f"      ... 还有 {len(to_add) - 10} 个")
-        
-        if to_update:
-            print(f"\n   📝 更新文件:")
-            for rel_path, _, _ in to_update[:10]:
-                print(f"      ~ {rel_path}")
-            if len(to_update) > 10:
-                print(f"      ... 还有 {len(to_update) - 10} 个")
-        
-        if to_delete:
-            print(f"\n   📝 删除文件:")
-            for rel_path, doc_id in to_delete[:10]:
-                print(f"      - {rel_path} (doc_id: {doc_id[:20]}...)")
-            if len(to_delete) > 10:
-                print(f"      ... 还有 {len(to_delete) - 10} 个")
-        
-        return True
-
-    # 如果没有变更
-    if not to_add and not to_update and not to_delete:
-        print(f"\n   ⏭️  没有检测到变更，跳过")
-        return True
-
-    # 处理删除的文件
-    if to_delete and force_delete:
-        print(f"\n   🗑️  处理删除的文件...")
-        doc_ids_to_delete = [doc_id for _, doc_id in to_delete]
-        deleted_count = 0
-        
-        try:
-            lance_store = vector_store._get_lance_vector_store()
             
-            # 获取现有数据
-            import lancedb
-            db = lancedb.connect(str(persist_dir))
-            table_name = vector_store.table_name
+            # 检测变更
+            to_add, to_update, to_delete, unchanged = dedup_manager.detect_changes(all_files, vault_root)
             
-            if table_name in db.list_tables():
-                table = db.open_table(table_name)
-                
-                # 过滤掉要删除的
-                existing_data = table.to_pandas()
-                if not existing_data.empty and "_row_id" in existing_data.columns:
-                    # 找到要删除的行
-                    to_keep_mask = ~existing_data["_row_id"].astype(str).isin(doc_ids_to_delete)
-                    remaining = existing_data[to_keep_mask]
+            if not to_add and not to_update:
+                task_queue.complete_task(task_id, result={"message": "没有变更"})
+                return
+            
+            # 处理删除
+            if to_delete and force_delete:
+                self._process_deletes(persist_dir, kb_id, to_delete, dedup_manager)
+            
+            # 收集要处理的文档
+            all_docs = [(c.rel_path, c.abs_path) for c in to_add + to_update]
+            
+            task_queue.update_progress(task_id,
+                                     message=f"新增{len(to_add)} 更新{len(to_update)}")
+            
+            # ===== Chunk 级并行处理（轮流使用两个端点）=====
+            from llama_index.embeddings.ollama import OllamaEmbedding
+            from llama_index.core.node_parser import SentenceSplitter
+            from llama_index.core.schema import Document as LlamaDocument
+            
+            # 端点配置
+            endpoints = [
+                {"name": "本地", "url": "http://localhost:11434"},
+                {"name": "远程", "url": "http://192.168.31.169:11434"},
+            ]
+            
+            lance_store = vs._get_lance_vector_store()
+            node_parser = SentenceSplitter(chunk_size=512, chunk_overlap=50)
+            
+            # 启动写入队列
+            await lance_write_queue.start()
+            
+            # 为每个端点创建 embed 模型
+            embed_models = {
+                ep["name"]: OllamaEmbedding(model_name="bge-m3", base_url=ep["url"])
+                for ep in endpoints
+            }
+            
+            processed_files = 0
+            processed_chunks = 0
+            endpoint_idx = 0  # 轮流使用端点
+            
+            task_queue.update_progress(task_id, message=f"开始处理 {len(all_docs)} 个文件")
+            
+            for rel_path, abs_path in all_docs:
+                try:
+                    content = abs_path.read_text(encoding="utf-8", errors="ignore")
                     
-                    # 删除表并重建
-                    db.drop_table(table_name)
-                    if not remaining.empty:
-                        table = db.create_table(table_name, data=remaining)
-                        deleted_count = len(existing_data) - len(remaining)
-                    else:
-                        deleted_count = len(existing_data)
+                    doc = LlamaDocument(
+                        text=content,
+                        metadata={"source": "obsidian", "file_path": str(abs_path),
+                                 "relative_path": rel_path},
+                        id_=rel_path,
+                    )
+                    
+                    nodes = node_parser.get_nodes_from_documents([doc])
+                    
+                    # 为每个 chunk 轮流使用端点
+                    for j, node in enumerate(nodes):
+                        node.id_ = f"{rel_path}_{j}"
                         
-            print(f"   ✅ 删除了 {deleted_count} 条记录")
-        except Exception as e:
-            print(f"   ⚠️  删除失败: {e}")
-        
-        # 更新同步状态
-        for file_path, doc_id in to_delete:
-            sync_state.remove_state(file_path)
-
-    # 收集所有要处理的文档
-    from llama_index.core.schema import Document as LlamaDocument
-
-    all_docs_to_process = []
-    
-    # 处理新增
-    for rel_path, abs_path in to_add:
-        try:
-            content = abs_path.read_text(encoding="utf-8", errors="ignore")
-            doc = LlamaDocument(
-                text=content,
-                metadata={
-                    "source": "obsidian",
-                    "file_path": str(abs_path),
-                    "relative_path": rel_path,
-                    "file_name": abs_path.name,
-                },
-                id_=rel_path,  # 使用相对路径作为 ID
-            )
-            all_docs_to_process.append(("add", rel_path, abs_path, doc))
-        except Exception as e:
-            print(f"   ⚠️  读取失败 {rel_path}: {e}")
-
-    # 处理更新
-    for rel_path, abs_path, old_doc_id in to_update:
-        try:
-            content = abs_path.read_text(encoding="utf-8", errors="ignore")
-            doc = LlamaDocument(
-                text=content,
-                metadata={
-                    "source": "obsidian",
-                    "file_path": str(abs_path),
-                    "relative_path": rel_path,
-                    "file_name": abs_path.name,
-                },
-                id_=rel_path,
-            )
-            all_docs_to_process.append(("update", rel_path, abs_path, doc, old_doc_id))
-        except Exception as e:
-            print(f"   ⚠️  读取失败 {rel_path}: {e}")
-
-    if not all_docs_to_process:
-        print(f"\n   ⏭️  没有需要处理的文档")
-        sync_state._save()
-        return True
-
-    print(f"\n   📦 处理 {len(all_docs_to_process)} 个文件...")
-
-    # 配置 embedding 模型
-    configure_embed_model()
-
-    from llama_index.core import Settings
-    from llama_index.core.node_parser import SentenceSplitter
-    from llama_index.embeddings.ollama import OllamaEmbedding
-
-    embed_model = OllamaEmbedding(
-        model_name="bge-m3",
-        base_url="http://localhost:11434",
-    )
-    Settings.embed_model = embed_model
-
-    node_parser = SentenceSplitter(chunk_size=512, chunk_overlap=50)
-
-    start_time = time.time()
-    total_nodes = 0
-    processed_files = 0
-
-    # 分批处理
-    batch_size = 10
-    batches = [all_docs_to_process[i:i+batch_size] for i in range(0, len(all_docs_to_process), batch_size)]
-
-    for batch_idx, batch in enumerate(batches):
-        print(f"   批次 {batch_idx+1}/{len(batches)}...", end="", flush=True)
-
-        batch_nodes = []
-        batch_info = []  # [(rel_path, doc_id), ...]
-
-        for item in batch:
-            if item[0] == "add":
-                _, rel_path, abs_path, doc = item
-                nodes = node_parser.get_nodes_from_documents([doc])
-                
-                # 更新同步状态
-                content = abs_path.read_text(encoding="utf-8", errors="ignore")
-                doc_id = rel_path  # 使用文件路径作为 doc_id
-                sync_state.update_state(rel_path, str(abs_path), content, doc_id)
-                
-                for node in nodes:
-                    node.id_ = f"{rel_path}_{nodes.index(node)}"
-                    batch_nodes.append(node)
-                    batch_info.append((rel_path, node.id_))
+                        # 轮流选择端点
+                        ep = endpoints[endpoint_idx % len(endpoints)]
+                        endpoint_idx += 1
+                        
+                        try:
+                            embedding = embed_models[ep["name"]].get_text_embedding(node.get_content())
+                            node.embedding = embedding
+                        except Exception as e:
+                            logger.warning(f"[{ep['name']}] Embedding 失败: {e}")
+                            node.embedding = [0.0] * 1024
                     
-            elif item[0] == "update":
-                _, rel_path, abs_path, doc, old_doc_id = item
-                nodes = node_parser.get_nodes_from_documents([doc])
-                
-                # 更新同步状态
-                content = abs_path.read_text(encoding="utf-8", errors="ignore")
-                doc_id = rel_path
-                sync_state.update_state(rel_path, str(abs_path), content, doc_id)
-                
-                for node in nodes:
-                    node.id_ = f"{rel_path}_{nodes.index(node)}"
-                    batch_nodes.append(node)
-                    batch_info.append((rel_path, node.id_))
-
-        # 生成 embeddings
-        for node in batch_nodes:
-            try:
-                node.embedding = embed_model.get_text_embedding(node.get_content())
-            except Exception as e:
-                print(f"\n      ⚠️  Embedding 失败: {e}")
-                continue
-
-        # 保存到向量数据库
-        try:
-            lance_store = vector_store._get_lance_vector_store()
-            lance_store.add(batch_nodes)
-            total_nodes += len(batch_nodes)
-            processed_files += len(batch)
-            print(f" -> {len(batch_nodes)} 节点", end="")
+                    if nodes:
+                        # 发送到写入队列（串行执行）
+                        await lance_write_queue.enqueue(lance_store, nodes, kb_id)
+                        processed_chunks += len(nodes)
+                    
+                    dedup_manager.mark_processed(abs_path, content, rel_path,
+                                               chunk_count=len(nodes), vault_root=vault_root)
+                    
+                    processed_files += 1
+                    
+                    if processed_files % 10 == 0:
+                        task_queue.update_progress(task_id,
+                                                 message=f"处理 {processed_files}/{len(all_docs)} ({processed_chunks} chunks)")
+                    
+                except Exception as e:
+                    logger.warning(f"处理失败 {rel_path}: {e}")
+            
+            # 等待写入队列清空
+            await lance_write_queue._queue.join()
+            
+            # 保存去重状态
+            dedup_manager._save()
+            
+            task_queue.complete_task(task_id, result={
+                "kb_id": kb_id,
+                "files": processed_files,
+                "nodes": processed_chunks,
+            })
+            
+            logger.info(f"任务完成: {task_id}, {processed_files} 文件, {processed_chunks} chunks")
+            
         except Exception as e:
-            print(f"\n      ⚠️  保存失败: {e}")
+            logger.error(f"任务失败 {task_id}: {e}")
+            task_queue.complete_task(task_id, error=str(e))
 
+            
+        except Exception as e:
+            logger.error(f"任务失败 {task_id}: {e}")
+            task_queue.complete_task(task_id, error=str(e))
+    
+    def _process_deletes(self, persist_dir, kb_id, to_delete, dedup_manager):
+        """处理删除的文件"""
+        import lancedb
+        doc_ids = [c.doc_id for c in to_delete if c.doc_id]
+        
+        try:
+            db = lancedb.connect(str(persist_dir))
+            if db.list_table_names():
+                table = db.open_table(kb_id)
+                data = table.to_pandas()
+                
+                if not data.empty and "_row_id" in data.columns:
+                    to_keep = ~data["_row_id"].astype(str).isin(doc_ids)
+                    remaining = data[to_keep]
+                    
+                    db.drop_table(kb_id)
+                    if not remaining.empty:
+                        db.create_table(kb_id, data=remaining)
+        except Exception as e:
+            logger.error(f"删除处理失败: {e}")
+        
+        for change in to_delete:
+            dedup_manager.remove_record(change.rel_path)
+
+
+# ==================== 任务调度器 ====================
+
+class TaskScheduler:
+    """
+    任务调度器
+    
+    架构：
+    - 任务级别：串行执行（避免 LanceDB 数据库锁）
+    - 文件级别：并行处理（本地+远程 Ollama 同时工作）
+    """
+    
+    def __init__(self, max_concurrent: int = 1):
+        self.queue = TaskQueue()
+        self.executor = ParallelIngestExecutor()
+        self._running = True
+        self.max_concurrent = max_concurrent
+    
+    async def run(self):
+        """运行调度器"""
+        logger.info(f"📋 任务调度器已启动 (最大并发: {self.max_concurrent})")
+        
+        while self._running:
+            try:
+                # 获取当前运行中的任务数
+                running_count = len(self.executor._running_tasks)
+                
+                # 如果还有并发余量，提交新任务
+                if running_count < self.max_concurrent:
+                    pending = self.queue.get_pending(limit=self.max_concurrent - running_count)
+                    
+                    for task in pending:
+                        if task.task_id in self.executor._running_tasks:
+                            continue
+                        
+                        self.executor._running_tasks[task.task_id] = asyncio.create_task(
+                            self.executor.execute(task.task_id))
+                        logger.info(f"▶️  启动任务: {task.task_id[:8]} ({task.kb_id})")
+                
+                # 清理已完成的任务引用
+                done = [tid for tid, t in list(self.executor._running_tasks.items()) 
+                       if t.done() if hasattr(t, 'done')]
+                for tid in done:
+                    self.executor._running_tasks.pop(tid, None)
+                
+            except Exception as e:
+                logger.error(f"调度器错误: {e}")
+            
+            await asyncio.sleep(1)
+        
+        logger.info("📋 任务调度器已停止")
+    
+    def stop(self):
+        """停止调度器"""
+        self._running = False
+
+
+# ==================== 后台运行 ====================
+
+def start_background_executor():
+    """启动后台任务执行器"""
+    import threading
+    
+    loop = asyncio.new_event_loop()
+    
+    def run_loop():
+        asyncio.set_event_loop(loop)
+        scheduler = TaskScheduler()
+        try:
+            loop.run_until_complete(scheduler.run())
+        except KeyboardInterrupt:
+            pass
+        finally:
+            loop.close()
+    
+    thread = threading.Thread(target=run_loop, daemon=True)
+    thread.start()
+    
+    return thread
+
+
+# ==================== 辅助函数 ====================
+
+def show_tasks():
+    """显示任务队列状态"""
+    task_queue = TaskQueue()
+    
+    print("\n📋 任务队列状态\n")
+    
+    all_tasks = task_queue.list_tasks(limit=100)
+    pending = [t for t in all_tasks if t.status == TaskStatus.PENDING.value]
+    running = [t for t in all_tasks if t.status == TaskStatus.RUNNING.value]
+    completed = [t for t in all_tasks if t.status == TaskStatus.COMPLETED.value]
+    failed = [t for t in all_tasks if t.status == TaskStatus.FAILED.value]
+    
+    print(f"   ⏳ 等待中: {len(pending)}")
+    print(f"   🔄 执行中: {len(running)}")
+    print(f"   ✅ 已完成: {len(completed)}")
+    print(f"   ❌ 失败: {len(failed)}")
+    
+    if running:
+        print("\n🔄 正在执行:")
+        for task in running:
+            print(f"   • {task.kb_id}: {task.progress}% - {task.message}")
+    
+    if pending:
+        print("\n⏳ 等待中:")
+        for task in pending[:5]:
+            print(f"   • {task.kb_id}: {task.message}")
+    
+    if completed:
+        print("\n✅ 最近完成:")
+        for task in completed[:3]:
+            print(f"   • {task.kb_id}: {task.result}")
+    
+    if failed:
+        print("\n❌ 失败:")
+        for task in failed[:3]:
+            print(f"   • {task.kb_id}: {task.error}")
+    
+    print()
+
+
+def show_changes(kb_id: str = None):
+    """显示变更"""
+    registry = KnowledgeBaseRegistry()
+    vault_root = Path.home() / "Documents" / "Obsidian Vault"
+    
+    if kb_id:
+        kbs = [registry.get(kb_id)]
+    else:
+        kbs = registry.list_all()
+    
+    print("\n📊 变更检测\n")
+    
+    for kb in kbs:
+        if not kb:
+            continue
+        
+        dedup_manager = DeduplicationManager(kb.id, kb.persist_dir)
+        
+        all_files = []
+        for source_path in kb.source_paths_abs(vault_root):
+            if source_path.exists():
+                all_files.extend(source_path.rglob("*.md"))
+        
+        to_add, to_update, to_delete, unchanged = dedup_manager.detect_changes(all_files, vault_root)
+        
+        print(f"{kb.name}:")
+        print(f"   当前文件: {len(all_files)}")
+        print(f"   新增: {len(to_add)} | 更新: {len(to_update)} | 删除: {len(to_delete)}")
         print()
-
-    elapsed = time.time() - start_time
-
-    # 保存同步状态
-    sync_state._save()
-
-    print(f"\n   ✅ 完成!")
-    print(f"   ⏱️  耗时: {elapsed:.1f}秒")
-    print(f"   📝 处理文件: {processed_files}")
-    print(f"   📊 生成节点: {total_nodes}")
-
-    return True
 
 
 def list_knowledge_bases():
-    """列出所有知识库及其状态"""
+    """列出所有知识库"""
     registry = KnowledgeBaseRegistry()
-
+    
     print("\n📚 知识库列表\n")
-    print(f"{'ID':<20} {'名称':<20} {'状态':<12} {'文件':<8} {'节点':<8} {'向量库':<10}")
-    print("-" * 85)
-
+    print(f"{'ID':<20} {'名称':<20} {'状态':<12} {'文件':<8} {'节点':<8}")
+    print("-" * 75)
+    
     for kb in registry.list_all():
         vs = get_default_vector_store(persist_dir=kb.persist_dir)
         vs.table_name = kb.id
         stats = vs.get_stats()
-        exists = stats.get("exists", False)
         
-        # 获取同步状态
-        sync_state = SyncState(kb.id, kb.persist_dir)
-        sync_stats = sync_state.get_stats()
-
-        status = "✅ 已索引" if exists else "⏳ 未索引"
-        file_count = sync_stats.get("total_files", "-")
-        node_count = stats.get("row_count", "-")
-
-        print(f"{kb.id:<20} {kb.name:<20} {status:<12} {file_count:<8} {node_count:<8} lancedb")
-
+        dedup_manager = DeduplicationManager(kb.id, kb.persist_dir)
+        dedup_stats = dedup_manager.get_stats()
+        
+        status = "✅ 已索引" if stats.get("exists") else "⏳ 未索引"
+        
+        print(f"{kb.id:<20} {kb.name:<20} {status:<12} "
+              f"{dedup_stats.get('total_files', '-'):<8} {stats.get('row_count', '-'):<8}")
+    
     print()
 
 
-def show_stats():
-    """显示所有知识库的统计信息"""
-    registry = KnowledgeBaseRegistry()
-
-    print("\n📊 知识库统计信息\n")
-    print(f"{'ID':<20} {'名称':<20} {'文件':<8} {'节点':<10} {'存储路径':<40}")
-    print("-" * 105)
-
-    total_files = 0
-    total_nodes = 0
-
-    for kb in registry.list_all():
-        vs = get_default_vector_store(persist_dir=kb.persist_dir)
-        vs.table_name = kb.id
-        stats = vs.get_stats()
-
-        sync_state = SyncState(kb.id, kb.persist_dir)
-        sync_stats = sync_state.get_stats()
-
-        file_count = sync_stats.get("total_files", 0)
-        node_count = stats.get("row_count", 0)
-        
-        total_files += file_count
-        total_nodes += node_count
-
-        print(f"{kb.id:<20} {kb.name:<20} {file_count:<8} {node_count:<10} {str(kb.persist_dir):<40}")
-
-    print("-" * 105)
-    print(f"{'总计':<20} {'':<20} {total_files:<8} {total_nodes:<10}")
-    print()
-
+# ==================== 主程序 ====================
 
 def main():
-    parser = argparse.ArgumentParser(description="知识库导入工具（支持增量同步）")
-    parser.add_argument("--list", "-l", action="store_true", help="列出所有知识库")
+    parser = argparse.ArgumentParser(description="知识库导入工具（并行多端点版）")
+    parser.add_argument("--list", "-l", action="store_true", help="列出知识库")
     parser.add_argument("--kb", "-k", type=str, help="指定知识库 ID")
-    parser.add_argument("--rebuild", "-r", action="store_true", help="强制重建（清空后重新导入）")
-    parser.add_argument("--verbose", "-v", action="store_true", help="显示详细信息")
-    parser.add_argument("--engine", "-e", type=str, default="lancedb",
-                        choices=["lancedb", "chroma", "qdrant", "default"],
-                        help="向量数据库引擎")
-    parser.add_argument("--stats", "-s", action="store_true", help="显示统计信息")
-    parser.add_argument("--show-changes", action="store_true", help="显示变更但不执行")
-    parser.add_argument("--no-delete", action="store_true", help="不同步删除的文件")
-
+    parser.add_argument("--rebuild", "-r", action="store_true", help="强制重建")
+    parser.add_argument("--show-changes", action="store_true", help="显示变更")
+    parser.add_argument("--tasks", "-t", action="store_true", help="查看任务队列")
+    parser.add_argument("--no-delete", action="store_true", help="不同步删除")
+    
     args = parser.parse_args()
-
-    engine_map = {
-        "lancedb": VectorStoreType.LANCEDB,
-        "chroma": VectorStoreType.CHROMA,
-        "qdrant": VectorStoreType.QDRANT,
-        "default": VectorStoreType.DEFAULT,
-    }
-    vector_store_type = engine_map.get(args.engine, VectorStoreType.LANCEDB)
-
+    
     if args.list:
         list_knowledge_bases()
         return
-
-    if args.stats:
-        show_stats()
+    
+    if args.show_changes:
+        show_changes(args.kb)
         return
-
+    
+    if args.tasks:
+        show_tasks()
+        return
+    
+    # 提交任务
     registry = KnowledgeBaseRegistry()
-
+    
     if args.kb:
-        success = ingest_kb(
-            args.kb,
-            rebuild=args.rebuild,
-            verbose=args.verbose,
-            vector_store_type=vector_store_type,
-            show_changes_only=args.show_changes,
-            force_delete=not args.no_delete,
-        )
-        sys.exit(0 if success else 1)
+        kb = registry.get(args.kb)
+        if not kb:
+            print(f"❌ 知识库不存在: {args.kb}")
+            sys.exit(1)
+        
+        task_id = submit_ingest_task(args.kb, rebuild=args.rebuild,
+                                    force_delete=not args.no_delete)
+        
+        print(f"\n📝 任务已提交")
+        print(f"   知识库: {kb.name}")
+        print(f"   任务ID: {task_id}")
+        print(f"\n使用 --tasks 查看进度")
+        
     else:
-        print(f"\n🚀 增量同步所有知识库（使用 {args.engine}）\n")
-
-        success_count = 0
-        fail_count = 0
-
-        for kb in registry.list_all():
-            success = ingest_kb(
-                kb.id,
-                rebuild=args.rebuild,
-                verbose=args.verbose,
-                vector_store_type=vector_store_type,
-                show_changes_only=args.show_changes,
-                force_delete=not args.no_delete,
-            )
-            if success:
-                success_count += 1
-            else:
-                fail_count += 1
-
-        print(f"\n\n🎉 完成: {success_count} 成功, {fail_count} 失败")
+        print(f"\n🚀 提交所有知识库导入任务\n")
+        
+        results = submit_all_ingest_tasks(rebuild=args.rebuild)
+        
+        print(f"已提交 {len(results)} 个任务:\n")
+        for kb_id, task_id, name in results:
+            print(f"   • {name}: {task_id}")
+    
+    # 启动后台执行器
+    print(f"\n▶️  启动后台任务执行器...")
+    executor_thread = start_background_executor()
+    
+    # 实时监控
+    print("\n📊 实时进度监控 (Ctrl+C 退出)\n")
+    
+    try:
+        while True:
+            time.sleep(5)
+            show_tasks()
+    except KeyboardInterrupt:
+        print("\n\n👋 已退出进度监控")
 
 
 if __name__ == "__main__":
