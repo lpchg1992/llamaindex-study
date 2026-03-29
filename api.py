@@ -903,6 +903,73 @@ def _ingest_obsidian_sync(kb_id: str, req: ObsidianIngestRequest):
     )
 
 
+# ============== Obsidian 全库分类导入 ==============
+
+@app.get("/obsidian/mappings")
+def list_obsidian_mappings():
+    """列出 Obsidian 知识库映射配置"""
+    from kb.obsidian_config import OBSIDIAN_KB_MAPPINGS
+    
+    return {
+        "mappings": [
+            {
+                "kb_id": m.kb_id,
+                "name": m.name,
+                "folders": m.folders,
+                "description": m.description,
+            }
+            for m in OBSIDIAN_KB_MAPPINGS
+        ]
+    }
+
+
+@app.post("/obsidian/import-all")
+def import_obsidian_all():
+    """
+    Obsidian 全库分类导入
+    
+    扫描 vault 中所有文件夹，按配置分类到不同知识库
+    """
+    from kb.task_queue import task_queue
+    from kb.task_executor import task_executor
+    from kb.obsidian_config import OBSIDIAN_KB_MAPPINGS
+    
+    # 为每个知识库提交导入任务
+    task_ids = []
+    for mapping in OBSIDIAN_KB_MAPPINGS:
+        if not mapping.folders:  # 跳过默认库（会单独导入）
+            continue
+            
+        task_id = task_queue.submit_task(
+            task_type="obsidian_classified",
+            kb_id=mapping.kb_id,
+            params={
+                "folders": mapping.folders,
+                "async_mode": True,
+            },
+            source=f"obsidian:{mapping.name}",
+        )
+        
+        # 启动任务
+        loop = get_executor_loop()
+        asyncio.run_coroutine_threadsafe(
+            task_executor.execute_task(task_id),
+            loop
+        )
+        
+        task_ids.append({
+            "kb_id": mapping.kb_id,
+            "name": mapping.name,
+            "task_id": task_id,
+        })
+    
+    return {
+        "status": "pending",
+        "message": f"已提交 {len(task_ids)} 个分类导入任务",
+        "tasks": task_ids,
+    }
+
+
 @app.post("/kbs/{kb_id}/rebuild")
 def rebuild_kb(kb_id: str, async_mode: bool = True):
     """重建知识库"""

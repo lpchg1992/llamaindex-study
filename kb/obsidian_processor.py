@@ -238,6 +238,8 @@ class ObsidianImporter:
         progress: ProcessingProgress = None,
         rebuild: bool = False,
         on_progress: Optional[callable] = None,
+        exclude_patterns: Optional[List[str]] = None,
+        recursive: bool = True,
     ) -> dict:
         """
         导入整个目录
@@ -249,6 +251,8 @@ class ObsidianImporter:
             progress: 进度记录
             rebuild: 是否重建
             on_progress: 进度回调
+            exclude_patterns: 排除的文件模式（可选）
+            recursive: 是否递归（可选）
 
         Returns:
             导入统计
@@ -260,8 +264,13 @@ class ObsidianImporter:
         self.processor.set_embed_model(embed_model)
         node_parser = self.processor.node_parser
 
+        # 保存排除模式并设置新的
+        original_exclude = self.exclude_patterns.copy()
+        if exclude_patterns is not None:
+            self.exclude_patterns = exclude_patterns
+
         # 收集文件
-        files = self.collect_files(directory)
+        files = self.collect_files(directory, recursive=recursive)
         print(f"   找到 {len(files)} 个笔记")
 
         if not files:
@@ -333,6 +342,9 @@ class ObsidianImporter:
         # 处理 PDF 附件
         pdf_stats = self.import_pdf_attachments(directory, vector_store, embed_model, progress)
         stats["nodes"] += pdf_stats.get("nodes", 0)
+
+        # 恢复原来的排除模式
+        self.exclude_patterns = original_exclude
 
         return stats
 

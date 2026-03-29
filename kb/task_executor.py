@@ -66,6 +66,8 @@ class TaskExecutor:
                 await self._execute_zotero(task)
             elif task.task_type == "obsidian":
                 await self._execute_obsidian(task)
+            elif task.task_type == "obsidian_classified":
+                await self._execute_obsidian_classified(task)
             elif task.task_type == "generic":
                 await self._execute_generic(task)
             elif task.task_type == "rebuild":
@@ -251,31 +253,44 @@ class TaskExecutor:
         
         importer = ObsidianImporter(vault_root=vault_path)
         
-        # 收集文件
-        files = importer.collect_files(import_dir, recursive=params.get("recursive", True))
-        total_files = len(files)
+        # 获取排除模式
+        exclude_patterns = params.get("exclude_patterns", [
+            "*/image/*", "*/_resources/*", "*/.obsidian/*",
+            "*/.trash/*", "*/Z_Copilot/*", "*/copilot-custom-prompts/*"
+        ])
+        importer.exclude_patterns = exclude_patterns
         
         self.queue.update_progress(
             task.task_id,
-            total=total_files,
-            message=f"找到 {total_files} 个笔记"
+            message="开始导入笔记..."
         )
+        await self._notify_progress(task.task_id)
         
-        # 模拟处理
-        for i, _ in enumerate(files):
-            if await self._check_cancelled(task.task_id):
-                return
-            
-            progress = int((i + 1) / total_files * 100) if total_files > 0 else 0
-            self.queue.update_progress(
-                task.task_id,
-                progress=progress,
-                current=i + 1,
-                total=total_files,
-                message=f"处理: {i + 1}/{total_files}"
+        # 真正执行导入
+        try:
+            stats = importer.import_directory(
+                directory=import_dir,
+                vector_store=vs,
+                embed_model=embed_model,
+                progress=None,
+                exclude_patterns=exclude_patterns,
+                recursive=params.get("recursive", True),
             )
             
-            await asyncio.sleep(0.05)
+            self.queue.update_progress(
+                task.task_id,
+                progress=100,
+                message=f"完成！导入 {stats.get('files', 0)} 个文件，{stats.get('nodes', 0)} 个节点"
+            )
+            await self._notify_progress(task.task_id)
+            
+        except Exception as e:
+            self.queue.update_progress(
+                task.task_id,
+                message=f"导入失败: {str(e)}"
+            )
+            await self._notify_progress(task.task_id)
+            raise
         
         self.queue.update_progress(
             task.task_id,
@@ -373,6 +388,102 @@ class TaskExecutor:
             progress=100,
             message="知识库已清空"
         )
+        await self._notify_progress(task.task_id)
+    
+    async def _execute_obsidian_classified(self, task):
+        """执行 Obsidian 分类导入（按文件夹分类到不同知识库）"""
+        from kb.obsidian_processor import ObsidianImporter
+        from kb.document_processor import DocumentProcessorConfig
+        from llamaindex_study.vector_store import create_vector_store, VectorStoreType
+        from llamaindex_study.config import get_settings
+        from llama_index.embeddings.ollama import OllamaEmbedding
+        from llama_index.core import Settings
+        from pathlib import Path
+        
+        settings = get_settings()
+        kb_id = task.kb_id
+        params = task.params
+        folders = params.get("folders", [])
+        
+        # 获取 Obsidian vault 路径
+        vault_path = Path.home() / "Documents" / "Obsidian Vault"
+        
+        self.queue.update_progress(
+            task.task_id,
+            message=f"开始导入 Obsidian: {kb_id}"
+        )
+        await self._notify_progress(task.task_id)
+        
+        # 配置
+        Settings.embed_model = OllamaEmbedding(
+            model_name=settings.ollama_embed_model,
+            base_url=settings.ollama_base_url,
+        )
+        embed_model = OllamaEmbedding(
+            model_name=settings.ollama_embed_model,
+            base_url=settings.ollama_base_url,
+        )
+        
+        # 获取向量存储
+        from api import get_vector_store
+        vs = get_vector_store(kb_id)
+        
+        # 导入器
+        importer = ObsidianImporter(vault_root=vault_path)
+        
+        # 为每个文件夹创建导入目录
+        for folder in folders:
+            folder_path = vault_path / folder
+            if not folder_path.exists():
+                self.queue.update_progress(
+                    task.task_id,
+                    message=f"跳过不存在的文件夹: {folder}"
+                )
+                await self._notify_progress(task.task_id)
+                continue
+            
+            # 设置排除模式
+            importer.exclude_patterns = [
+                "*/image/*", "*/_resources/*", "*/.obsidian/*",
+                "*/.trash/*", "*/Z_Copilot/*", "*/copilot-custom-prompts/*",
+                "*/Z模版/*", "*/Z_网页/*", "*/English/*", "*/IT/*",
+            ]
+            
+            self.queue.update_progress(
+                task.task_id,
+                message=f"导入文件夹: {folder}"
+            )
+            await self._notify_progress(task.task_id)
+            
+            try:
+                stats = importer.import_directory(
+                    directory=folder_path,
+                    vector_store=vs,
+                    embed_model=embed_model,
+                    progress=None,
+                    exclude_patterns=importer.exclude_patterns,
+                    recursive=True,
+                )
+                
+                self.queue.update_progress(
+                    task.task_id,
+                    message=f"完成 {folder}: {stats.get('files', 0)} 文件, {stats.get('nodes', 0)} 节点"
+                )
+                await self._notify_progress(task.task_id)
+                
+            except Exception as e:
+                self.queue.update_progress(
+                    task.task_id,
+                    message=f"导入失败 {folder}: {str(e)}"
+                )
+                await self._notify_progress(task.task_id)
+        
+        self.queue.update_progress(
+            task.task_id,
+            progress=100,
+            message="Obsidian 分类导入完成"
+        )
+        await self._notify_progress(task.task_id)
     
     def submit_and_start(self, task_id: str, loop: asyncio.AbstractEventLoop = None):
         """提交并启动任务"""
