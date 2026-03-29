@@ -20,13 +20,6 @@ from .deduplication import (
     FileChange,
     ProcessingRecord,
 )
-from .manager import (
-    KnowledgeBaseManager,
-    KnowledgeBaseStats,
-    SearchResult,
-    DataSourceType,
-    get_manager,
-)
 from .database import (
     get_db,
     get_cursor,
@@ -65,11 +58,6 @@ __all__ = [
     "ChangeType",
     "FileChange",
     "ProcessingRecord",
-    "KnowledgeBaseManager",
-    "KnowledgeBaseStats",
-    "SearchResult",
-    "DataSourceType",
-    "get_manager",
     "get_db",
     "get_cursor",
     "DatabaseManager",
