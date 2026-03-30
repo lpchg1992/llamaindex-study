@@ -86,6 +86,14 @@ llamaindex-study <command> [subcommand] [options]
   admin                         管理命令
 ```
 
+### 交互式问答 (chat)
+
+```bash
+poetry run llamaindex-study chat
+```
+
+启动交互式问答界面，支持自然语言查询。
+
 ---
 
 ## 知识库管理 (kb)

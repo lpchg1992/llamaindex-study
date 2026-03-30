@@ -91,7 +91,7 @@
 | 任务队列 | `task_queue.py` | SQLite 持久化 |
 | 任务执行器 | `task_executor.py` | 异步执行 |
 | 任务锁 | `task_lock.py` | 去重锁（Semaphore） |
-| 并行 Embedding | `parallel_embedding.py` | 竞争模式并行处理 |
+| 并行 Embedding | `parallel_embedding.py` | 自适应负载均衡 |
 | 写入队列 | `ingest_vdb.py` | LanceDB 写入队列 |
 | 去重管理 | `deduplication.py` | 增量同步 |
 | 文档处理 | `document_processor.py` | 统一文档解析 |

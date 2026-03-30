@@ -31,7 +31,7 @@
 
 | 特性 | 说明 |
 |------|------|
-| **并行 Embedding** | 本地 + 远程 Ollama 同时工作，chunk 级竞争模式 |
+| **并行 Embedding** | 本地 + 远程 Ollama 自适应负载均衡 |
 | **失败重试机制** | 每个端点最多重试 3 次，提高稳定性 |
 | **去重串行访问** | Semaphore(1) 保护 dedup.db，避免数据库锁定 |
 | **LanceDB 串行写入** | WriteQueue 保证写入顺序，避免锁定 |
@@ -166,16 +166,18 @@ llamaindex-study/
 
 ## 核心功能
 
-### 1. 真正的并行 Embedding（竞争模式）
+### 1. 并行 Embedding（自适应负载均衡）
 
 ```
-Chunk 1 ──→ 本地 Ollama  ─┐
-Chunk 2 ──→ 远程 Ollama  ──┼──→ 谁先完成用谁的结果
-Chunk 3 ──→ 本地 Ollama  ──┤
-Chunk 4 ──→ 远程 Ollama  ─┘
+Chunk 队列：
+[Chunk 1] [Chunk 2] [Chunk 3] [Chunk 4] ...
+
+端点分配：
+本地 Ollama  ──→ Chunk 1, Chunk 3, Chunk 5 ...  （处理快的多处理）
+远程 Ollama  ──→ Chunk 2, Chunk 4 ...          （处理慢的少处理）
 ```
 
-使用 `asyncio + ThreadPoolExecutor` 实现，所有任务类型共用同一套多端点调度，首个成功结果立即返回。
+使用 `asyncio + ThreadPoolExecutor` 实现，所有任务进入共享队列，处理快的端点自动分配更多任务。
 
 ### 2. 资源保护机制
 
@@ -381,7 +383,7 @@ print(f"结果: {task.result}")
 | `MAX_RETRIES` | `3` | 每个端点最大重试次数 |
 | `RETRY_DELAY` | `1.0` | 重试延迟（秒） |
 | `OLLAMA_SHORT_TEXT_THRESHOLD` | `600` | 短文本优先单端点阈值 |
-| `OLLAMA_FANOUT_TEXT_THRESHOLD` | `1800` | 长文本触发双端点竞速阈值 |
+| `OLLAMA_FANOUT_TEXT_THRESHOLD` | `1800` | 长文本阈值（已废弃，仅保留兼容性） |
 
 ## 存储位置
 

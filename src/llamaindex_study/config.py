@@ -4,7 +4,7 @@
 负责从 .env 文件加载配置，提供统一的配置访问接口。
 支持：
   - LLM：硅基流动（SiliconFlow，OpenAI 兼容格式）
-  - Embedding：本地 Ollama（nomic-embed-text）
+  - Embedding：本地 Ollama（bge-m3）
 """
 
 import os
@@ -33,7 +33,9 @@ class Settings:
     _DEFAULT_OLLAMA_EMBED_MODEL: ClassVar[str] = "bge-m3"
     _DEFAULT_OLLAMA_REMOTE_URL: ClassVar[str] = ""
     _DEFAULT_PERSIST_DIR: ClassVar[str] = str(PROJECT_ROOT / ".llamaindex" / "storage")
-    _DEFAULT_ZOTERO_PERSIST_DIR: ClassVar[str] = str(PROJECT_ROOT / ".llamaindex" / "storage" / "zotero")
+    _DEFAULT_ZOTERO_PERSIST_DIR: ClassVar[str] = str(
+        PROJECT_ROOT / ".llamaindex" / "storage" / "zotero"
+    )
     _DEFAULT_DATA_DIR: ClassVar[str] = str(PROJECT_ROOT / ".llamaindex")
     _DEFAULT_TOP_K: ClassVar[int] = 5
     _DEFAULT_RERANK_MODEL: ClassVar[str] = "Pro/BAAI/bge-reranker-v2-m3"
@@ -74,8 +76,12 @@ class Settings:
         )
         self.ollama_max_retries: int = int(os.getenv("MAX_RETRIES", "3"))
         self.ollama_retry_delay: float = float(os.getenv("RETRY_DELAY", "1.0"))
-        self.ollama_short_text_threshold: int = int(os.getenv("OLLAMA_SHORT_TEXT_THRESHOLD", "600"))
-        self.ollama_fanout_text_threshold: int = int(os.getenv("OLLAMA_FANOUT_TEXT_THRESHOLD", "1800"))
+        self.ollama_short_text_threshold: int = int(
+            os.getenv("OLLAMA_SHORT_TEXT_THRESHOLD", "600")
+        )
+        self.ollama_fanout_text_threshold: int = int(
+            os.getenv("OLLAMA_FANOUT_TEXT_THRESHOLD", "1800")
+        )
 
         # ========== 索引配置 ==========
         self.persist_dir: str = self._resolve_dir(
@@ -99,9 +105,7 @@ class Settings:
         self.top_k: int = int(os.getenv("TOP_K", str(self._DEFAULT_TOP_K)))
 
         # ========== Reranker 配置 ==========
-        self.rerank_model: str = os.getenv(
-            "RERANK_MODEL", self._DEFAULT_RERANK_MODEL
-        )
+        self.rerank_model: str = os.getenv("RERANK_MODEL", self._DEFAULT_RERANK_MODEL)
         self.use_reranker: bool = os.getenv("USE_RERANKER", "true").lower() == "true"
 
         # ========== 向量数据库配置 ==========
@@ -154,7 +158,9 @@ class Settings:
         except OSError as exc:
             fallback = Path(fallback_dir).expanduser()
             fallback.mkdir(parents=True, exist_ok=True)
-            logger.warning(f"目录不可写，回退到本地目录: {candidate} -> {fallback} ({exc})")
+            logger.warning(
+                f"目录不可写，回退到本地目录: {candidate} -> {fallback} ({exc})"
+            )
             return str(fallback)
 
 

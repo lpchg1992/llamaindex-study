@@ -6,7 +6,7 @@
 
 基于 FastAPI 的 RAG（检索增强生成）API 服务，支持：
 
-- **并行多端点 Ollama** - 本地 + 远程同时处理，竞争模式
+- **并行多端点 Ollama** - 本地 + 远程自适应负载均衡，快的多处理，慢的少处理
 - **失败重试机制** - 每个端点最多重试 3 次
 - **任务队列** - 异步提交，随时查询状态
 - **增量同步** - 基于文件哈希检测变更
@@ -19,23 +19,30 @@ cd ~/文档/GitHub/llamaindex-study
 poetry run python api.py
 ```
 
-- 服务地址: `http://localhost:8000`
-- API 文档: `http://localhost:8000/docs`
-- WebSocket: `ws://localhost:8000/ws/tasks`
+ - 服务地址: `http://localhost:37241`
+- API 文档: `http://localhost:37241/docs`
+- Markdown API 文档: `http://localhost:37241/api-docs`
+- WebSocket: `ws://localhost:37241/ws/tasks`
 
 ---
 
 ## 核心功能
 
-### 并行多端点 Ollama（竞争模式）
+### 并行多端点 Ollama（自适应负载均衡）
 
-导入任务使用**本地 + 远程 Ollama 同时竞争处理**：
+导入任务使用**本地 + 远程 Ollama 自适应分配**：
+
+- **队列机制**：所有 chunk 进入共享队列
+- **自动均衡**：每个端点处理完一个后自动取下一个
+- **速度自适应**：处理快的端点分配更多任务，处理慢的少分配
 
 ```
-Chunk 1 ──→ 本地 Ollama  ─┐
-Chunk 2 ──→ 远程 Ollama  ──┼──→ 谁先完成用谁的结果
-Chunk 3 ──→ 本地 Ollama  ──┤
-Chunk 4 ──→ 远程 Ollama  ─┘
+Chunk 队列：
+[Chunk 1] [Chunk 2] [Chunk 3] [Chunk 4] [Chunk 5] ...
+
+端点分配（快的多处理）：
+本地 Ollama  ──→ Chunk 1, Chunk 3, Chunk 5 ...  （假设处理快）
+远程 Ollama  ──→ Chunk 2, Chunk 4 ...          （处理较慢）
 ```
 
 配置文件（环境变量）：
@@ -49,13 +56,13 @@ Chunk 4 ──→ 远程 Ollama  ─┘
 
 ```bash
 # 提交任务
-curl -X POST "http://localhost:8000/kbs/tech_tools/ingest/obsidian"
+curl -X POST "http://localhost:37241/kbs/tech_tools/ingest/obsidian"
 
 # 返回
 {"task_id": "abc12345", "status": "pending"}
 
 # 查询状态
-curl "http://localhost:8000/tasks/abc12345"
+curl "http://localhost:37241/tasks/abc12345"
 
 # 返回
 {
@@ -83,6 +90,7 @@ curl "http://localhost:8000/tasks/abc12345"
 | 方法 | 端点 | 功能 |
 |------|------|------|
 | GET | `/health` | 服务健康检查 |
+| GET | `/api-docs` | Markdown 格式 API 文档页面 |
 
 ### 任务队列
 
@@ -161,7 +169,7 @@ curl "http://localhost:8000/tasks/abc12345"
 ### 健康检查
 
 ```bash
-curl http://localhost:8000/health
+curl http://localhost:37241/health
 ```
 
 ```json
@@ -175,7 +183,7 @@ curl http://localhost:8000/health
 #### POST /tasks - 提交任务
 
 ```bash
-curl -X POST http://localhost:8000/tasks \
+curl -X POST http://localhost:37241/tasks \
   -H "Content-Type: application/json" \
   -d '{
     "task_type": "obsidian",
@@ -192,7 +200,7 @@ curl -X POST http://localhost:8000/tasks \
 #### GET /tasks/{task_id} - 查询任务
 
 ```bash
-curl http://localhost:8000/tasks/abc12345
+curl http://localhost:37241/tasks/abc12345
 ```
 
 ```json
@@ -218,7 +226,7 @@ curl http://localhost:8000/tasks/abc12345
 #### GET /tasks - 列出任务
 
 ```bash
-curl "http://localhost:8000/tasks?status=running&limit=10"
+curl "http://localhost:37241/tasks?status=running&limit=10"
 ```
 
 ---
@@ -230,7 +238,7 @@ curl "http://localhost:8000/tasks?status=running&limit=10"
 Obsidian vault 导入（本地+远程并行处理）：
 
 ```bash
-curl -X POST "http://localhost:8000/kbs/tech_tools/ingest/obsidian" \
+curl -X POST "http://localhost:37241/kbs/tech_tools/ingest/obsidian" \
   -H "Content-Type: application/json" \
   -d '{
     "vault_path": "/Users/xxx/Documents/Obsidian Vault",
@@ -253,7 +261,7 @@ curl -X POST "http://localhost:8000/kbs/tech_tools/ingest/obsidian" \
 Zotero 收藏夹导入：
 
 ```bash
-curl -X POST "http://localhost:8000/kbs/swine_nutrition/ingest/zotero" \
+curl -X POST "http://localhost:37241/kbs/swine_nutrition/ingest/zotero" \
   -H "Content-Type: application/json" \
   -d '{"collection_name": "营养饲料理论"}'
 ```
@@ -272,7 +280,7 @@ curl -X POST "http://localhost:8000/kbs/swine_nutrition/ingest/zotero" \
 重建知识库（清空后重新导入）：
 
 ```bash
-curl -X POST "http://localhost:8000/kbs/tech_tools/rebuild"
+curl -X POST "http://localhost:37241/kbs/tech_tools/rebuild"
 ```
 
 ---
@@ -284,7 +292,7 @@ curl -X POST "http://localhost:8000/kbs/tech_tools/rebuild"
 向量检索：
 
 ```bash
-curl -X POST "http://localhost:8000/kbs/tech_tools/search" \
+curl -X POST "http://localhost:37241/kbs/tech_tools/search" \
   -H "Content-Type: application/json" \
   -d '{"query": "Python 异步编程", "top_k": 5}'
 ```
@@ -304,7 +312,7 @@ curl -X POST "http://localhost:8000/kbs/tech_tools/search" \
 RAG 问答：
 
 ```bash
-curl -X POST "http://localhost:8000/kbs/tech_tools/query" \
+curl -X POST "http://localhost:37241/kbs/tech_tools/query" \
   -H "Content-Type: application/json" \
   -d '{"query": "如何优化 Python 性能？", "mode": "hybrid", "top_k": 5}'
 ```
@@ -323,29 +331,25 @@ curl -X POST "http://localhost:8000/kbs/tech_tools/query" \
 自动选择知识库进行向量检索：
 
 ```bash
-curl -X POST "http://localhost:8000/search" \
+curl -X POST "http://localhost:37241/search" \
   -H "Content-Type: application/json" \
   -d '{"query": "Python 异步编程", "top_k": 5}'
 ```
 
 ```json
-{
-  "results": [
-    {
-      "text": "Python asyncio 使用指南...",
-      "score": 0.92,
-      "kb_id": "tech_tools"
-    }
-  ],
-  "kbs_queried": ["tech_tools"],
-  "query": "Python 异步编程"
-}
+[
+  {
+    "text": "Python asyncio 使用指南...",
+    "score": 0.92,
+    "metadata": {"kb_id": "tech_tools"}
+  }
+]
 ```
 
 **排除指定知识库：**
 
 ```bash
-curl -X POST "http://localhost:8000/search" \
+curl -X POST "http://localhost:37241/search" \
   -H "Content-Type: application/json" \
   -d '{"query": "Python 异步编程", "top_k": 5, "exclude": ["academic", "industry_news"]}'
 ```
@@ -355,7 +359,7 @@ curl -X POST "http://localhost:8000/search" \
 自动选择知识库进行 RAG 问答：
 
 ```bash
-curl -X POST "http://localhost:8000/query" \
+curl -X POST "http://localhost:37241/query" \
   -H "Content-Type: application/json" \
   -d '{"query": "猪饲料中氨基酸平衡的关键点是什么？", "top_k": 5}'
 ```
@@ -365,15 +369,14 @@ curl -X POST "http://localhost:8000/query" \
   "response": "猪饲料中氨基酸平衡需要考虑以下关键点...",
   "sources": [
     {"kb_id": "swine_nutrition", "text": "氨基酸平衡是...", "score": 0.88}
-  ],
-  "kbs_queried": ["swine_nutrition", "zotero_nutrition"]
+  ]
 }
 ```
 
 **排除指定知识库：**
 
 ```bash
-curl -X POST "http://localhost:8000/query" \
+curl -X POST "http://localhost:37241/query" \
   -H "Content-Type: application/json" \
   -d '{"query": "猪饲料中氨基酸平衡的关键点是什么？", "top_k": 5, "exclude": ["tech_tools"]}'
 ```
@@ -385,7 +388,7 @@ curl -X POST "http://localhost:8000/query" \
 #### GET /category/rules - 列出分类规则
 
 ```bash
-curl http://localhost:8000/category/rules
+curl http://localhost:37241/category/rules
 ```
 
 ```json
@@ -407,7 +410,7 @@ curl http://localhost:8000/category/rules
 #### POST /category/classify - 分类文件夹
 
 ```bash
-curl -X POST "http://localhost:8000/category/classify" \
+curl -X POST "http://localhost:37241/category/classify" \
   -H "Content-Type: application/json" \
   -d '{"folder_path": "/path/to/folder", "use_llm": true}'
 ```
@@ -428,7 +431,7 @@ curl -X POST "http://localhost:8000/category/classify" \
 ### 连接
 
 ```javascript
-const ws = new WebSocket("ws://localhost:8000/ws/tasks");
+const ws = new WebSocket("ws://localhost:37241/ws/tasks");
 ws.onmessage = (event) => {
     const data = JSON.parse(event.data);
     console.log(`进度: ${data.progress}% - ${data.message}`);
@@ -459,7 +462,7 @@ ws.onmessage = (event) => {
 import requests
 import time
 
-BASE = "http://localhost:8000"
+BASE = "http://localhost:37241"
 
 # 1. 提交导入任务
 r = requests.post(f"{BASE}/kbs/tech_tools/ingest/obsidian",
@@ -490,15 +493,15 @@ print(r.json())
 
 ```bash
 # 提交任务
-curl -X POST "http://localhost:8000/kbs/tech_tools/ingest/obsidian" \
+curl -X POST "http://localhost:37241/kbs/tech_tools/ingest/obsidian" \
   -H "Content-Type: application/json" \
   -d '{"recursive": true}'
 
 # 查询状态
-curl "http://localhost:8000/tasks/{task_id}"
+curl "http://localhost:37241/tasks/{task_id}"
 
 # 搜索
-curl -X POST "http://localhost:8000/kbs/tech_tools/search" \
+curl -X POST "http://localhost:37241/kbs/tech_tools/search" \
   -H "Content-Type: application/json" \
   -d '{"query": "Python", "top_k": 5}'
 ```
@@ -547,6 +550,12 @@ curl -X POST "http://localhost:8000/kbs/tech_tools/search" \
 | `PERSIST_DIR` | `~/.llamaindex/storage` | 向量存储目录 |
 | `ZOTERO_STORAGE_DIR` | `~/.llamaindex/storage/zotero` | Zotero 存储目录 |
 
+### API 服务配置
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `API_PORT` | `37241` | API 服务端口 |
+
 ### Embedding 配置
 
 | 变量 | 默认值 | 说明 |
@@ -572,6 +581,7 @@ curl -X POST "http://localhost:8000/kbs/tech_tools/search" \
 |------|--------|------|
 | `MAX_RETRIES` | `3` | 每个端点最大重试次数 |
 | `RETRY_DELAY` | `1.0` | 重试延迟（秒） |
+| `OLLAMA_SHORT_TEXT_THRESHOLD` | `600` | 短文本优先单端点阈值（已废弃，仅保留兼容性） |
 
 ---
 

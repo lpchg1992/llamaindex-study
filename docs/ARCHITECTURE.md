@@ -16,7 +16,7 @@
 │       │                    ▼                                   │
 │       │              Embedding 处理                             │
 │       │              ┌──────────┬──────────┐                  │
-│       │              │ 本地     │ 远程     │ ← 竞争模式        │
+│       │              │ 本地     │ 远程     │ ← 自适应均衡      │
 │       │              │ Ollama   │ Ollama   │                  │
 │       │              └──────────┴──────────┘                  │
 │       │                    │                                   │
@@ -35,7 +35,7 @@
 
 | 层级 | 组件 | 并行/串行 | 原因 |
 |------|------|----------|------|
-| 计算层 | Embedding | **竞争模式** | 两个端点同时请求，先完成的使用 |
+| 计算层 | Embedding | **自适应负载均衡** | 快的端点多分配，慢的端点少分配 |
 | 存储层 | dedup.db | 串行 | SQLite 不支持高并发 |
 | 存储层 | LanceDB | 串行 | WriteQueue 避免锁定 |
 
@@ -67,7 +67,7 @@ class LanceDBWriteQueue:
             self._queue.task_done()
 ```
 
-### 3. 并行 Embedding 处理器（竞争模式）
+### 3. 并行 Embedding 处理器（自适应负载均衡）
 
 ```python
 # kb/parallel_embedding.py
@@ -78,20 +78,24 @@ class ParallelEmbeddingProcessor:
             EmbeddingEndpoint("远程", DEFAULT_REMOTE_URL),
         ]
         self._executor = ThreadPoolExecutor(max_workers=len(self.endpoints))
+        self._chunk_queue = deque()
     
     async def process_batch(self, texts):
-        """竞争模式：所有端点同时请求，先完成的返回"""
-        async def get_embedding_from_any_endpoint(text):
-            tasks = [try_endpoint(ep) for ep in self.endpoints]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            
-            # 找出最快成功的
-            for r in results:
-                if isinstance(r, tuple) and r[2] is None:  # error is None
-                    return r
-            return results[0]  # 所有失败，返回第一个
+        """自适应负载均衡：所有 chunk 入队，快的端点处理更多"""
+        # 1. 所有 chunk 入队
+        self._chunk_queue = deque(range(len(texts)))
         
-        return await asyncio.gather(*[get_embedding_from_any_endpoint(t) for t in texts])
+        # 2. 每个端点的 worker 不断从队列取任务
+        def worker(ep):
+            while True:
+                chunk_idx = self._chunk_queue.popleft() if self._chunk_queue else None
+                if chunk_idx is None:
+                    return
+                result = ep.process(texts[chunk_idx])
+                results[chunk_idx] = result
+        
+        # 3. 快的端点自然处理更多 chunk
+        return results
 ```
 
 ### 4. 失败重试机制
@@ -150,7 +154,7 @@ def _get_embedding_with_retry(self, text: str, ep: EmbeddingEndpoint) -> Embeddi
 │  ├── task_queue.py          # 任务队列（SQLite）             │
 │  ├── task_executor.py       # 任务执行器                     │
 │  ├── task_lock.py           # 去重锁（Semaphore）           │
-│  ├── parallel_embedding.py   # 并行 Embedding（竞争模式）     │
+│  ├── parallel_embedding.py   # 并行 Embedding（自适应负载均衡）     │
 │  ├── ingest_vdb.py          # LanceDB 写入队列               │
 │  ├── deduplication.py        # 去重和增量同步                 │
 │  └── database.py            # SQLite 数据库管理              │
@@ -190,14 +194,14 @@ async def _execute_obsidian(self, task):
         to_add, to_update = dedup_manager.detect_changes(...)
         all_docs = [(c.rel_path, c.abs_path) for c in to_add + to_update]
     
-    # 阶段2: 并行处理（embedding - 竞争模式）
+    # 阶段2: 并行处理（embedding - 自适应负载均衡）
     embed_processor = get_parallel_processor()
     await lance_write_queue.start()
     
     for rel_path, abs_path in all_docs:
         nodes = node_parser.get_nodes_from_documents([doc])
         
-        # 并行获取 embeddings（竞争模式）
+        # 并行获取 embeddings（自适应负载均衡）
         texts = [n.get_content() for n in nodes]
         results = await embed_processor.process_batch(texts)
         
@@ -211,13 +215,13 @@ async def _execute_obsidian(self, task):
         dedup_manager._save()
 ```
 
-### 2. 并行 Embedding 处理器（竞争模式）
+### 2. 并行 Embedding 处理器（自适应负载均衡）
 
 ```python
 # kb/parallel_embedding.py
 
 class ParallelEmbeddingProcessor:
-    """真正的竞争模式 - 所有端点同时请求，先完成的返回"""
+    """真正的自适应负载均衡 - 所有端点同时请求，先完成的返回"""
     
     # 配置常量
     EMBEDDING_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "bge-m3")
@@ -226,7 +230,7 @@ class ParallelEmbeddingProcessor:
     RETRY_DELAY = 1.0
     
     async def process_batch(self, texts: List[str]) -> List[EmbeddingResult]:
-        """批量处理，竞争模式"""
+        """批量处理，自适应负载均衡"""
         async def get_embedding_from_any_endpoint(text: str) -> EmbeddingResult:
             # 同时向所有端点发送请求
             tasks = [try_endpoint(ep) for ep in self.endpoints]
@@ -343,10 +347,10 @@ API 提交任务
    ├── 阶段1: 去重（串行）
    │   └── DedupLock() → detect_changes() → mark_processed()
    │
-   ├── 阶段2: 并行处理（embedding - 竞争模式）
+   ├── 阶段2: 并行处理（embedding - 自适应负载均衡）
    │   ├── 解析文档
    │   ├── 切分文本（SentenceSplitter）
-   │   ├── 并行 Embedding（所有端点同时竞争）
+   │   ├── 并行 Embedding（自适应负载均衡）
    │   └── 串行写入 LanceDB（WriteQueue）
    │
    └── 阶段3: 保存状态（串行）
@@ -562,7 +566,7 @@ def ingest_notion(kb_id: str, page_id: str):
 ## 测试
 
 ```bash
-# 测试并行 Embedding（竞争模式）
+# 测试并行 Embedding（自适应负载均衡）
 poetry run python -c "
 import asyncio
 from kb.parallel_embedding import get_parallel_processor
