@@ -273,7 +273,7 @@ def extract_keywords_from_documents(
 
     all_keywords = []
     for doc in documents:
-        keywords = extractor.extract_from_text(doc, method=method)
+        keywords = extractor.extract_from_text(doc)
         all_keywords.append(keywords)
 
     return merge_keywords(all_keywords)

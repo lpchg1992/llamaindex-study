@@ -67,6 +67,7 @@ class QueryEngineWrapper:
         # 如果启用 reranker，添加后处理器
         if self.use_reranker:
             from llamaindex_study.reranker import SiliconFlowReranker
+
             reranker = SiliconFlowReranker(
                 api_key=self.settings.siliconflow_api_key,
                 model=self.settings.rerank_model,
@@ -150,6 +151,7 @@ class QueryEngineWrapper:
 
         # 注册 DeepSeek-V3 上下文窗口（同上）
         from llama_index.llms.openai.utils import ALL_AVAILABLE_MODELS
+
         if "Pro/deepseek-ai/DeepSeek-V3.2" not in ALL_AVAILABLE_MODELS:
             ALL_AVAILABLE_MODELS["Pro/deepseek-ai/DeepSeek-V3.2"] = 128000
 
@@ -166,7 +168,7 @@ class QueryEngineWrapper:
         Returns:
             BaseRetriever: 检索器实例
         """
-        return self.index.as_retriever(top_k=self.top_k)
+        return self.index.as_retriever(similarity_top_k=self.top_k)
 
     def retrieve(self, query_str: str) -> List[Any]:
         """
@@ -205,6 +207,7 @@ def create_query_engine(
 
     # 获取知识库存储路径
     from kb.registry import get_storage_root
+
     persist_dir = get_storage_root() / kb_id
 
     # 加载向量存储

@@ -15,6 +15,7 @@ from typing import List, Optional, Set, Union
 from llama_index.core.schema import Document as LlamaDocument
 
 from llamaindex_study.logger import get_logger
+from kb.registry import KnowledgeBase
 
 logger = get_logger(__name__)
 
@@ -97,7 +98,9 @@ class ObsidianReader:
         """
         # 1. 移除 YAML frontmatter ---...---
         content = re.sub(r"^---\n.*?\n---\n", "", content, flags=re.DOTALL)
-        content = re.sub(r"^---\n.*?\n---", "", content, flags=re.DOTALL)  # 单行 frontmatter
+        content = re.sub(
+            r"^---\n.*?\n---", "", content, flags=re.DOTALL
+        )  # 单行 frontmatter
 
         # 2. 移除 wiki 图片/链接 ![[filename]]
         content = re.sub(r"!\[\[[^\]]+\]\]", "", content)
@@ -119,7 +122,9 @@ class ObsidianReader:
         content = re.sub(r"\n{3,}", "\n\n", content)
 
         # 8. 移除只包含链接的残留行（如 - [[link]]）
-        content = re.sub(r"^\s*[-*]\s*\[\[[^\]]+\]\]\s*$", "", content, flags=re.MULTILINE)
+        content = re.sub(
+            r"^\s*[-*]\s*\[\[[^\]]+\]\]\s*$", "", content, flags=re.MULTILINE
+        )
 
         # 9. 清理行首行尾空白
         content = content.strip()
@@ -162,19 +167,28 @@ class ObsidianReader:
                         # 处理数组格式: [tag1, tag2]
                         if value.startswith("["):
                             import ast
+
                             try:
                                 tags_list = ast.literal_eval(value)
-                                metadata["tags_list"] = tags_list if isinstance(tags_list, list) else [tags_list]
+                                metadata["tags_list"] = (
+                                    tags_list
+                                    if isinstance(tags_list, list)
+                                    else [tags_list]
+                                )
                             except (ValueError, SyntaxError):
-                                metadata["tags_list"] = [v.strip() for v in value.strip("[]").split(",")]
+                                metadata["tags_list"] = [
+                                    v.strip() for v in value.strip("[]").split(",")
+                                ]
                         # 处理逗号分隔: tag1, tag2
                         elif "," in value:
-                            metadata["tags_list"] = [v.strip() for v in value.split(",")]
+                            metadata["tags_list"] = [
+                                v.strip() for v in value.split(",")
+                            ]
                         # 单个标签
                         else:
                             metadata["tags_list"] = [value]
 
-            content = content[match.end():]
+            content = content[match.end() :]
 
         return content, metadata
 
@@ -210,7 +224,9 @@ class ObsidianReader:
                 # 跳过过大的文件（可能是 PDF 引用笔记等）
                 file_size = file_path.stat().st_size
                 if file_size > self.MAX_FILE_SIZE:
-                    print(f"      ⏭️  跳过过大文件 ({file_size/1024:.0f}KB): {file_path.name}")
+                    print(
+                        f"      ⏭️  跳过过大文件 ({file_size / 1024:.0f}KB): {file_path.name}"
+                    )
                     continue
 
                 with open(file_path, "r", encoding="utf-8") as f:
@@ -322,7 +338,7 @@ class ObsidianClassifier:
 
     def __init__(
         self,
-        knowledge_bases: List["KnowledgeBase"] = None,
+        knowledge_bases: Optional[List["KnowledgeBase"]] = None,
     ):
         """
         初始化分类器
@@ -369,7 +385,11 @@ class ObsidianClassifier:
             for source_tag in kb.source_tags:
                 for doc_tag in tags:
                     # 精确匹配或包含匹配
-                    if source_tag == doc_tag or source_tag in doc_tag or doc_tag in source_tag:
+                    if (
+                        source_tag == doc_tag
+                        or source_tag in doc_tag
+                        or doc_tag in source_tag
+                    ):
                         if kb.id not in matched:
                             matched.append(kb.id)
                             break
@@ -397,7 +417,9 @@ class ObsidianClassifier:
 
         # 合并所有标签
         all_tags = set(obsidian_tags) if isinstance(obsidian_tags, list) else set()
-        all_tags.update(tags_list) if isinstance(tags_list, list) else all_tags.add(tags_list)
+        all_tags.update(tags_list) if isinstance(tags_list, list) else all_tags.add(
+            tags_list
+        )
 
         # 按路径匹配
         path_matches = self.match_by_path(relative_path)
