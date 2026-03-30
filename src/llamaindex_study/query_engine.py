@@ -200,21 +200,12 @@ def create_query_engine(
     Returns:
         BaseQueryEngine: 查询引擎实例
     """
-    from llamaindex_study.vector_store import LanceDBVectorStore
-    from pathlib import Path
+    from kb.services import VectorStoreService
 
     settings = get_settings()
 
-    # 获取知识库存储路径
-    from kb.registry import get_storage_root
-
-    persist_dir = get_storage_root() / kb_id
-
-    # 加载向量存储
-    vector_store = LanceDBVectorStore(
-        persist_dir=persist_dir,
-        table_name=kb_id,
-    )
+    # 使用 VectorStoreService 获取向量存储（自动处理 Zotero 路径）
+    vector_store = VectorStoreService.get_vector_store(kb_id)
 
     # 加载索引
     index = vector_store.load_index()
