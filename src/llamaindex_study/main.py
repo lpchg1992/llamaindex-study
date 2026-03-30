@@ -4,7 +4,7 @@ import json
 import sys
 import time
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, List, Optional
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
@@ -27,6 +27,18 @@ from llamaindex_study.reader import DocumentReader
 
 def print_json(data: Any) -> None:
     print(json.dumps(data, ensure_ascii=False, indent=2, default=str))
+
+
+def get_query_from_args_or_stdin(args: argparse.Namespace) -> Optional[str]:
+    query = getattr(args, "query", None)
+    if query:
+        if isinstance(query, list):
+            query = " ".join(query)
+        if query.strip():
+            return query.strip()
+    if not sys.stdin.isatty():
+        return sys.stdin.read().strip()
+    return None
 
 
 def print_table(rows: Iterable[dict[str, Any]], columns: list[str]) -> None:
@@ -77,14 +89,29 @@ def parse_key_values(values: list[str]) -> dict[str, Any]:
 
 
 def print_welcome() -> None:
+    from kb.services import KnowledgeBaseService
+
+    kbs = KnowledgeBaseService.list_all()
+
     print("\n" + "=" * 60)
     print("🤖 LlamaIndex Study - 交互式查询系统")
     print("=" * 60)
+    print("\n📚 可用知识库：")
+    if kbs:
+        for kb in kbs:
+            print(f"  • {kb['id']:20s} - {kb['name']} ({kb['row_count']} 条)")
+    else:
+        print("  （暂无可用知识库）")
     print("\n命令提示：")
-    print("  - 输入问题并按回车进行查询")
-    print("  - 输入 'stream' 切换流式/普通模式")
-    print("  - 输入 'reload' 重新加载索引")
-    print("  - 输入 'quit' 或 'exit' 退出程序")
+    print("  - 直接输入问题 → 自动选择知识库进行 RAG 问答")
+    print("  - /search <kb_id> <query> → 指定知识库检索")
+    print("  - /query <kb_id> <question> → 指定知识库问答")
+    print("  - /list → 显示知识库列表")
+    print("  - /exclude <kb1,kb2,...> → 设置排除的知识库")
+    print("  - /excludes → 查看当前排除设置")
+    print("  - /auto → 切换自动/手动选择知识库")
+    print("  - stream → 切换流式/普通模式")
+    print("  - quit/exit → 退出")
     print("=" * 60 + "\n")
 
 
@@ -100,57 +127,105 @@ def load_documents(data_dir: Path) -> list:
 
 
 def run_interactive() -> int:
+    from kb.services import KnowledgeBaseService, QueryRouter, SearchService
+
     settings = get_settings()
     print(f"🔧 使用配置: {settings}")
     print(f"   LLM: SiliconFlow ({settings.siliconflow_model})")
     print(f"   Embedding: Ollama ({settings.ollama_embed_model})")
 
-    project_root = Path(__file__).resolve().parents[2]
-    data_dir = project_root / "data"
-    persist_dir = Path(settings.persist_dir).expanduser()
+    kbs = KnowledgeBaseService.list_all()
+    print(f"📚 已加载 {len(kbs)} 个知识库")
 
-    documents = load_documents(data_dir)
-
-    print("🔨 正在构建向量索引...")
-    builder = IndexBuilder(persist_dir=persist_dir)
-    index = builder.load()
-    if index is None:
-        print("📦 没有找到已有索引，正在从头构建...")
-        index = builder.build_from_documents(documents)
-        builder.save(index)
-
-    query_engine = QueryEngineWrapper(index=index, top_k=settings.top_k)
     print_welcome()
 
     stream_mode = False
+    auto_mode = True
+    exclude_kbs: Optional[List[str]] = None
     while True:
         try:
             user_input = input("💬 你: ").strip()
+
             if user_input.lower() in ["quit", "exit", "q"]:
                 print("\n👋 再见！感谢使用 LlamaIndex Study。")
                 return 0
+
             if user_input.lower() == "stream":
                 stream_mode = not stream_mode
                 status = "开启" if stream_mode else "关闭"
                 print(f"🔄 流式输出已{status}\n")
                 continue
-            if user_input.lower() == "reload":
-                print("\n🔄 正在重新加载文档和索引...")
-                documents = load_documents(data_dir)
-                index = builder.build_from_documents(documents)
-                query_engine = QueryEngineWrapper(index=index, top_k=settings.top_k)
-                print("✅ 索引已重新加载\n")
+
+            if user_input.lower() == "/list":
+                kbs = KnowledgeBaseService.list_all()
+                print("\n📚 可用知识库：")
+                for kb in kbs:
+                    print(f"  • {kb['id']:20s} - {kb['name']} ({kb['row_count']} 条)")
+                print()
                 continue
+
+            if user_input.lower() == "/auto":
+                auto_mode = not auto_mode
+                status = "开启" if auto_mode else "关闭"
+                print(f"🔄 自动选择知识库已{status}\n")
+                continue
+
+            if user_input.lower().startswith("/exclude "):
+                exclude_str = user_input[9:].strip()
+                if exclude_str:
+                    exclude_kbs = [
+                        e.strip() for e in exclude_str.split(",") if e.strip()
+                    ]
+                    print(f"🚫 已设置排除知识库: {', '.join(exclude_kbs)}\n")
+                else:
+                    exclude_kbs = None
+                    print("✅ 已清除排除设置\n")
+                continue
+
+            if user_input.lower() == "/excludes":
+                if exclude_kbs:
+                    print(f"🚫 当前排除: {', '.join(exclude_kbs)}\n")
+                else:
+                    print("✅ 当前无排除设置\n")
+                continue
+
+            if user_input.lower().startswith("/search "):
+                parts = user_input[8:].strip().split(" ", 1)
+                if len(parts) == 2:
+                    kb_id, query = parts
+                    print(f"\n🔍 在知识库 [{kb_id}] 中检索...")
+                    results = SearchService.search(kb_id, query, top_k=5)
+                    print(f"📊 找到 {len(results)} 条结果：\n")
+                    for i, r in enumerate(results, 1):
+                        print(f"  [{i}] (score: {r.get('score', 0):.2f})")
+                        print(f"      {r['text'][:200]}...")
+                        print()
+                else:
+                    print("❌ 格式: /search <kb_id> <query>\n")
+                continue
+
+            if user_input.lower().startswith("/query "):
+                parts = user_input[7:].strip().split(" ", 1)
+                if len(parts) == 2:
+                    kb_id, question = parts
+                    print(f"\n🤖 在知识库 [{kb_id}] 中问答...")
+                    result = SearchService.query(kb_id, question, top_k=5)
+                    print(f"\n💬 回答：\n{result['response']}\n")
+                else:
+                    print("❌ 格式: /query <kb_id> <question>\n")
+                continue
+
             if not user_input:
                 continue
 
-            print("\n🤖 AI: ", end="", flush=True)
-            if stream_mode:
-                query_engine.query(user_input, stream=True)
+            if auto_mode:
+                print(f"\n🤖 AI: (自动路由中...)\n")
+                result = QueryRouter.query(user_input, top_k=5, exclude=exclude_kbs)
+                print(f"📊 查询了: {', '.join(result.get('kbs_queried', []))}\n")
+                print(f"💬 回答：\n{result['response']}\n")
             else:
-                response = query_engine.query(user_input, stream=False)
-                print(response)
-            print()
+                print("❌ 请先选择一个知识库，或输入 /auto 开启自动选择\n")
+
         except KeyboardInterrupt:
             print("\n\n👋 再见！")
             return 0
@@ -158,8 +233,12 @@ def run_interactive() -> int:
             print(f"\n❌ 发生错误: {e}\n")
 
 
-def submit_task_and_handle(task_type: str, kb_id: str, params: dict[str, Any], source: str, wait: bool) -> int:
-    result = TaskService.submit(task_type=task_type, kb_id=kb_id, params=params, source=source)
+def submit_task_and_handle(
+    task_type: str, kb_id: str, params: dict[str, Any], source: str, wait: bool
+) -> int:
+    result = TaskService.submit(
+        task_type=task_type, kb_id=kb_id, params=params, source=source
+    )
     if wait:
         task = TaskService.run_task(result["task_id"])
         print_json(task)
@@ -169,7 +248,10 @@ def submit_task_and_handle(task_type: str, kb_id: str, params: dict[str, Any], s
 
 
 def handle_kb_list(_: argparse.Namespace) -> int:
-    print_table(KnowledgeBaseService.list_all(), ["id", "name", "status", "row_count", "description"])
+    print_table(
+        KnowledgeBaseService.list_all(),
+        ["id", "name", "status", "row_count", "description"],
+    )
     return 0
 
 
@@ -196,17 +278,391 @@ def handle_kb_delete(args: argparse.Namespace) -> int:
 
 
 def handle_kb_rebuild(args: argparse.Namespace) -> int:
-    return submit_task_and_handle("rebuild", args.kb_id, {}, source="cli:kb:rebuild", wait=args.wait)
+    return submit_task_and_handle(
+        "rebuild", args.kb_id, {}, source="cli:kb:rebuild", wait=args.wait
+    )
+
+
+def handle_kb_topics(args: argparse.Namespace) -> int:
+    from kb.topic_analyzer import analyze_and_update_topics
+    from kb.registry import registry
+    from kb.database import init_kb_meta_db
+
+    if args.all:
+        kb_ids = [kb.id for kb in registry.list_all()]
+    elif args.kb_id:
+        kb_ids = [args.kb_id]
+    else:
+        print("错误: 请指定 kb_id 或使用 --all", file=sys.stderr)
+        return 1
+
+    for kb_id in kb_ids:
+        print(f"\n分析知识库: {kb_id}")
+        topics = analyze_and_update_topics(kb_id, has_new_docs=True)
+        if topics:
+            print(f"  主题词 ({len(topics)} 个):")
+            for t in topics[:15]:
+                print(f"    - {t}")
+            if len(topics) > 15:
+                print(f"    ... 共 {len(topics)} 个")
+        else:
+            print(f"  无主题词")
+        if args.update:
+            db = init_kb_meta_db()
+            db.update_topics(kb_id, topics)
+            print(f"  已更新到数据库")
+
+    return 0
+
+
+def handle_kb_topics_local(args: argparse.Namespace) -> int:
+    import httpx
+    import re
+    from collections import Counter
+    from kb.registry import registry
+
+    OLLAMA_URL = "http://localhost:11434/api/chat"
+    LOCAL_MODEL = "tomng/lfm2.5-instruct:1.2b"
+
+    EXTRACT_PROMPT = """你是一个专业的知识库主题分析助手。请从以下文档内容中提取3-8个主题词。
+    要求：
+    1. 只提取专业术语、学术名词、具体概念
+    2. 只提取名词性词汇，不要动词、形容词
+    3. 用换行符分隔，每行一个词
+
+    ---文档内容---
+    {text}
+    ---文档结束---
+
+    主题词（每行一个）："""
+
+    REVIEW_PROMPT = """以下是从知识库文档中提取的主题词。请审查并过滤掉：
+    1. 过于通用的词（如"实验设计"、"专业术语"、"使用者"、"注意事项"）
+    2. 疑似幻觉/错误的词
+    3. 动词、形容词、副词
+    4. 长度小于2的词
+
+    保留真正有学科特色的专业术语。
+
+    主题词列表：
+    {keywords}
+
+    过滤后的有效主题词（每行一个，只返回有效的）："""
+
+    client = httpx.Client(timeout=60.0)
+
+    def wait_for_model_ready(max_wait=120):
+        start = time.time()
+        while time.time() - start < max_wait:
+            try:
+                resp = client.get(f"{OLLAMA_URL.rsplit('/api/', 1)[0]}/api/tags")
+                if resp.status_code == 200:
+                    models = [m["name"] for m in resp.json().get("models", [])]
+                    if LOCAL_MODEL in models:
+                        return True
+            except:
+                pass
+            time.sleep(1)
+        return False
+
+    def extract_with_retry(text, max_retries=3):
+        prompt = EXTRACT_PROMPT.format(text=text[:2000])
+        for attempt in range(max_retries):
+            try:
+                resp = client.post(
+                    OLLAMA_URL,
+                    json={
+                        "model": LOCAL_MODEL,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "stream": False,
+                    },
+                )
+                if resp.status_code == 200:
+                    result = resp.json().get("message", {}).get("content", "")
+                    keywords = []
+                    for line in result.split("\n"):
+                        line = line.strip().strip("0123456789.-、，、:：) ")
+                        if line and len(line) >= 2:
+                            keywords.append(line)
+                    return keywords
+                elif resp.status_code == 503:
+                    print(f"  [模型加载中，重试 {attempt + 1}/{max_retries}]")
+                    time.sleep(2)
+                else:
+                    return []
+            except Exception as e:
+                if attempt == max_retries - 1:
+                    return []
+        return []
+
+    def _is_garbage(kw):
+        if not kw or len(kw) < 2:
+            return True
+        junk = {
+            "iss",
+            "thr",
+            "com",
+            "www",
+            "http",
+            "https",
+            "ftp",
+            "the",
+            "and",
+            "for",
+            "are",
+            "but",
+            "not",
+            "you",
+            "all",
+            "can",
+            "had",
+            "her",
+            "was",
+            "one",
+            "our",
+            "out",
+            "has",
+            "his",
+            "how",
+            "its",
+            "may",
+            "new",
+            "now",
+            "old",
+            "see",
+            "two",
+            "way",
+            "who",
+            "boy",
+            "did",
+            "get",
+            "let",
+            "put",
+            "say",
+            "she",
+            "too",
+            "use",
+            "dir",
+            "lst",
+            "idx",
+            "tmp",
+            "bak",
+            "ddd",
+            "mmm",
+            "yyy",
+            "xxx",
+            "www",
+            "png",
+            "jpg",
+            "gif",
+            "css",
+            "js",
+            "html",
+            "xml",
+            "json",
+            "实验设计",
+            "专业术语",
+            "使用者",
+            "注意事项",
+        }
+        if kw.lower() in junk:
+            return True
+        if re.match(r"^\d+$", kw):
+            return True
+        if re.match(r"^[a-zA-Z]{1,2}$", kw):
+            return True
+        return False
+
+    def _is_similar(kw1, kw2):
+        if kw1.lower() == kw2.lower():
+            return True
+        particles = {"的", "之", "于", "在", "和", "与", "及"}
+        rp1 = "".join(c for c in kw1 if c not in particles)
+        rp2 = "".join(c for c in kw2 if c not in particles)
+        if rp1 and rp2:
+            if rp1 in rp2 or rp2 in rp1:
+                return True
+        n = 2
+        ngrams1 = (
+            set(kw1[i : i + n] for i in range(len(kw1) - n + 1))
+            if len(kw1) >= n
+            else {kw1}
+        )
+        ngrams2 = (
+            set(kw2[i : i + n] for i in range(len(kw2) - n + 1))
+            if len(kw2) >= n
+            else {kw2}
+        )
+        if not ngrams1 or not ngrams2:
+            return False
+        intersection = len(ngrams1 & ngrams2)
+        union = len(ngrams1 | ngrams2)
+        return (intersection / union) >= 0.75 if union > 0 else False
+
+    def review_keywords(keywords):
+        if not keywords:
+            return []
+        prompt = REVIEW_PROMPT.format(keywords="\n".join(keywords))
+        try:
+            resp = client.post(
+                OLLAMA_URL,
+                json={
+                    "model": LOCAL_MODEL,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "stream": False,
+                },
+            )
+            resp.raise_for_status()
+            result = resp.json().get("message", {}).get("content", "")
+            reviewed = []
+            for line in result.split("\n"):
+                line = line.strip().strip("0123456789.-、，、:：) ")
+                if line and len(line) >= 2:
+                    reviewed.append(line)
+            return reviewed
+        except Exception as e:
+            print(f"  [警告] 审查失败: {e}")
+            return keywords
+
+    def local_rule_filter(keywords):
+        result = []
+        for kw in keywords:
+            if _is_garbage(kw):
+                continue
+            is_dup = False
+            for existing in result:
+                if _is_similar(kw, existing):
+                    is_dup = True
+                    break
+            if not is_dup:
+                result.append(kw)
+        return result
+
+    def get_chunks(kb_id):
+        kb = registry.get(kb_id)
+        if not kb:
+            return []
+        persist_dir = kb.persist_dir
+        if not persist_dir.exists():
+            return []
+        try:
+            import lancedb
+
+            db = lancedb.connect(str(persist_dir))
+            table = db.open_table(db.table_names()[0])
+            df = table.to_pandas()
+            return df["text"].dropna().tolist() if "text" in df.columns else []
+        except:
+            return []
+
+    if args.all:
+        kb_ids = [kb.id for kb in registry.list_all()]
+    elif args.kb_id:
+        kb_ids = [args.kb_id]
+    else:
+        print("错误: 请指定 kb_id 或使用 --all", file=sys.stderr)
+        return 1
+
+    for kb_id in kb_ids:
+        print(f"\n{'=' * 50}")
+        print(f"处理知识库: {kb_id}")
+        chunks = get_chunks(kb_id)
+        if not chunks:
+            print(f"  无文档")
+            continue
+        print(f"  共 {len(chunks)} 个 chunks（全部处理）")
+
+        print(f"  [等待模型就绪...]")
+        if not wait_for_model_ready():
+            print(f"  [警告] 模型未就绪，继续尝试...")
+        else:
+            print(f"  [模型已就绪]")
+
+        print(f"  [阶段1] 提取主题词...")
+        all_keywords = []
+        for i, chunk in enumerate(chunks):
+            if len(chunk) < 50:
+                continue
+            keywords = extract_with_retry(chunk)
+            if keywords:
+                all_keywords.append(keywords)
+            if (i + 1) % 50 == 0:
+                print(f"    已处理 {i + 1}/{len(chunks)}")
+
+        if not all_keywords:
+            print(f"  未能提取主题词")
+            continue
+
+        print(f"  [阶段2] 本地规则过滤...")
+        counter = Counter()
+        for keywords in all_keywords:
+            for kw in keywords:
+                if not _is_garbage(kw):
+                    counter[kw] += 1
+        merged = [kw for kw, _ in counter.most_common(80)]
+        filtered = local_rule_filter(merged)
+        print(f"  规则过滤后: {len(filtered)} 个")
+
+        print(f"  [阶段3] 本地模型二次审查...")
+        reviewed = review_keywords(filtered)
+        if reviewed:
+            filtered = reviewed
+            print(f"  审查后: {len(filtered)} 个")
+        else:
+            print(f"  审查失败，保留原结果")
+
+        print(f"\n  最终主题词 ({len(filtered)} 个):")
+        for kw in filtered[:20]:
+            print(f"    - {kw}")
+        if len(filtered) > 20:
+            print(f"    ... 共 {len(filtered)} 个")
+
+        if args.update:
+            from kb.database import init_kb_meta_db
+
+            db = init_kb_meta_db()
+            db.update_topics(kb_id, filtered)
+            print(f"\n  已更新到数据库")
+
+    print(f"\n{'=' * 50}")
+    print("完成!")
+    return 0
 
 
 def handle_search(args: argparse.Namespace) -> int:
-    result = SearchService.search(args.kb_id, args.query, top_k=args.top_k)
+    query = get_query_from_args_or_stdin(args)
+    if not query:
+        print("错误: 请提供查询内容", file=sys.stderr)
+        return 1
+
+    if getattr(args, "auto", False):
+        from kb.services import QueryRouter
+
+        exclude = getattr(args, "exclude", None)
+        if exclude:
+            exclude = [e.strip() for e in exclude.split(",") if e.strip()]
+        result = QueryRouter.search(query, top_k=args.top_k, exclude=exclude)
+    else:
+        result = SearchService.search(args.kb_id, query, top_k=args.top_k)
     print_json(result)
     return 0
 
 
 def handle_query(args: argparse.Namespace) -> int:
-    result = SearchService.query(args.kb_id, args.query, top_k=args.top_k)
+    query = get_query_from_args_or_stdin(args)
+    if not query:
+        print("错误: 请提供查询内容", file=sys.stderr)
+        return 1
+
+    if getattr(args, "auto", False):
+        from kb.services import QueryRouter
+
+        exclude = getattr(args, "exclude", None)
+        if exclude:
+            exclude = [e.strip() for e in exclude.split(",") if e.strip()]
+        result = QueryRouter.query(query, top_k=args.top_k, exclude=exclude)
+    else:
+        result = SearchService.query(args.kb_id, query, top_k=args.top_k)
     print_json(result)
     return 0
 
@@ -220,7 +676,13 @@ def handle_ingest_obsidian(args: argparse.Namespace) -> int:
         "force_delete": args.force_delete,
         "persist_dir": args.persist_dir,
     }
-    return submit_task_and_handle("obsidian", args.kb_id, params, source=args.folder_path or args.vault_path, wait=args.wait)
+    return submit_task_and_handle(
+        "obsidian",
+        args.kb_id,
+        params,
+        source=args.folder_path or args.vault_path,
+        wait=args.wait,
+    )
 
 
 def handle_ingest_zotero(args: argparse.Namespace) -> int:
@@ -230,19 +692,31 @@ def handle_ingest_zotero(args: argparse.Namespace) -> int:
         "rebuild": args.rebuild,
     }
     source = args.collection_name or args.collection_id or "zotero"
-    return submit_task_and_handle("zotero", args.kb_id, params, source=source, wait=args.wait)
+    return submit_task_and_handle(
+        "zotero", args.kb_id, params, source=source, wait=args.wait
+    )
 
 
 def handle_ingest_file(args: argparse.Namespace) -> int:
-    return submit_task_and_handle("generic", args.kb_id, {"paths": [args.path]}, source=args.path, wait=args.wait)
+    return submit_task_and_handle(
+        "generic", args.kb_id, {"paths": [args.path]}, source=args.path, wait=args.wait
+    )
 
 
 def handle_ingest_batch(args: argparse.Namespace) -> int:
-    return submit_task_and_handle("generic", args.kb_id, {"paths": args.paths}, source=args.paths[0], wait=args.wait)
+    return submit_task_and_handle(
+        "generic",
+        args.kb_id,
+        {"paths": args.paths},
+        source=args.paths[0],
+        wait=args.wait,
+    )
 
 
 def handle_ingest_rebuild(args: argparse.Namespace) -> int:
-    return submit_task_and_handle("rebuild", args.kb_id, {}, source="cli:ingest:rebuild", wait=args.wait)
+    return submit_task_and_handle(
+        "rebuild", args.kb_id, {}, source="cli:ingest:rebuild", wait=args.wait
+    )
 
 
 def handle_obsidian_vaults(_: argparse.Namespace) -> int:
@@ -315,12 +789,18 @@ def handle_zotero_search(args: argparse.Namespace) -> int:
 
 def handle_task_submit(args: argparse.Namespace) -> int:
     params = parse_key_values(args.param or [])
-    return submit_task_and_handle(args.task_type, args.kb_id, params, source=args.source or "", wait=args.wait)
+    return submit_task_and_handle(
+        args.task_type, args.kb_id, params, source=args.source or "", wait=args.wait
+    )
 
 
 def handle_task_list(args: argparse.Namespace) -> int:
-    tasks = TaskService.list_tasks(kb_id=args.kb_id, status=args.status, limit=args.limit)
-    print_table(tasks, ["task_id", "task_type", "kb_id", "status", "progress", "message"])
+    tasks = TaskService.list_tasks(
+        kb_id=args.kb_id, status=args.status, limit=args.limit
+    )
+    print_table(
+        tasks, ["task_id", "task_type", "kb_id", "status", "progress", "message"]
+    )
     return 0
 
 
@@ -334,6 +814,11 @@ def handle_task_show(args: argparse.Namespace) -> int:
 
 def handle_task_cancel(args: argparse.Namespace) -> int:
     print_json(TaskService.cancel(args.task_id))
+    return 0
+
+
+def handle_task_delete(args: argparse.Namespace) -> int:
+    print_json(TaskService.delete(args.task_id, cleanup=args.cleanup))
     return 0
 
 
@@ -357,7 +842,9 @@ def handle_task_watch(args: argparse.Namespace) -> int:
 
 def handle_category_rules_list(_: argparse.Namespace) -> int:
     result = CategoryService.list_rules()
-    print_table(result["rules"], ["kb_id", "rule_type", "pattern", "priority", "description"])
+    print_table(
+        result["rules"], ["kb_id", "rule_type", "pattern", "priority", "description"]
+    )
     return 0
 
 
@@ -396,7 +883,9 @@ def handle_category_classify(args: argparse.Namespace) -> int:
 
 
 def handle_admin_tables(_: argparse.Namespace) -> int:
-    print_table(AdminService.list_tables()["tables"], ["kb_id", "status", "row_count", "path"])
+    print_table(
+        AdminService.list_tables()["tables"], ["kb_id", "status", "row_count", "path"]
+    )
     return 0
 
 
@@ -416,7 +905,9 @@ def handle_admin_delete(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="llamaindex-study", description="LlamaIndex Study 统一 CLI")
+    parser = argparse.ArgumentParser(
+        prog="llamaindex-study", description="LlamaIndex Study 统一 CLI"
+    )
     subparsers = parser.add_subparsers(dest="command")
 
     chat_parser = subparsers.add_parser("chat", help="启动交互式问答")
@@ -448,16 +939,42 @@ def build_parser() -> argparse.ArgumentParser:
     kb_rebuild.add_argument("--wait", action="store_true")
     kb_rebuild.set_defaults(handler=handle_kb_rebuild)
 
+    kb_topics = kb_sub.add_parser("topics", help="分析知识库主题词（使用远程LLM）")
+    kb_topics.add_argument("kb_id", nargs="?", default=None)
+    kb_topics.add_argument("--all", action="store_true", help="分析所有知识库")
+    kb_topics.add_argument("--update", action="store_true", help="更新到数据库")
+    kb_topics.set_defaults(handler=handle_kb_topics)
+
+    kb_topics_local = kb_sub.add_parser(
+        "topics-local", help="分析知识库主题词（使用本地模型）"
+    )
+    kb_topics_local.add_argument("kb_id", nargs="?", default=None)
+    kb_topics_local.add_argument("--all", action="store_true", help="分析所有知识库")
+    kb_topics_local.add_argument("--update", action="store_true", help="更新到数据库")
+    kb_topics_local.set_defaults(handler=handle_kb_topics_local)
+
     search_parser = subparsers.add_parser("search", help="检索知识库")
-    search_parser.add_argument("kb_id")
-    search_parser.add_argument("query")
+    search_parser.add_argument(
+        "kb_id", nargs="?", default=None, help="知识库 ID（省略时自动选择）"
+    )
+    search_parser.add_argument("query", nargs="*", default=None, help="查询内容")
     search_parser.add_argument("-k", "--top-k", type=int, default=5)
+    search_parser.add_argument("--auto", action="store_true", help="自动选择知识库")
+    search_parser.add_argument(
+        "--exclude", help="排除的知识库 ID（逗号分隔，如: tech_tools,academic）"
+    )
     search_parser.set_defaults(handler=handle_search)
 
     query_parser = subparsers.add_parser("query", help="知识库问答")
-    query_parser.add_argument("kb_id")
-    query_parser.add_argument("query")
+    query_parser.add_argument(
+        "kb_id", nargs="?", default=None, help="知识库 ID（省略时自动选择）"
+    )
+    query_parser.add_argument("query", nargs="*", default=None, help="查询内容")
     query_parser.add_argument("-k", "--top-k", type=int, default=5)
+    query_parser.add_argument("--auto", action="store_true", help="自动选择知识库")
+    query_parser.add_argument(
+        "--exclude", help="排除的知识库 ID（逗号分隔，如: tech_tools,academic）"
+    )
     query_parser.set_defaults(handler=handle_query)
 
     ingest_parser = subparsers.add_parser("ingest", help="提交导入任务")
@@ -465,11 +982,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     ingest_obsidian = ingest_sub.add_parser("obsidian", help="导入 Obsidian 目录")
     ingest_obsidian.add_argument("kb_id")
-    ingest_obsidian.add_argument("--vault-path", default=str(Path.home() / "Documents" / "Obsidian"))
+    ingest_obsidian.add_argument(
+        "--vault-path", default=str(Path.home() / "Documents" / "Obsidian Vault")
+    )
     ingest_obsidian.add_argument("--folder-path")
-    ingest_obsidian.add_argument("--recursive", action=argparse.BooleanOptionalAction, default=True)
+    ingest_obsidian.add_argument(
+        "--recursive", action=argparse.BooleanOptionalAction, default=True
+    )
     ingest_obsidian.add_argument("--rebuild", action="store_true")
-    ingest_obsidian.add_argument("--force-delete", action=argparse.BooleanOptionalAction, default=True)
+    ingest_obsidian.add_argument(
+        "--force-delete", action=argparse.BooleanOptionalAction, default=True
+    )
     ingest_obsidian.add_argument("--persist-dir")
     ingest_obsidian.add_argument("--wait", action="store_true")
     ingest_obsidian.set_defaults(handler=handle_ingest_obsidian)
@@ -500,7 +1023,9 @@ def build_parser() -> argparse.ArgumentParser:
     ingest_rebuild.set_defaults(handler=handle_ingest_rebuild)
 
     obsidian_parser = subparsers.add_parser("obsidian", help="Obsidian 辅助命令")
-    obsidian_sub = obsidian_parser.add_subparsers(dest="obsidian_command", required=True)
+    obsidian_sub = obsidian_parser.add_subparsers(
+        dest="obsidian_command", required=True
+    )
 
     obsidian_vaults = obsidian_sub.add_parser("vaults", help="列出可用 Vault")
     obsidian_vaults.set_defaults(handler=handle_obsidian_vaults)
@@ -512,10 +1037,16 @@ def build_parser() -> argparse.ArgumentParser:
     obsidian_mappings = obsidian_sub.add_parser("mappings", help="列出目录映射")
     obsidian_mappings.set_defaults(handler=handle_obsidian_mappings)
 
-    obsidian_import_all = obsidian_sub.add_parser("import-all", help="批量提交所有 Obsidian 导入任务")
-    obsidian_import_all.add_argument("--vault-path", default=str(Path.home() / "Documents" / "Obsidian"))
+    obsidian_import_all = obsidian_sub.add_parser(
+        "import-all", help="批量提交所有 Obsidian 导入任务"
+    )
+    obsidian_import_all.add_argument(
+        "--vault-path", default=str(Path.home() / "Documents" / "Obsidian Vault")
+    )
     obsidian_import_all.add_argument("--rebuild", action="store_true")
-    obsidian_import_all.add_argument("--force-delete", action=argparse.BooleanOptionalAction, default=True)
+    obsidian_import_all.add_argument(
+        "--force-delete", action=argparse.BooleanOptionalAction, default=True
+    )
     obsidian_import_all.add_argument("--wait", action="store_true")
     obsidian_import_all.set_defaults(handler=handle_obsidian_import_all)
 
@@ -555,6 +1086,15 @@ def build_parser() -> argparse.ArgumentParser:
     task_cancel.add_argument("task_id")
     task_cancel.set_defaults(handler=handle_task_cancel)
 
+    task_delete = task_sub.add_parser("delete", help="删除任务")
+    task_delete.add_argument("task_id")
+    task_delete.add_argument(
+        "--cleanup",
+        action="store_true",
+        help="同时清理关联的知识库数据（仅对 failed/cancelled 任务有效）",
+    )
+    task_delete.set_defaults(handler=handle_task_delete)
+
     task_watch = task_sub.add_parser("watch", help="持续观察任务状态")
     task_watch.add_argument("task_id")
     task_watch.add_argument("--interval", type=float, default=1.0)
@@ -562,10 +1102,14 @@ def build_parser() -> argparse.ArgumentParser:
     task_watch.set_defaults(handler=handle_task_watch)
 
     category_parser = subparsers.add_parser("category", help="分类规则与分类辅助")
-    category_sub = category_parser.add_subparsers(dest="category_command", required=True)
+    category_sub = category_parser.add_subparsers(
+        dest="category_command", required=True
+    )
 
     category_rules = category_sub.add_parser("rules", help="分类规则管理")
-    category_rules_sub = category_rules.add_subparsers(dest="rules_command", required=True)
+    category_rules_sub = category_rules.add_subparsers(
+        dest="rules_command", required=True
+    )
 
     rules_list = category_rules_sub.add_parser("list", help="列出分类规则")
     rules_list.set_defaults(handler=handle_category_rules_list)
@@ -590,7 +1134,9 @@ def build_parser() -> argparse.ArgumentParser:
     category_classify = category_sub.add_parser("classify", help="对文件夹执行分类")
     category_classify.add_argument("folder_path")
     category_classify.add_argument("--description", default="")
-    category_classify.add_argument("--use-llm", action=argparse.BooleanOptionalAction, default=True)
+    category_classify.add_argument(
+        "--use-llm", action=argparse.BooleanOptionalAction, default=True
+    )
     category_classify.set_defaults(handler=handle_category_classify)
 
     admin_parser = subparsers.add_parser("admin", help="管理命令")

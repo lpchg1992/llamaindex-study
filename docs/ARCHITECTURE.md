@@ -119,10 +119,16 @@ def _get_embedding_with_retry(self, text: str, ep: EmbeddingEndpoint) -> Embeddi
 ┌─────────────────────────────────────────────────────────────┐
 │                        接口层 (Interface)                    │
 ├─────────────────────────────────────────────────────────────┤
-│  api.py                    │  kb/ingest.py, kb/ingest_vdb.py │
-│  - FastAPI HTTP 接口        │  - 命令行入口                     │
-│  - WebSocket 推送          │  - 批处理脚本                     │
-└──────────────────────────────┬──────────────────────────────┘
+│  api.py                     │  src/llamaindex_study/main.py  │
+│  - FastAPI HTTP 接口         │  - llamaindex-study CLI         │
+│  - WebSocket 推送           │                                 │
+├─────────────────────────────┼─────────────────────────────────┤
+│  kb/ingest.py               │  kb/ingest_zotero.py            │
+│  - Obsidian 批量导入        │  - Zotero 导入 (特定收藏)        │
+│                             │                                 │
+│  kb/ingest_hitech_history.py│  kb/ingest_vdb.py               │
+│  - 高新历史项目导入         │  - LanceDB 写入队列              │
+└─────────────────────────────┴─────────────────────────────────┘
                                │
 ┌──────────────────────────────▼──────────────────────────────┐
 │                     服务层 (Services)                        │
@@ -148,6 +154,11 @@ def _get_embedding_with_retry(self, text: str, ep: EmbeddingEndpoint) -> Embeddi
 │  ├── ingest_vdb.py          # LanceDB 写入队列               │
 │  ├── deduplication.py        # 去重和增量同步                 │
 │  └── database.py            # SQLite 数据库管理              │
+├─────────────────────────────────────────────────────────────┤
+│  kb/ (独立脚本，非 TaskScheduler 管理)                       │
+│  ├── ingest.py              # Obsidian 批量导入脚本          │
+│  ├── ingest_zotero.py       # Zotero 导入脚本               │
+│  └── ingest_hitech_history.py # 高新历史项目导入脚本         │
 └──────────────────────────────┬──────────────────────────────┘
                                │
 ┌──────────────────────────────▼──────────────────────────────┐
@@ -487,7 +498,7 @@ OLLAMA_REMOTE_URL=http://192.168.31.169:11434
 
 # ==================== 存储配置 ====================
 OBSIDIAN_VAULT_ROOT=~/Documents/Obsidian Vault
-OBSIDIAN_STORAGE_DIR=~/.llamaindex/storage
+PERSIST_DIR=~/.llamaindex/storage
 ZOTERO_STORAGE_DIR=~/.llamaindex/storage/zotero
 PERSIST_DIR=~/.llamaindex/storage
 

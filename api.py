@@ -16,12 +16,15 @@ API 端点:
     检索查询:
     POST /kbs/{kb_id}/search        - 向量检索
     POST /kbs/{kb_id}/query        - RAG 问答
+    POST /search                     - 自动路由检索
+    POST /query                      - 自动路由问答
 
     任务队列:
     POST /tasks                      - 提交任务
     GET  /tasks                      - 列出任务
     GET  /tasks/{task_id}           - 查询任务状态
     DELETE /tasks/{task_id}          - 取消任务
+    DELETE /tasks/{task_id}/delete   - 删除任务
 
     文档导入 (异步):
     POST /kbs/{kb_id}/ingest        - 通用文件导入（异步）
@@ -54,9 +57,11 @@ from pydantic import BaseModel, Field
 
 # 添加项目根目录到 path
 import sys
+
 sys.path.insert(0, str(Path(__file__).parent))
 
 from dotenv import load_dotenv
+
 env_path = Path(__file__).parent / ".env"
 if env_path.exists():
     load_dotenv(env_path)
@@ -87,6 +92,7 @@ async def start_scheduler():
     """启动任务调度器"""
     global _scheduler_ref
     from kb.task_executor import TaskScheduler
+
     scheduler = TaskScheduler()
     _scheduler_ref = asyncio.create_task(scheduler.run())
     logger.info("任务调度器已启动")
@@ -123,9 +129,11 @@ app.add_middleware(
 
 # ============== 数据模型 ==============
 
+
 class SearchRequest(BaseModel):
     query: str = Field(..., description="搜索查询")
     top_k: int = Field(5, ge=1, le=100)
+    exclude: Optional[List[str]] = Field(None, description="排除的知识库 ID 列表")
 
 
 class SearchResult(BaseModel):
@@ -138,6 +146,7 @@ class QueryRequest(BaseModel):
     query: str = Field(..., description="查询")
     mode: str = Field("hybrid", description="检索模式: hybrid, vector, keyword")
     top_k: int = Field(5, ge=1, le=100)
+    exclude: Optional[List[str]] = Field(None, description="排除的知识库 ID 列表")
 
 
 class QueryResponse(BaseModel):
@@ -187,12 +196,14 @@ _task_thread: Optional[threading.Thread] = None
 def _get_or_create_loop():
     """获取或创建事件循环"""
     global _task_loop, _task_thread
-    
+
     if _task_loop is None or _task_loop.is_closed():
         _task_loop = asyncio.new_event_loop()
-        _task_thread = threading.Thread(target=_run_loop, args=(_task_loop,), daemon=True)
+        _task_thread = threading.Thread(
+            target=_run_loop, args=(_task_loop,), daemon=True
+        )
         _task_thread.start()
-    
+
     return _task_loop
 
 
@@ -207,6 +218,7 @@ def _run_loop(loop):
 
 # ============== 健康检查 ==============
 
+
 @app.get("/health")
 def health():
     """健康检查"""
@@ -218,6 +230,7 @@ def health():
 
 
 # ============== 任务队列接口 ==============
+
 
 @app.post("/tasks", response_model=TaskResponse)
 def create_task(req: dict):
@@ -245,13 +258,16 @@ def list_tasks(kb_id: str = None, status: str = None, limit: int = 50):
     from kb.task_queue import task_queue
 
     tasks = task_queue.list_tasks(kb_id=kb_id, status=status, limit=limit)
-    return [TaskResponse(
-        task_id=t.task_id,
-        status=t.status,
-        kb_id=t.kb_id,
-        message=t.message,
-        progress=t.progress,
-    ) for t in tasks]
+    return [
+        TaskResponse(
+            task_id=t.task_id,
+            status=t.status,
+            kb_id=t.kb_id,
+            message=t.message,
+            progress=t.progress,
+        )
+        for t in tasks
+    ]
 
 
 @app.get("/tasks/{task_id}", response_model=TaskResponse)
@@ -285,7 +301,23 @@ def cancel_task(task_id: str):
     raise HTTPException(status_code=404, detail="Task not found or already completed")
 
 
+@app.delete("/tasks/{task_id}/delete")
+def delete_task(task_id: str, cleanup: bool = False):
+    """删除任务（物理删除）
+
+    Args:
+        cleanup: 是否清理关联的知识库数据（仅对 failed/cancelled 任务有效）
+    """
+    from kb.services import TaskService
+
+    try:
+        return TaskService.delete(task_id, cleanup=cleanup)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 # ============== 知识库接口 ==============
+
 
 @app.get("/kbs", response_model=List[KBInfo])
 def list_kbs():
@@ -323,6 +355,7 @@ def delete_kb(kb_id: str):
 
 # ============== 检索接口 ==============
 
+
 @app.post("/kbs/{kb_id}/search", response_model=List[SearchResult])
 def search(kb_id: str, req: SearchRequest):
     """向量检索"""
@@ -337,7 +370,26 @@ def query(kb_id: str, req: QueryRequest):
     return QueryResponse(**result)
 
 
+@app.post("/search", response_model=List[SearchResult])
+def search_auto(req: SearchRequest):
+    """自动路由向量检索"""
+    from kb.services import QueryRouter
+
+    result = QueryRouter.search(req.query, req.top_k, exclude=req.exclude)
+    return [SearchResult(**r) for r in result.get("results", [])]
+
+
+@app.post("/query", response_model=QueryResponse)
+def query_auto(req: QueryRequest):
+    """自动路由 RAG 问答"""
+    from kb.services import QueryRouter
+
+    result = QueryRouter.query(req.query, req.top_k, exclude=req.exclude)
+    return QueryResponse(**result)
+
+
 # ============== 导入接口 ==============
+
 
 @app.post("/kbs/{kb_id}/ingest")
 def ingest(kb_id: str, req: IngestRequest):
@@ -362,6 +414,7 @@ def ingest(kb_id: str, req: IngestRequest):
 
 
 # ============== Zotero 接口 ==============
+
 
 class ZoteroIngestRequest(BaseModel):
     collection_id: Optional[str] = None
@@ -403,11 +456,16 @@ def ingest_zotero(kb_id: str, req: ZoteroIngestRequest):
             collection_name = result.get("collectionName", collection_name)
         elif result and "multiple" in result:
             importer.close()
-            raise HTTPException(status_code=400, detail="名称模糊，存在多个匹配，请用 collection_id 精确指定")
+            raise HTTPException(
+                status_code=400,
+                detail="名称模糊，存在多个匹配，请用 collection_id 精确指定",
+            )
         else:
             importer.close()
-            raise HTTPException(status_code=400, detail=f"未找到收藏夹: {req.collection_name}")
-    
+            raise HTTPException(
+                status_code=400, detail=f"未找到收藏夹: {req.collection_name}"
+            )
+
     importer.close()
 
     task_id = task_queue.submit_task(
@@ -433,8 +491,11 @@ def ingest_zotero(kb_id: str, req: ZoteroIngestRequest):
 
 # ============== Obsidian 接口 ==============
 
+
 class ObsidianIngestRequest(BaseModel):
-    vault_path: str = Field(Path.home() / "Documents" / "Obsidian Vault", description="Vault 路径")
+    vault_path: str = Field(
+        Path.home() / "Documents" / "Obsidian Vault", description="Vault 路径"
+    )
     folder_path: Optional[str] = Field(None, description="子文件夹路径")
     recursive: bool = Field(True, description="递归处理子文件夹")
     async_mode: bool = Field(True, description="是否异步处理")
@@ -465,13 +526,17 @@ def ingest_obsidian(kb_id: str, req: ObsidianIngestRequest):
 
     vault_path = Path(req.vault_path)
     if not vault_path.exists():
-        raise HTTPException(status_code=400, detail=f"Vault 路径不存在: {req.vault_path}")
+        raise HTTPException(
+            status_code=400, detail=f"Vault 路径不存在: {req.vault_path}"
+        )
 
     import_dir = vault_path
     if req.folder_path:
         import_dir = vault_path / req.folder_path
         if not import_dir.exists():
-            raise HTTPException(status_code=400, detail=f"文件夹路径不存在: {req.folder_path}")
+            raise HTTPException(
+                status_code=400, detail=f"文件夹路径不存在: {req.folder_path}"
+            )
 
     task_id = task_queue.submit_task(
         task_type="obsidian",
@@ -496,6 +561,7 @@ def ingest_obsidian(kb_id: str, req: ObsidianIngestRequest):
 
 
 # ============== Obsidian 全库分类导入 ==============
+
 
 @app.get("/obsidian/mappings")
 def list_obsidian_mappings():
@@ -530,9 +596,9 @@ def import_obsidian_all():
             continue
 
         for folder in mapping.folders:
-            use_remote = (use_remote_counter % 2 == 1)
+            use_remote = use_remote_counter % 2 == 1
             use_remote_counter += 1
-            
+
             task_id = task_queue.submit_task(
                 task_type="obsidian_folder",
                 kb_id=mapping.kb_id,
@@ -545,11 +611,13 @@ def import_obsidian_all():
 
             # 任务由调度器启动
 
-            task_ids.append({
-                "kb_id": mapping.kb_id,
-                "folder": folder,
-                "task_id": task_id,
-            })
+            task_ids.append(
+                {
+                    "kb_id": mapping.kb_id,
+                    "folder": folder,
+                    "task_id": task_id,
+                }
+            )
 
     return {
         "status": "pending",
@@ -560,14 +628,15 @@ def import_obsidian_all():
 
 # ============== 分类规则管理 ==============
 
+
 @app.get("/category/rules")
 def list_category_rules():
     """列出所有分类规则"""
     from kb.database import init_category_rule_db
-    
+
     rule_db = init_category_rule_db()
     rules = rule_db.get_all_rules()
-    
+
     return {
         "rules": rules,
         "total": len(rules),
@@ -578,9 +647,9 @@ def list_category_rules():
 def sync_category_rules():
     """同步分类规则到数据库"""
     from kb.obsidian_config import seed_mappings_to_db
-    
+
     count = seed_mappings_to_db()
-    
+
     return {
         "status": "success",
         "message": f"已同步 {count} 条分类规则到数据库",
@@ -596,7 +665,7 @@ def classify_folder_llm(
 ):
     """
     使用规则或 LLM 分类新文件夹
-    
+
     Args:
         folder_path: 文件夹路径
         folder_description: 文件夹描述（可选，用于 LLM 分类）
@@ -607,15 +676,15 @@ def classify_folder_llm(
         folder_path = request.get("folder_path", folder_path)
         folder_description = request.get("folder_description", folder_description)
         use_llm = request.get("use_llm", use_llm)
-    
+
     if not folder_path:
         return {"error": "folder_path is required"}
     from kb.obsidian_config import find_kb_by_path
     from kb.category_classifier import CategoryClassifier
-    
+
     # 1. 先用规则匹配
     matched_kbs = find_kb_by_path(folder_path)
-    
+
     if matched_kbs and not use_llm:
         return {
             "kb_id": matched_kbs[0],
@@ -623,7 +692,7 @@ def classify_folder_llm(
             "confidence": 1.0,
             "reason": f"文件夹路径匹配: {folder_path}",
         }
-    
+
     # 2. 如果规则没匹配或要求使用 LLM
     if use_llm:
         try:
@@ -632,7 +701,7 @@ def classify_folder_llm(
                 folder_path=folder_path,
                 folder_description=folder_description,
             )
-            
+
             return {
                 "kb_id": result["kb_id"],
                 "matched_by": "llm",
@@ -645,7 +714,7 @@ def classify_folder_llm(
                 "error": f"LLM 分类失败: {str(e)}",
                 "alternatives": matched_kbs,
             }
-    
+
     return {
         "kb_id": None,
         "matched_by": "none",
@@ -665,7 +734,7 @@ def add_category_rule(
 ):
     """添加分类规则"""
     from kb.database import init_category_rule_db
-    
+
     rule_db = init_category_rule_db()
     success = rule_db.add_rule(
         kb_id=kb_id,
@@ -674,7 +743,7 @@ def add_category_rule(
         description=description,
         priority=priority,
     )
-    
+
     return {
         "status": "success" if success else "error",
         "message": f"规则添加{'成功' if success else '失败'}",
@@ -712,6 +781,7 @@ def rebuild_kb(kb_id: str, async_mode: bool = True):
 
 # ============== 管理接口 ==============
 
+
 @app.get("/admin/tables")
 def list_tables():
     """列出所有向量表"""
@@ -726,11 +796,15 @@ def list_tables():
 
         lance_file = kb_dir / f"{kb_dir.name}.lance"
         if lance_file.exists():
-            tables.append({
-                "kb_id": kb_dir.name,
-                "path": str(kb_dir),
-                "size": sum(f.stat().st_size for f in lance_file.rglob("*.lance")) / 1024 / 1024,
-            })
+            tables.append(
+                {
+                    "kb_id": kb_dir.name,
+                    "path": str(kb_dir),
+                    "size": sum(f.stat().st_size for f in lance_file.rglob("*.lance"))
+                    / 1024
+                    / 1024,
+                }
+            )
 
     return {"tables": tables}
 
@@ -754,10 +828,12 @@ def delete_table(kb_id: str):
 
 # ============== WebSocket 接口 ==============
 
+
 @app.websocket("/ws/tasks")
 async def ws_tasks(websocket):
     """WebSocket 任务状态推送"""
     from kb.websocket_manager import ws_manager
+
     await ws_manager.connect(websocket)
     try:
         while True:
@@ -782,4 +858,5 @@ async def websocket_endpoint(websocket):
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8000)

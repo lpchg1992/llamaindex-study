@@ -90,6 +90,7 @@ curl "http://localhost:8000/tasks/abc12345"
 | GET | `/tasks` | 列出任务 |
 | GET | `/tasks/{task_id}` | 查询任务状态 |
 | DELETE | `/tasks/{task_id}` | 取消任务 |
+| DELETE | `/tasks/{task_id}/delete` | 删除任务（可选 cleanup=true 清理关联数据） |
 
 ### 知识库管理
 
@@ -113,8 +114,10 @@ curl "http://localhost:8000/tasks/abc12345"
 
 | 方法 | 端点 | 功能 |
 |------|------|------|
-| POST | `/kbs/{kb_id}/search` | 向量检索 |
-| POST | `/kbs/{kb_id}/query` | RAG 问答 |
+| POST | `/kbs/{kb_id}/search` | 向量检索（指定知识库） |
+| POST | `/kbs/{kb_id}/query` | RAG 问答（指定知识库） |
+| POST | `/search` | 自动路由检索 |
+| POST | `/query` | 自动路由 RAG 问答 |
 
 ### Obsidian
 
@@ -313,6 +316,66 @@ curl -X POST "http://localhost:8000/kbs/tech_tools/query" \
 }
 ```
 
+#### POST /search - 自动路由检索
+
+自动选择知识库进行向量检索：
+
+```bash
+curl -X POST "http://localhost:8000/search" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "Python 异步编程", "top_k": 5}'
+```
+
+```json
+{
+  "results": [
+    {
+      "text": "Python asyncio 使用指南...",
+      "score": 0.92,
+      "kb_id": "tech_tools"
+    }
+  ],
+  "kbs_queried": ["tech_tools"],
+  "query": "Python 异步编程"
+}
+```
+
+**排除指定知识库：**
+
+```bash
+curl -X POST "http://localhost:8000/search" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "Python 异步编程", "top_k": 5, "exclude": ["academic", "industry_news"]}'
+```
+
+#### POST /query - 自动路由 RAG 问答
+
+自动选择知识库进行 RAG 问答：
+
+```bash
+curl -X POST "http://localhost:8000/query" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "猪饲料中氨基酸平衡的关键点是什么？", "top_k": 5}'
+```
+
+```json
+{
+  "response": "猪饲料中氨基酸平衡需要考虑以下关键点...",
+  "sources": [
+    {"kb_id": "swine_nutrition", "text": "氨基酸平衡是...", "score": 0.88}
+  ],
+  "kbs_queried": ["swine_nutrition", "zotero_nutrition"]
+}
+```
+
+**排除指定知识库：**
+
+```bash
+curl -X POST "http://localhost:8000/query" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "猪饲料中氨基酸平衡的关键点是什么？", "top_k": 5, "exclude": ["tech_tools"]}'
+```
+
 ---
 
 ### 分类规则
@@ -479,7 +542,7 @@ curl -X POST "http://localhost:8000/kbs/tech_tools/search" \
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `OBSIDIAN_VAULT_ROOT` | `~/Documents/Obsidian Vault` | Obsidian Vault 根目录 |
-| `OBSIDIAN_STORAGE_DIR` | `~/.llamaindex/storage` | Obsidian 存储目录 |
+| `PERSIST_DIR` | `~/.llamaindex/storage` | 向量存储目录 |
 | `ZOTERO_STORAGE_DIR` | `~/.llamaindex/storage/zotero` | Zotero 存储目录 |
 
 ### Embedding 配置

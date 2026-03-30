@@ -42,14 +42,15 @@ def get_zotero_storage_root() -> Path:
 def get_vault_root() -> Path:
     """获取 Obsidian Vault 根目录"""
     from dotenv import load_dotenv
+
     env_path = PROJECT_ROOT / ".env"
     if env_path.exists():
         load_dotenv(env_path, override=True)
-    
+
     vault_root = os.getenv("OBSIDIAN_VAULT_ROOT")
     if vault_root:
         return Path(vault_root)
-    
+
     return DEFAULT_VAULT_ROOT
 
 
@@ -64,18 +65,21 @@ class KnowledgeBase:
     persist_name: str  # 存储目录名
     tags: List[str] = field(default_factory=list)  # 标签（描述用）
     source_tags: List[str] = field(default_factory=list)  # 用于分类的标签列表
+    topics: List[str] = field(
+        default_factory=list
+    )  # 主题关键词（帮助 LLM 理解 KB 内容）
 
     @property
     def persist_dir(self) -> Path:
         """获取持久化目录路径
-        
+
         Obsidian 知识库使用 get_storage_root()
         Zotero 知识库使用 get_zotero_storage_root()
         """
         # Zotero 知识库的 persist_name 以 zotero_ 开头
         if self.id.startswith("zotero_"):
             return get_zotero_storage_root() / self.id
-        
+
         return get_storage_root() / self.persist_name
 
     def source_paths_abs(self, vault_root: Optional[Path] = None) -> List[Path]:
@@ -94,6 +98,7 @@ class KnowledgeBase:
             "persist_name": self.persist_name,
             "tags": self.tags,
             "source_tags": self.source_tags,
+            "topics": self.topics,
         }
 
 
@@ -126,9 +131,16 @@ KNOWLEDGE_BASES: List[KnowledgeBase] = [
         persist_name="kb_swine_nutrition",
         tags=["猪营养", "饲料配方", "技术理论"],
         source_tags=[
-            "#猪营养", "#饲料", "#配方", "#原料",
-            "#swine", "#nutrition", "#feed",
-            "#消化率", "#净能", "#氨基酸",
+            "#猪营养",
+            "#饲料",
+            "#配方",
+            "#原料",
+            "#swine",
+            "#nutrition",
+            "#feed",
+            "#消化率",
+            "#净能",
+            "#氨基酸",
         ],
     ),
     KnowledgeBase(
@@ -142,9 +154,16 @@ KNOWLEDGE_BASES: List[KnowledgeBase] = [
         persist_name="kb_rd_experiments",
         tags=["试验", "研发", "工作日志"],
         source_tags=[
-            "#试验", "#研发", "#实验", "#研究",
-            "#工作日志", "#日报", "#周报",
-            "#experiment", "#trial", "#study",
+            "#试验",
+            "#研发",
+            "#实验",
+            "#研究",
+            "#工作日志",
+            "#日报",
+            "#周报",
+            "#experiment",
+            "#trial",
+            "#study",
         ],
     ),
     KnowledgeBase(
@@ -157,8 +176,11 @@ KNOWLEDGE_BASES: List[KnowledgeBase] = [
         persist_name="kb_hitech_projects",
         tags=["高新年", "项目申报", "材料"],
         source_tags=[
-            "#高新年", "#项目申报", "#高新技术",
-            "#hitech", "#project",
+            "#高新年",
+            "#项目申报",
+            "#高新技术",
+            "#hitech",
+            "#project",
         ],
     ),
     KnowledgeBase(
@@ -171,10 +193,20 @@ KNOWLEDGE_BASES: List[KnowledgeBase] = [
         persist_name="kb_tech_tools",
         tags=["IT", "AI工具", "编程", "服务器"],
         source_tags=[
-            "#IT", "#编程", "#服务器", "#AI工具",
-            "#python", "#编程", "#docker", "#linux",
-            "#code", "#programming", "#server",
-            "#技术", "#工具", "#软件",
+            "#IT",
+            "#编程",
+            "#服务器",
+            "#AI工具",
+            "#python",
+            "#编程",
+            "#docker",
+            "#linux",
+            "#code",
+            "#programming",
+            "#server",
+            "#技术",
+            "#工具",
+            "#软件",
         ],
     ),
     KnowledgeBase(
@@ -189,10 +221,18 @@ KNOWLEDGE_BASES: List[KnowledgeBase] = [
         persist_name="kb_academic",
         tags=["学术", "博士", "AI研究"],
         source_tags=[
-            "#学术", "#论文", "#博士", "#研究",
-            "#论文笔记", "#文献", "#AI研究",
-            "#academic", "#research", "#paper",
-            "#PhD", "#博士论文",
+            "#学术",
+            "#论文",
+            "#博士",
+            "#研究",
+            "#论文笔记",
+            "#文献",
+            "#AI研究",
+            "#academic",
+            "#research",
+            "#paper",
+            "#PhD",
+            "#博士论文",
         ],
     ),
     KnowledgeBase(
@@ -207,9 +247,16 @@ KNOWLEDGE_BASES: List[KnowledgeBase] = [
         persist_name="kb_industry_news",
         tags=["行业新闻", "AI日报", "畜牧资讯"],
         source_tags=[
-            "#新闻", "#日报", "#资讯", "#行业动态",
-            "#news", "#daily", "#industry",
-            "#AI新闻", "#畜牧", "#市场",
+            "#新闻",
+            "#日报",
+            "#资讯",
+            "#行业动态",
+            "#news",
+            "#daily",
+            "#industry",
+            "#AI新闻",
+            "#畜牧",
+            "#市场",
         ],
     ),
     KnowledgeBase(
@@ -227,108 +274,110 @@ KNOWLEDGE_BASES: List[KnowledgeBase] = [
 
 
 class KnowledgeBaseRegistry:
-    """知识库注册表
-    
-    支持从数据库加载分类规则（folder_path, tag）。
-    优先使用数据库中的规则，如果数据库为空则使用硬编码的 KNOWLEDGE_BASES。
-    """
+    """知识库注册表（从数据库加载）"""
 
     def __init__(self) -> None:
-        self._bases: Dict[str, KnowledgeBase] = {kb.id: kb for kb in KNOWLEDGE_BASES}
-        self._rule_db: Optional[Any] = None
-        self._rules_loaded: bool = False
-    
-    @property
-    def rule_db(self) -> Any:
-        """延迟加载规则数据库"""
-        if self._rule_db is None:
-            from kb.database import init_category_rule_db
-            self._rule_db = init_category_rule_db()
-        return self._rule_db
-    
-    def _load_rules_from_db(self) -> None:
-        """从数据库加载分类规则到 KnowledgeBase"""
-        if self._rules_loaded:
+        self._bases: Dict[str, KnowledgeBase] = {}
+        self._loaded: bool = False
+
+    def _ensure_loaded(self) -> None:
+        if self._loaded:
             return
-        
+        self._bases.clear()
+
         try:
-            all_rules = self.rule_db.get_all_rules()
-            
-            if all_rules:
-                # 按 kb_id 分组规则
-                kb_rules: Dict[str, Dict[str, List[str]]] = {}
-                for rule in all_rules:
-                    kb_id = rule["kb_id"]
-                    rule_type = rule["rule_type"]
-                    pattern = rule["pattern"]
-                    
-                    if kb_id not in kb_rules:
-                        kb_rules[kb_id] = {"folder_path": [], "tag": []}
-                    
-                    if rule_type in kb_rules[kb_id]:
-                        kb_rules[kb_id][rule_type].append(pattern)
-                
-                # 更新 KnowledgeBase 的 source_paths 和 source_tags
-                for kb_id, rules in kb_rules.items():
-                    if kb_id in self._bases:
-                        kb = self._bases[kb_id]
-                        if rules["folder_path"]:
-                            kb.source_paths = rules["folder_path"]
-                        if rules["tag"]:
-                            kb.source_tags = rules["tag"]
-                
-                logger.info(f"从数据库加载了 {len(all_rules)} 条分类规则")
+            from kb.database import init_kb_meta_db
+
+            db = init_kb_meta_db()
+            all_kbs = db.get_all(active_only=False)
+            if all_kbs:
+                for row in all_kbs:
+                    kb = self._row_to_kb(row)
+                    if kb:
+                        self._bases[kb.id] = kb
+                logger.debug(f"从数据库加载了 {len(self._bases)} 个知识库")
             else:
-                logger.debug("数据库暂无分类规则，使用默认配置")
+                self._load_fallback()
+                logger.debug("数据库为空，使用注册表默认配置")
         except Exception as e:
-            logger.warning(f"加载分类规则失败: {e}")
-        
-        self._rules_loaded = True
-    
+            logger.warning(f"从数据库加载失败: {e}")
+            self._load_fallback()
+
+        self._loaded = True
+
+    def _load_fallback(self) -> None:
+        for kb in KNOWLEDGE_BASES:
+            if kb.id not in self._bases:
+                self._bases[kb.id] = kb
+
+    def _row_to_kb(self, row: Dict[str, Any]) -> Optional[KnowledgeBase]:
+        try:
+            return KnowledgeBase(
+                id=row["kb_id"],
+                name=row.get("name", row["kb_id"]),
+                description=row.get("description", ""),
+                source_paths=row.get("source_paths", []),
+                persist_name=row.get("persist_path", "").split("/")[-1]
+                if row.get("persist_path")
+                else row["kb_id"],
+                tags=row.get("tags", []),
+                source_tags=row.get("source_tags", []),
+            )
+        except Exception:
+            return None
+
     def get(self, kb_id: str) -> Optional[KnowledgeBase]:
-        """根据 ID 获取知识库"""
-        self._load_rules_from_db()
+        self._ensure_loaded()
         return self._bases.get(kb_id)
 
     def list_all(self) -> List[KnowledgeBase]:
-        """列出所有知识库"""
-        self._load_rules_from_db()
+        self._ensure_loaded()
         return list(self._bases.values())
 
     def get_by_tag(self, tag: str) -> List[KnowledgeBase]:
-        """根据标签查找知识库"""
-        self._load_rules_from_db()
+        self._ensure_loaded()
         return [kb for kb in self._bases.values() if tag in kb.tags]
 
     def exists(self, kb_id: str) -> bool:
-        """检查知识库是否存在"""
+        self._ensure_loaded()
         return kb_id in self._bases
 
     def is_indexed(self, kb_id: str) -> bool:
-        """检查知识库是否已有索引"""
         kb = self.get(kb_id)
         if kb is None:
             return False
-        # LlamaIndex 保存为 default__vector_store.json
         vector_store = kb.persist_dir / "default__vector_store.json"
         return vector_store.exists()
-    
-    def seed_rules_to_db(self) -> int:
-        """将硬编码的配置同步到数据库"""
-        try:
-            kb_configs = [kb.to_dict() for kb in KNOWLEDGE_BASES]
-            count = self.rule_db.seed_initial_rules(kb_configs)
-            self._rules_loaded = False  # 重置，下次重新加载
-            return count
-        except Exception as e:
-            logger.warning(f"同步规则到数据库失败: {e}")
-            return 0
 
 
-# 全局注册表实例
 registry = KnowledgeBaseRegistry()
 
 
 def get_registry() -> KnowledgeBaseRegistry:
     """获取知识库注册表实例"""
     return registry
+
+
+def seed_all_to_database() -> int:
+    """将所有注册表知识库迁移到数据库
+
+    Returns:
+        迁移的知识库数量
+    """
+    from kb.database import init_kb_meta_db
+
+    obsidian_kbs = []
+    zotero_kbs = []
+
+    for kb in KNOWLEDGE_BASES:
+        kb_dict = kb.to_dict()
+        if kb.id.startswith("zotero_"):
+            zotero_kbs.append(kb_dict)
+        else:
+            obsidian_kbs.append(kb_dict)
+
+    db = init_kb_meta_db()
+    count = 0
+    count += db.seed_from_registry(obsidian_kbs, source_type="obsidian")
+    count += db.seed_from_registry(zotero_kbs, source_type="zotero")
+    return count

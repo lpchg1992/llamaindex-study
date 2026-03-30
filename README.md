@@ -37,8 +37,9 @@
 | **LanceDB 串行写入** | WriteQueue 保证写入顺序，避免锁定 |
 | **任务队列** | 异步提交，随时查询状态 |
 | **增量同步** | 基于文件哈希检测变更 |
-| **完整类型注解** | 提升代码可维护性 |
-| **统一日志管理** | 使用 Python logging 模块 |
+| **LLM 主题提取** | 导入时自动使用 LLM 提取专业主题词 |
+| **自动路由** | 根据问题内容自动选择相关知识库 |
+| **相似度去重** | 避免重复主题词（如"猪营养"与"猪的营养"） |
 
 ## 环境要求
 
@@ -100,7 +101,7 @@ OLLAMA_REMOTE_URL=http://192.168.31.169:11434
 
 # ==================== 存储配置 ====================
 OBSIDIAN_VAULT_ROOT=~/Documents/Obsidian Vault
-OBSIDIAN_STORAGE_DIR=~/.llamaindex/storage
+PERSIST_DIR=~/.llamaindex/storage
 ZOTERO_STORAGE_DIR=~/.llamaindex/storage/zotero
 ```
 
@@ -152,7 +153,11 @@ llamaindex-study/
 │   ├── zotero_processor.py    # Zotero 导入器
 │   ├── zotero_reader.py      # Zotero 读取器
 │   ├── websocket_manager.py   # WebSocket 管理
-│   └── services.py           # 统一服务层
+│   ├── topic_analyzer.py     # LLM 主题词提取（按需更新）
+│   ├── keyword_extractor.py   # LLM 关键词提取
+│   ├── services.py           # 统一服务层
+│   └── scripts/
+│       └── analyze_kb_topics.py  # 知识库主题分析脚本
 │
 └── docs/
     ├── API.md               # API 详细文档
@@ -210,6 +215,36 @@ poetry run python -m kb.ingest_vdb --show-changes
 
 # 增量同步（默认提交全部知识库）
 poetry run python -m kb.ingest_vdb
+```
+
+### 5. 知识库主题系统
+
+知识库的 topics 存储在数据库中，导入时自动使用 LLM 提取：
+
+- **KB 创建**：只写元数据（kb_id, name, description），不写 topics
+- **导入时提取**：有新文档时调用 LLM 提取主题词
+- **相似度去重**：避免重复（如"猪营养"与"猪的营养"）
+- **显著变化才更新**：Jaccard < 0.7 时才写入数据库
+- **Rebuild 清空 topics**：数据重建后 topics 需重新分析
+
+```bash
+# 分析知识库主题
+poetry run python -m kb.scripts.analyze_kb_topics swine_nutrition
+
+# 分析所有知识库并更新
+poetry run python -m kb.scripts.analyze_kb_topics --all --update
+```
+
+### 6. 自动路由
+
+系统支持根据问题内容自动选择相关知识库：
+
+```bash
+# 自动选择知识库
+poetry run llamaindex-study search "猪饲料配方" --auto
+
+# 排除指定知识库
+poetry run llamaindex-study query "如何配置 Docker" --auto --exclude tech_tools
 ```
 
 ## 使用方式

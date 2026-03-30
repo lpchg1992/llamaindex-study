@@ -13,7 +13,11 @@ from typing import List, Optional, Dict, Any, Callable
 from llamaindex_study.config import get_settings
 from llamaindex_study.logger import get_logger
 from llamaindex_study.vector_store import LanceDBVectorStore
-from llamaindex_study.ollama_utils import create_parallel_ollama_embedding, configure_global_embed_model
+from llamaindex_study.ollama_utils import (
+    create_parallel_ollama_embedding,
+    configure_global_embed_model,
+    configure_llamaindex_for_siliconflow,
+)
 from kb.registry import get_storage_root, get_zotero_storage_root
 from kb.deduplication import DeduplicationManager
 
@@ -22,46 +26,46 @@ logger = get_logger(__name__)
 
 class VectorStoreService:
     """向量存储服务"""
-    
+
     @staticmethod
     def get_vector_store(kb_id: str) -> LanceDBVectorStore:
         """获取知识库的向量存储
-        
+
         Obsidian 知识库使用 get_storage_root()
         Zotero 知识库使用 ZOTERO_PERSIST_DIR
         """
         settings = get_settings()
         zotero_path = Path(settings.zotero_persist_dir) / kb_id
-        
+
         if zotero_path.exists():
             # Zotero 知识库
             return LanceDBVectorStore(
                 persist_dir=zotero_path,
                 table_name=kb_id,
             )
-        
+
         # 默认使用 Obsidian 存储
         persist_dir = get_storage_root() / kb_id
         return LanceDBVectorStore(
             persist_dir=persist_dir,
             table_name=kb_id,
         )
-    
+
     @staticmethod
     def get_persist_dir(kb_id: str) -> Path:
         """获取知识库持久化目录"""
         settings = get_settings()
         zotero_path = Path(settings.zotero_persist_dir) / kb_id
-        
+
         if zotero_path.exists():
             return zotero_path
-        
+
         return get_storage_root() / kb_id
 
 
 class ObsidianService:
     """Obsidian 导入服务"""
-    
+
     @staticmethod
     def get_vaults() -> List[Dict[str, Any]]:
         """获取可用的 Obsidian Vault 列表"""
@@ -75,26 +79,30 @@ class ObsidianService:
                 "path": "/Volumes/online/nutsync/Obsidian Vault",
             },
         ]
-        
+
         result = []
         for v in vaults:
             path = Path(v["path"])
             if path.exists():
                 md_count = len(list(path.rglob("*.md")))
-                result.append({
-                    **v,
-                    "exists": True,
-                    "md_files": md_count,
-                })
+                result.append(
+                    {
+                        **v,
+                        "exists": True,
+                        "md_files": md_count,
+                    }
+                )
             else:
-                result.append({
-                    **v,
-                    "exists": False,
-                    "md_files": 0,
-                })
-        
+                result.append(
+                    {
+                        **v,
+                        "exists": False,
+                        "md_files": 0,
+                    }
+                )
+
         return result
-    
+
     @staticmethod
     def get_vault_info(vault_name: str) -> Optional[Dict[str, Any]]:
         """获取 Vault 信息"""
@@ -104,24 +112,24 @@ class ObsidianService:
             vault_path = Path("/Volumes/online/nutsync/Obsidian Vault")
         else:
             return None
-        
+
         if not vault_path.exists():
             return None
-        
+
         folders = {}
         for item in vault_path.iterdir():
             if item.is_dir() and not item.name.startswith("."):
                 md_count = len(list(item.rglob("*.md")))
                 if md_count > 0:
                     folders[item.name] = md_count
-        
+
         return {
             "name": vault_name,
             "path": str(vault_path),
             "total_md_files": len(list(vault_path.rglob("*.md"))),
             "folders": folders,
         }
-    
+
     @staticmethod
     def import_vault(
         kb_id: str,
@@ -134,7 +142,7 @@ class ObsidianService:
     ) -> Dict[str, Any]:
         """
         导入 Obsidian 笔记
-        
+
         Args:
             kb_id: 知识库 ID
             vault_path: Vault 根路径
@@ -143,43 +151,47 @@ class ObsidianService:
             exclude_patterns: 排除模式
             rebuild: 是否重建
             progress_callback: 进度回调
-            
+
         Returns:
             导入统计
         """
         from kb.obsidian_processor import ObsidianImporter
         from kb.document_processor import DocumentProcessorConfig
-        
+
         vault_path = Path(vault_path)
         if not vault_path.exists():
             raise ValueError(f"Vault 路径不存在: {vault_path}")
-        
+
         import_dir = vault_path
         if folder_path:
             import_dir = vault_path / folder_path
             if not import_dir.exists():
                 raise ValueError(f"文件夹不存在: {import_dir}")
-        
+
         # 获取向量存储
         vs = VectorStoreService.get_vector_store(kb_id)
         persist_dir = VectorStoreService.get_persist_dir(kb_id)
-        
+
         # 创建导入器
         importer = ObsidianImporter(
             vault_root=vault_path,
             kb_id=kb_id,
             persist_dir=persist_dir,
         )
-        
+
         exclude_patterns = exclude_patterns or [
-            "*/image/*", "*/_resources/*", "*/.obsidian/*",
-            "*/.trash/*", "*/Z_Copilot/*", "*/copilot-custom-prompts/*"
+            "*/image/*",
+            "*/_resources/*",
+            "*/.obsidian/*",
+            "*/.trash/*",
+            "*/Z_Copilot/*",
+            "*/copilot-custom-prompts/*",
         ]
         importer.exclude_patterns = exclude_patterns
-        
+
         if progress_callback:
             progress_callback(f"开始导入 Obsidian: {import_dir.name}")
-        
+
         try:
             stats = importer.import_directory(
                 directory=import_dir,
@@ -190,41 +202,43 @@ class ObsidianService:
                 exclude_patterns=exclude_patterns,
                 recursive=recursive,
             )
-            
+
             if progress_callback:
-                progress_callback(f"完成！导入 {stats.get('files', 0)} 个文件，{stats.get('nodes', 0)} 个节点")
-            
+                progress_callback(
+                    f"完成！导入 {stats.get('files', 0)} 个文件，{stats.get('nodes', 0)} 个节点"
+                )
+
             return stats
-            
+
         finally:
             pass  # ObsidianImporter 不需要关闭
 
 
 class ZoteroService:
     """Zotero 导入服务"""
-    
+
     @staticmethod
     def list_collections() -> List[Dict[str, Any]]:
         """列出所有收藏夹"""
         from kb.zotero_processor import ZoteroImporter
-        
+
         importer = ZoteroImporter()
         collections = importer.get_collections()
         importer.close()
-        
+
         return collections
-    
+
     @staticmethod
     def search_collections(q: str) -> List[Dict[str, Any]]:
         """搜索收藏夹"""
         from kb.zotero_processor import ZoteroImporter
-        
+
         importer = ZoteroImporter()
         results = importer.search_collections(q)
         importer.close()
-        
+
         return results
-    
+
     @staticmethod
     def import_collection(
         kb_id: str,
@@ -235,22 +249,22 @@ class ZoteroService:
     ) -> Dict[str, Any]:
         """
         导入 Zotero 收藏夹
-        
+
         Args:
             kb_id: 知识库 ID
             collection_id: 收藏夹 ID
             collection_name: 收藏夹名称（用于查找 ID）
             rebuild: 是否重建
             progress_callback: 进度回调
-            
+
         Returns:
             导入统计
         """
         from kb.zotero_processor import ZoteroImporter
         from kb.document_processor import DocumentProcessorConfig, ProcessingProgress
-        
+
         importer = ZoteroImporter()
-        
+
         # 解析收藏夹 ID
         if not collection_id and collection_name:
             result = importer.get_collection_by_name(collection_name)
@@ -263,25 +277,27 @@ class ZoteroService:
             else:
                 importer.close()
                 raise ValueError(f"未找到收藏夹: {collection_name}")
-        
+
         if not collection_id:
             importer.close()
             raise ValueError("未指定收藏夹 ID 或名称")
-        
+
         if progress_callback:
             progress_callback(f"开始导入 Zotero: {collection_name}")
-        
+
         # 获取向量存储
         vs = VectorStoreService.get_vector_store(kb_id)
-        
+
         # 进度文件
-        progress_file = Path.home() / ".llamaindex" / f"zotero_{collection_id}_progress.json"
+        progress_file = (
+            Path.home() / ".llamaindex" / f"zotero_{collection_id}_progress.json"
+        )
         progress = ProcessingProgress.load(progress_file)
-        
+
         if rebuild:
             vs.delete_table()
             progress = ProcessingProgress()
-        
+
         try:
             stats = importer.import_collection(
                 collection_id=collection_id,
@@ -291,21 +307,23 @@ class ZoteroService:
                 progress=progress,
                 rebuild=rebuild,
             )
-            
+
             progress_file.unlink(missing_ok=True)
-            
+
             if progress_callback:
-                progress_callback(f"完成！导入 {stats.get('items', 0)} 篇文献，{stats.get('nodes', 0)} 个节点")
-            
+                progress_callback(
+                    f"完成！导入 {stats.get('items', 0)} 篇文献，{stats.get('nodes', 0)} 个节点"
+                )
+
             return stats
-            
+
         finally:
             importer.close()
 
 
 class GenericService:
     """通用文件导入服务"""
-    
+
     @staticmethod
     def import_file(
         kb_id: str,
@@ -314,39 +332,41 @@ class GenericService:
     ) -> Dict[str, Any]:
         """
         导入单个文件
-        
+
         Args:
             kb_id: 知识库 ID
             path: 文件路径
             progress_callback: 进度回调
-            
+
         Returns:
             导入统计
         """
         from kb.generic_processor import GenericImporter
-        
+
         file_path = Path(path)
         if not file_path.exists():
             raise ValueError(f"文件不存在: {path}")
-        
+
         vs = VectorStoreService.get_vector_store(kb_id)
         importer = GenericImporter()
-        
+
         if progress_callback:
             progress_callback(f"开始导入: {file_path.name}")
-        
+
         try:
             stats = importer.process_file(
                 path=file_path,
                 vector_store=vs,
                 embed_model=create_parallel_ollama_embedding(),
             )
-            
+
             if progress_callback:
-                progress_callback(f"完成！导入 {stats.get('files', 0)} 个文件，{stats.get('nodes', 0)} 个节点")
-            
+                progress_callback(
+                    f"完成！导入 {stats.get('files', 0)} 个文件，{stats.get('nodes', 0)} 个节点"
+                )
+
             return stats
-            
+
         except Exception as e:
             if progress_callback:
                 progress_callback(f"导入失败: {e}")
@@ -355,21 +375,23 @@ class GenericService:
 
 class KnowledgeBaseService:
     """知识库管理服务"""
-    
+
     @staticmethod
     def list_all() -> List[Dict[str, Any]]:
         """列出所有知识库"""
         from kb.registry import registry
         from kb.database import init_kb_meta_db
-        
+
         kbs = registry.list_all()
+        kb_meta_db = init_kb_meta_db()
+        all_db_rows = {kb["kb_id"]: kb for kb in kb_meta_db.get_all()}
         result = []
         seen: set[str] = set()
-        
+
         for kb in kbs:
             persist_dir = kb.persist_dir
             exists = persist_dir.exists()
-            
+
             row_count = 0
             if exists:
                 try:
@@ -378,47 +400,60 @@ class KnowledgeBaseService:
                     row_count = stats.get("row_count", 0)
                 except Exception:
                     pass
-            
-            result.append({
-                "id": kb.id,
-                "name": kb.name,
-                "description": kb.description,
-                "status": "indexed" if row_count > 0 else "empty",
-                "row_count": row_count,
-            })
+
+            db_row = all_db_rows.get(kb.id, {})
+            db_topics = db_row.get("topics", []) or []
+            registry_topics = getattr(kb, "topics", []) or []
+            all_topics = list(set(db_topics + registry_topics))
+
+            result.append(
+                {
+                    "id": kb.id,
+                    "name": kb.name,
+                    "description": kb.description,
+                    "source_type": db_row.get("source_type", "unknown"),
+                    "status": "indexed" if row_count > 0 else "empty",
+                    "row_count": row_count,
+                    "topics": all_topics,
+                }
+            )
             seen.add(kb.id)
 
-        kb_meta_db = init_kb_meta_db()
-        for kb_meta in kb_meta_db.get_all():
-            kb_id = kb_meta["kb_id"]
+        for kb_id, kb_meta in all_db_rows.items():
             if kb_id in seen:
                 continue
-            persist_dir = Path(kb_meta.get("persist_path") or (get_storage_root() / kb_id))
+            persist_dir = Path(
+                kb_meta.get("persist_path") or (get_storage_root() / kb_id)
+            )
             info = {
                 "id": kb_id,
                 "name": kb_meta.get("name", kb_id),
                 "description": kb_meta.get("description", ""),
+                "source_type": kb_meta.get("source_type", "unknown"),
                 "status": "empty",
                 "row_count": 0,
+                "topics": kb_meta.get("topics", []),
             }
             if persist_dir.exists():
                 try:
                     vs = LanceDBVectorStore(persist_dir=persist_dir, table_name=kb_id)
                     stats = vs.get_stats()
-                    info["status"] = "indexed" if stats.get("row_count", 0) > 0 else "empty"
+                    info["status"] = (
+                        "indexed" if stats.get("row_count", 0) > 0 else "empty"
+                    )
                     info["row_count"] = stats.get("row_count", 0)
                 except Exception:
                     info["status"] = "error"
             result.append(info)
-        
+
         return result
-    
+
     @staticmethod
     def get_info(kb_id: str) -> Optional[Dict[str, Any]]:
         """获取知识库详情"""
         from kb.registry import registry
         from kb.database import init_kb_meta_db
-        
+
         kb = registry.get(kb_id)
         if kb:
             persist_dir = kb.persist_dir
@@ -432,14 +467,16 @@ class KnowledgeBaseService:
             kb_meta = init_kb_meta_db().get(kb_id)
             if not kb_meta:
                 return None
-            persist_dir = Path(kb_meta.get("persist_path") or (get_storage_root() / kb_id))
+            persist_dir = Path(
+                kb_meta.get("persist_path") or (get_storage_root() / kb_id)
+            )
             info = {
                 "id": kb_id,
                 "name": kb_meta.get("name", kb_id),
                 "description": kb_meta.get("description", ""),
                 "persist_dir": str(persist_dir),
             }
-        
+
         if persist_dir.exists():
             try:
                 vs = LanceDBVectorStore(persist_dir=persist_dir, table_name=kb_id)
@@ -450,18 +487,40 @@ class KnowledgeBaseService:
                 info["status"] = "error"
         else:
             info["status"] = "not_found"
-        
+
         return info
-    
+
+    @staticmethod
+    def sync_from_registry(kb_id: str, source_type: str = "obsidian") -> bool:
+        from kb.registry import registry
+        from kb.database import init_kb_meta_db
+
+        kb = registry.get(kb_id)
+        if not kb:
+            return False
+
+        init_kb_meta_db().upsert(
+            kb_id=kb.id,
+            name=kb.name,
+            description=kb.description,
+            source_type=source_type,
+            persist_path=str(kb.persist_dir),
+            tags=kb.tags,
+            topics=[],
+            source_paths=kb.source_paths,
+            source_tags=kb.source_tags,
+        )
+        return True
+
     @staticmethod
     def create(kb_id: str, name: str, description: str = "") -> Dict[str, Any]:
         """创建知识库"""
         from kb.registry import registry
         from kb.database import init_kb_meta_db
-        
+
         if registry.exists(kb_id) or init_kb_meta_db().get(kb_id):
             raise ValueError(f"知识库 {kb_id} 已存在")
-        
+
         persist_dir = get_storage_root() / kb_id
         persist_dir.mkdir(parents=True, exist_ok=True)
         init_kb_meta_db().upsert(
@@ -471,14 +530,14 @@ class KnowledgeBaseService:
             source_type="manual",
             persist_path=str(persist_dir),
         )
-        
+
         return {
             "id": kb_id,
             "name": name,
             "description": description,
             "status": "created",
         }
-    
+
     @staticmethod
     def delete(kb_id: str) -> bool:
         """删除知识库"""
@@ -496,12 +555,13 @@ class KnowledgeBaseService:
             pass
 
         import shutil
+
         if persist_dir.exists():
             shutil.rmtree(persist_dir)
 
         init_kb_meta_db().delete(kb_id)
         return True
-    
+
     @staticmethod
     def rebuild(kb_id: str) -> bool:
         """重建知识库"""
@@ -512,7 +572,7 @@ class KnowledgeBaseService:
 
 class SearchService:
     """搜索服务"""
-    
+
     @staticmethod
     def search(
         kb_id: str,
@@ -522,16 +582,16 @@ class SearchService:
     ) -> List[Dict[str, Any]]:
         """向量检索"""
         configure_global_embed_model()
-        
+
         vs = VectorStoreService.get_vector_store(kb_id)
         index = vs.load_index()
-        
+
         if index is None:
             return []
-        
+
         retriever = index.as_retriever(similarity_top_k=top_k)
         results = retriever.retrieve(query)
-        
+
         return [
             {
                 "text": r.text[:500],
@@ -540,7 +600,7 @@ class SearchService:
             }
             for r in results[:top_k]
         ]
-    
+
     @staticmethod
     def query(
         kb_id: str,
@@ -550,18 +610,296 @@ class SearchService:
     ) -> Dict[str, Any]:
         """RAG 问答"""
         from llamaindex_study.query_engine import create_query_engine
-        
+
         configure_global_embed_model()
-        
+
         query_engine = create_query_engine(kb_id, mode=mode, top_k=top_k)
         response = query_engine.query(query)
-        
+
         return {
             "response": str(response),
             "sources": [
-                {"text": r.text[:200], "score": r.score}
-                for r in response.source_nodes
+                {"text": r.text[:200], "score": r.score} for r in response.source_nodes
             ],
+        }
+
+
+class QueryRouter:
+    """查询路由服务 - 自动选择知识库"""
+
+    @staticmethod
+    def route(
+        query: str,
+        top_k: int = 5,
+        exclude: Optional[List[str]] = None,
+    ) -> List[str]:
+        """根据查询内容路由到最相关的知识库
+
+        Args:
+            query: 用户查询
+            top_k: 返回最相关的 top_k 个知识库
+            exclude: 排除的知识库 ID 列表
+
+        Returns:
+            知识库 ID 列表
+        """
+        kbs = KnowledgeBaseService.list_all()
+        exclude = exclude or []
+
+        if not kbs:
+            return []
+
+        kbs = [kb for kb in kbs if kb["id"] not in exclude]
+
+        if len(kbs) == 1:
+            return [kbs[0]["id"]]
+
+        kb_ids = QueryRouter._llm_route(query, kbs)
+
+        if not kb_ids:
+            kb_ids = QueryRouter._keyword_route(query, kbs)
+
+        return kb_ids[:top_k]
+
+    @staticmethod
+    def _llm_route(query: str, kbs: List[Dict[str, Any]]) -> List[str]:
+        try:
+            import httpx
+
+            settings = get_settings()
+
+            kb_descriptions = []
+            for kb in kbs:
+                topics = kb.get("topics", [])
+                topics_str = ", ".join(topics) if topics else "无"
+                kb_descriptions.append(f"- {kb['id']}: {topics_str}")
+
+            kb_list_text = "\n".join(kb_descriptions)
+
+            prompt = f"""分析用户问题，从知识库列表中找出所有可能相关的知识库。
+
+重要原则：
+- 仅根据每个知识库的主题关键词（topics）进行判断
+- 如果问题中的关键词与某知识库的主题高度重合，则选择该库
+- 主题关键词完全不匹配的知识库不要选择
+- 宁可精确匹配，也不要随意扩展
+
+知识库列表：
+{kb_list_text}
+
+用户问题：{query}
+
+请先分析问题中的关键词，然后与每个知识库的主题进行匹配，返回最相关的知识库 ID，用逗号分隔。
+
+返回格式示例：kb1,kb2,kb3
+
+请只返回 ID 列表，不要其他内容。"""
+
+            resp = httpx.post(
+                f"{settings.siliconflow_base_url}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {settings.siliconflow_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": settings.siliconflow_model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 100,
+                    "temperature": 0.3,
+                },
+                timeout=60.0,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            result = data["choices"][0]["message"]["content"].strip()
+
+            selected = [kb_id.strip() for kb_id in result.split(",")]
+
+            valid_ids = {kb["id"] for kb in kbs}
+            selected = [kb_id for kb_id in selected if kb_id in valid_ids]
+
+            return selected
+
+        except Exception as e:
+            logger = get_logger(__name__)
+            logger.warning(f"LLM 路由失败: {e}")
+            return []
+
+    @staticmethod
+    def _keyword_route(query: str, kbs: List[Dict[str, Any]]) -> List[str]:
+        """使用关键词匹配进行知识库路由（仅基于 topics）"""
+        query_lower = query.lower()
+        query_words = set(query_lower.replace(",", " ").split())
+
+        scores: Dict[str, float] = {}
+
+        for kb in kbs:
+            kb_id = kb["id"]
+            topics = kb.get("topics", [])
+            if not topics:
+                continue
+
+            score = 0.0
+            for word in query_words:
+                if len(word) < 2:
+                    continue
+                for topic in topics:
+                    topic_lower = topic.lower()
+                    if word in topic_lower:
+                        score += 1.0
+                    if topic_lower in word:
+                        score += 0.5
+
+            if score > 0:
+                scores[kb_id] = score
+
+        if not scores:
+            return []
+
+        sorted_kbs = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+        return [kb_id for kb_id, _ in sorted_kbs]
+
+    @staticmethod
+    def search(
+        query: str,
+        top_k: int = 5,
+        mode: str = "auto",
+        exclude: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """自动路由搜索
+
+        Args:
+            query: 用户查询
+            top_k: 每个知识库检索的数量
+            mode: 检索模式 (auto=自动路由, all=所有知识库)
+            exclude: 排除的知识库 ID 列表
+
+        Returns:
+            合并后的搜索结果
+        """
+        if mode == "all":
+            all_kbs = KnowledgeBaseService.list_all()
+            exclude = exclude or []
+            kb_ids = [kb["id"] for kb in all_kbs if kb["id"] not in exclude]
+        else:
+            kb_ids = QueryRouter.route(query, exclude=exclude)
+
+        if not kb_ids:
+            return {"results": [], "kbs_queried": [], "query": query}
+
+        all_results = []
+        for kb_id in kb_ids:
+            try:
+                results = SearchService.search(kb_id, query, top_k=top_k)
+                for r in results:
+                    r["kb_id"] = kb_id
+                all_results.extend(results)
+            except Exception:
+                continue
+
+        all_results.sort(key=lambda x: x.get("score", 0), reverse=True)
+
+        return {
+            "results": all_results[:top_k],
+            "kbs_queried": kb_ids,
+            "query": query,
+        }
+
+    @staticmethod
+    def query(
+        query: str,
+        top_k: int = 5,
+        mode: str = "auto",
+        exclude: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """自动路由 RAG 问答
+
+        Args:
+            query: 用户查询
+            top_k: 每个知识库检索的数量
+            mode: 检索模式 (auto=自动路由, all=所有知识库)
+            exclude: 排除的知识库 ID 列表
+
+        Returns:
+            RAG 问答结果
+        """
+        if mode == "all":
+            all_kbs = KnowledgeBaseService.list_all()
+            exclude = exclude or []
+            kb_ids = [kb["id"] for kb in all_kbs if kb["id"] not in exclude]
+        else:
+            kb_ids = QueryRouter.route(query, exclude=exclude)
+
+        if not kb_ids:
+            return {
+                "response": "没有找到相关的知识库",
+                "sources": [],
+                "kbs_queried": [],
+            }
+
+        if len(kb_ids) == 1:
+            return SearchService.query(kb_ids[0], query, top_k=top_k)
+
+        contexts = []
+        sources = []
+
+        for kb_id in kb_ids:
+            try:
+                result = SearchService.search(kb_id, query, top_k=top_k)
+                for r in result:
+                    contexts.append(f"[{kb_id}] {r['text']}")
+                    sources.append(
+                        {
+                            "kb_id": kb_id,
+                            "text": r["text"][:200],
+                            "score": r.get("score", 0),
+                        }
+                    )
+            except Exception:
+                continue
+
+        if not contexts:
+            return {
+                "response": "在所有知识库中都没有找到相关内容",
+                "sources": [],
+                "kbs_queried": kb_ids,
+            }
+
+        context_text = "\n\n".join(contexts[:10])
+
+        prompt = f"""基于以下上下文信息回答用户问题。如果上下文中没有相关信息，请说明。
+
+上下文：
+{context_text}
+
+用户问题：{query}
+
+回答："""
+
+        try:
+            from llama_index.llms.openai import OpenAI
+
+            settings = get_settings()
+            configure_llamaindex_for_siliconflow()
+
+            client = OpenAI(
+                model=settings.siliconflow_model,
+                api_key=settings.siliconflow_api_key,
+                api_base=settings.siliconflow_base_url,
+            )
+
+            response = client.complete(prompt)
+            answer = response.text.strip()
+
+        except Exception as e:
+            logger = get_logger(__name__)
+            logger.warning(f"LLM 生成失败: {e}")
+            answer = f"（在 {', '.join(kb_ids)} 中找到 {len(contexts)} 条相关内容）"
+
+        return {
+            "response": answer,
+            "sources": sources[:top_k],
+            "kbs_queried": kb_ids,
         }
 
 
@@ -569,7 +907,9 @@ class TaskService:
     """任务服务"""
 
     @staticmethod
-    def submit(task_type: str, kb_id: str, params: Dict[str, Any], source: str = "") -> Dict[str, Any]:
+    def submit(
+        task_type: str, kb_id: str, params: Dict[str, Any], source: str = ""
+    ) -> Dict[str, Any]:
         from kb.task_queue import TaskQueue
 
         queue = TaskQueue()
@@ -595,7 +935,10 @@ class TaskService:
         from kb.task_queue import TaskQueue
 
         queue = TaskQueue()
-        return [task.to_dict() for task in queue.list_tasks(kb_id=kb_id, status=status, limit=limit)]
+        return [
+            task.to_dict()
+            for task in queue.list_tasks(kb_id=kb_id, status=status, limit=limit)
+        ]
 
     @staticmethod
     def get_task(task_id: str) -> Optional[Dict[str, Any]]:
@@ -612,9 +955,17 @@ class TaskService:
 
         queue = TaskQueue()
         if queue.cancel_task(task_id):
-            return {"status": "cancelled", "task_id": task_id, "message": "已取消等待中的任务"}
+            return {
+                "status": "cancelled",
+                "task_id": task_id,
+                "message": "已取消等待中的任务",
+            }
         if task_executor.cancel_task(task_id):
-            return {"status": "cancelled", "task_id": task_id, "message": "已请求取消运行中的任务"}
+            return {
+                "status": "cancelled",
+                "task_id": task_id,
+                "message": "已请求取消运行中的任务",
+            }
 
         task = queue.get_task(task_id)
         if task:
@@ -624,6 +975,61 @@ class TaskService:
                 "message": f"任务当前状态为 {task.status}，无法取消",
             }
         raise ValueError(f"任务不存在: {task_id}")
+
+    @staticmethod
+    def delete(task_id: str, cleanup: bool = False) -> Dict[str, Any]:
+        """删除任务（物理删除）
+
+        Args:
+            task_id: 任务ID
+            cleanup: 是否清理关联的知识库数据（仅对 failed/cancelled 任务有效）
+                    - True: 同时清空该知识库的 dedup 状态和向量数据
+                    - False: 仅删除任务记录
+        """
+        from kb.task_queue import TaskQueue
+
+        queue = TaskQueue()
+        task = queue.get_task(task_id)
+        if not task:
+            raise ValueError(f"任务不存在: {task_id}")
+
+        if task.status == "running":
+            raise ValueError(f"任务正在运行，无法删除: {task_id}")
+
+        success = queue.delete_task(task_id)
+        if not success:
+            raise ValueError(f"删除失败: {task_id}")
+
+        result = {"status": "deleted", "task_id": task_id, "message": "任务已删除"}
+
+        if cleanup and task.status in ("failed", "cancelled"):
+            cleaned = TaskService._cleanup_task_data(task.kb_id, task.task_type)
+            result["cleanup"] = cleaned
+
+        return result
+
+    @staticmethod
+    def _cleanup_task_data(kb_id: str, task_type: str) -> Dict[str, Any]:
+        """清理任务产生的关联数据"""
+        from kb.deduplication import DeduplicationManager
+        from kb.registry import get_storage_root
+
+        cleaned = {"dedup_state": False, "vector_store": False}
+
+        persist_dir = get_storage_root() / kb_id
+
+        dedup_manager = DeduplicationManager(kb_id, persist_dir)
+        dedup_manager.clear()
+        cleaned["dedup_state"] = True
+
+        if task_type == "rebuild":
+            from kb.services import VectorStoreService
+
+            vs = VectorStoreService.get_vector_store(kb_id)
+            vs.delete_table()
+            cleaned["vector_store"] = True
+
+        return cleaned
 
     @staticmethod
     def run_task(task_id: str) -> Dict[str, Any]:
@@ -636,7 +1042,9 @@ class TaskService:
         return task
 
     @staticmethod
-    def wait_for_task(task_id: str, interval: float = 1.0, timeout: float = 0) -> Dict[str, Any]:
+    def wait_for_task(
+        task_id: str, interval: float = 1.0, timeout: float = 0
+    ) -> Dict[str, Any]:
         start = time.time()
         while True:
             task = TaskService.get_task(task_id)
@@ -665,7 +1073,11 @@ class CategoryService:
         from kb.obsidian_config import seed_mappings_to_db
 
         count = seed_mappings_to_db()
-        return {"status": "success", "message": f"已同步 {count} 条分类规则到数据库", "count": count}
+        return {
+            "status": "success",
+            "message": f"已同步 {count} 条分类规则到数据库",
+            "count": count,
+        }
 
     @staticmethod
     def add_rule(
@@ -702,7 +1114,9 @@ class CategoryService:
         }
 
     @staticmethod
-    def classify(folder_path: str, folder_description: str = "", use_llm: bool = True) -> Dict[str, Any]:
+    def classify(
+        folder_path: str, folder_description: str = "", use_llm: bool = True
+    ) -> Dict[str, Any]:
         from kb.category_classifier import CategoryClassifier
         from kb.obsidian_config import find_kb_by_path
 

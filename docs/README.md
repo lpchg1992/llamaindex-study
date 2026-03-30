@@ -7,6 +7,7 @@
 | [README.md](../README.md) | 项目主文档，包含安装、配置、快速开始 |
 | [docs/API.md](API.md) | API 接口详细文档，包含所有端点说明 |
 | [docs/ARCHITECTURE.md](ARCHITECTURE.md) | 项目架构文档，包含模块说明、设计模式、数据流 |
+| [docs/CLI.md](CLI.md) | CLI 命令行工具完整使用文档 |
 
 ## 快速导航
 
@@ -55,6 +56,7 @@
 | GET | `/tasks` | 列出任务 |
 | GET | `/tasks/{task_id}` | 查询任务状态 |
 | DELETE | `/tasks/{task_id}` | 取消任务 |
+| DELETE | `/tasks/{task_id}/delete` | 删除任务（可选 cleanup=true 清理关联数据）|
 
 ### 分类规则
 | 方法 | 端点 | 功能 |
@@ -103,16 +105,38 @@
 | 通用导入 | `generic_processor.py` | 通用文件导入 |
 | WebSocket | `websocket_manager.py` | WebSocket 管理 |
 
-## CLI 脚本
+## CLI 使用
 
-| 脚本 | 命令 | 说明 |
-|------|------|------|
-| API 服务 | `poetry run python api.py` | FastAPI 服务 |
-| 统一 CLI | `poetry run llamaindex-study --help` | 统一命令入口 |
-| 交互模式 | `poetry run llamaindex-study` | 交互式查询 CLI |
-| 知识库导入 | `poetry run python -m kb.ingest` | 知识库导入脚本 |
-| Zotero 导入 | `poetry run python -m kb.ingest_zotero` | CLI Zotero 导入 |
-| 高新历史 | `poetry run python -m kb.ingest_hitech_history` | CLI 历史项目导入 |
+详细 CLI 命令请参考 [CLI.md](CLI.md)。
+
+常用命令：
+
+```bash
+# 查看完整帮助
+poetry run llamaindex-study --help
+
+# 交互式问答
+poetry run llamaindex-study
+
+# 知识库管理
+poetry run llamaindex-study kb list
+poetry run llamaindex-study kb show <kb_id>
+
+# 导入文档
+poetry run llamaindex-study ingest obsidian <kb_id> --folder-path <folder>
+poetry run llamaindex-study ingest zotero <kb_id> --collection-name <name>
+
+# 检索问答
+poetry run llamaindex-study search <kb_id> "<query>"
+poetry run llamaindex-study query <kb_id> "<question>"
+poetry run llamaindex-study search "<query>" --auto  # 自动选择知识库
+poetry run llamaindex-study query "<question>" --auto  # 自动选择知识库
+
+# 任务管理
+poetry run llamaindex-study task list
+poetry run llamaindex-study task watch <task_id>
+poetry run llamaindex-study task delete <task_id> --cleanup  # 删除任务并清理数据
+```
 
 ## 使用示例
 
@@ -166,12 +190,14 @@ curl -X POST "http://localhost:8000/kbs/my_kb/query" \
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
+| `SILICONFLOW_API_KEY` | - | 硅基流动 API Key |
+| `SILICONFLOW_MODEL` | `Pro/deepseek-ai/DeepSeek-V3.2` | LLM 模型 |
 | `OLLAMA_EMBED_MODEL` | `bge-m3` | Embedding 模型 |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | 默认 Ollama 地址 |
 | `OLLAMA_LOCAL_URL` | `http://localhost:11434` | 本地 Ollama |
 | `OLLAMA_REMOTE_URL` | 空 | 远程 Ollama，留空表示禁用 |
 | `OBSIDIAN_VAULT_ROOT` | `~/Documents/Obsidian Vault` | Vault 目录 |
-| `OBSIDIAN_STORAGE_DIR` | `~/.llamaindex/storage` | 存储目录 |
+| `PERSIST_DIR` | `~/.llamaindex/storage` | 向量存储目录 |
 | `CHUNK_SIZE` | `512` | 分块大小 |
 | `MAX_RETRIES` | `3` | 最大重试次数 |
 | `MAX_CONCURRENT_TASKS` | `10` | 最大并发 |
