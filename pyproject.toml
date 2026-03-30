@@ -33,6 +33,7 @@ dependencies = [
     # "qdrant-client>=1.15.1,<2.0.0",
     "scikit-learn>=1.8.0,<2.0.0",
     "fastapi>=0.135.2,<0.136.0",
+    "markdown>=3.7",
     "uvicorn>=0.42.0,<0.43.0",
     "httpx>=0.28.1,<0.29.0",
     "python-dotenv>=1.0.0",

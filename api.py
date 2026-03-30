@@ -50,9 +50,11 @@ import asyncio
 import threading
 from pathlib import Path
 from typing import List, Optional, Dict
+import markdown
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 # 添加项目根目录到 path
@@ -227,6 +229,162 @@ def health():
         "service": "llamaindex-rag-api",
         "version": "3.1.0",
     }
+
+
+@app.get("/api-docs", response_class=HTMLResponse)
+def api_docs_page():
+    """显示 API 文档页面 (docs/API.md)"""
+    docs_path = Path(__file__).parent / "docs" / "API.md"
+    if not docs_path.exists():
+        return HTMLResponse(
+            content="<html><body><h1>API 文档未找到</h1><p>docs/API.md 不存在</p></body></html>",
+            status_code=404,
+        )
+
+    md_content = docs_path.read_text(encoding="utf-8")
+    html_content = markdown.markdown(
+        md_content,
+        extensions=["tables", "fenced_code", "codehilite"],
+    )
+
+    html_page = f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API 文档 - LlamaIndex RAG API</title>
+    <style>
+        :root {{
+            --bg-color: #ffffff;
+            --text-color: #333333;
+            --code-bg: #f5f5f5;
+            --border-color: #dddddd;
+            --link-color: #0066cc;
+            --header-bg: #2c3e50;
+            --header-color: #ffffff;
+            --table-header-bg: #f0f0f0;
+            --blockquote-border: #4caf50;
+        }}
+        @media (prefers-color-scheme: dark) {{
+            :root {{
+                --bg-color: #1a1a1a;
+                --text-color: #e0e0e0;
+                --code-bg: #2d2d2d;
+                --border-color: #404040;
+                --link-color: #66b3ff;
+                --header-bg: #2c3e50;
+                --table-header-bg: #2d2d2d;
+            }}
+        }}
+        * {{ box-sizing: border-box; }}
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            line-height: 1.6;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+        }}
+        h1, h2, h3, h4, h5, h6 {{ margin-top: 1.5em; margin-bottom: 0.5em; font-weight: 600; }}
+        h1 {{
+            font-size: 2.2em;
+            border-bottom: 3px solid var(--header-bg);
+            padding-bottom: 0.3em;
+        }}
+        h2 {{ font-size: 1.8em; border-bottom: 1px solid var(--border-color); padding-bottom: 0.2em; }}
+        a {{ color: var(--link-color); text-decoration: none; }}
+        a:hover {{ text-decoration: underline; }}
+        code {{
+            background-color: var(--code-bg);
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: "SF Mono", Monaco, Consolas, "Liberation Mono", monospace;
+            font-size: 0.9em;
+        }}
+        pre {{
+            background-color: var(--code-bg);
+            padding: 15px;
+            border-radius: 5px;
+            overflow-x: auto;
+            border: 1px solid var(--border-color);
+        }}
+        pre code {{
+            padding: 0;
+            background: none;
+        }}
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1em 0;
+        }}
+        th, td {{
+            border: 1px solid var(--border-color);
+            padding: 10px 12px;
+            text-align: left;
+        }}
+        th {{
+            background-color: var(--table-header-bg);
+            font-weight: 600;
+        }}
+        blockquote {{
+            margin: 1em 0;
+            padding: 0.5em 1em;
+            border-left: 4px solid var(--blockquote-border);
+            background-color: var(--code-bg);
+        }}
+        hr {{
+            border: none;
+            border-top: 1px solid var(--border-color);
+            margin: 2em 0;
+        }}
+        .nav {{
+            background-color: var(--header-bg);
+            color: var(--header-color);
+            padding: 15px 20px;
+            margin: -20px -20px 20px -20px;
+            border-radius: 0;
+        }}
+        .nav a {{
+            color: var(--header-color);
+            margin-right: 20px;
+        }}
+        .nav a:hover {{
+            text-decoration: underline;
+        }}
+        .warning {{
+            background-color: #fff3cd;
+            border: 1px solid #ffc107;
+            color: #856404;
+            padding: 10px 15px;
+            border-radius: 4px;
+            margin: 1em 0;
+        }}
+        @media (prefers-color-scheme: dark) {{
+            .warning {{
+                background-color: #3d3d1a;
+                border-color: #6b5a00;
+                color: #d4a017;
+            }}
+        }}
+    </style>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/default.min.css">
+</head>
+<body>
+    <div class="nav">
+        <a href="/">首页</a>
+        <a href="/docs">Swagger API 文档</a>
+        <a href="/redoc">ReDoc 文档</a>
+        <a href="/api-docs">Markdown API 文档</a>
+    </div>
+    <div class="content">
+        {html_content}
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script>hljs.highlightAll();</script>
+</body>
+</html>"""
+    return html_page
 
 
 # ============== 任务队列接口 ==============
@@ -858,5 +1016,7 @@ async def websocket_endpoint(websocket):
 
 if __name__ == "__main__":
     import uvicorn
+    import os
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.getenv("API_PORT", "37241"))
+    uvicorn.run(app, host="0.0.0.0", port=port)
