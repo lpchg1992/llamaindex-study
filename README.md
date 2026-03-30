@@ -1,6 +1,6 @@
 # LlamaIndex 学习项目
 
-一个基于 LlamaIndex v0.10+ 的现代化 RAG（检索增强生成）学习项目，支持**本地/远程 Ollama 并行处理**。
+一个基于 LlamaIndex v0.14+ 的现代化 RAG（检索增强生成）学习项目，支持**本地/远程 Ollama 并行处理**。
 
 ## 核心架构
 

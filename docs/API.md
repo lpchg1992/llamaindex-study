@@ -1,5 +1,7 @@
 # LlamaIndex RAG API 文档
 
+> ⚠️ 基于 LlamaIndex v0.14+ 构建，2026-03-30 完成升级（原 v0.10 → v0.14）
+
 ## 概述
 
 基于 FastAPI 的 RAG（检索增强生成）API 服务，支持：
