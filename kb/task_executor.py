@@ -6,10 +6,14 @@
 
 import asyncio
 import os
+import subprocess
+import sys
+import threading
 from pathlib import Path
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from llamaindex_study.logger import get_logger
+from llamaindex_study.config import get_settings
 
 logger = get_logger(__name__)
 
@@ -23,6 +27,7 @@ if TYPE_CHECKING:
     from kb.task_queue import Task, TaskQueue, TaskStatus
     from llamaindex_study.vector_store import LanceDBVectorStore
     from kb.deduplication import DeduplicationManager
+    from kb.parallel_embedding import EmbeddingResult
 
 
 class TaskExecutor:
@@ -34,6 +39,8 @@ class TaskExecutor:
         self.queue: TaskQueue = TaskQueue()
         self._running_tasks: Dict[str, asyncio.Task] = {}
         self._cancel_events: Dict[str, asyncio.Event] = {}
+        self._pause_events: Dict[str, asyncio.Event] = {}
+        self._paused_flags: Dict[str, bool] = {}
 
     async def execute_task(self, task_id: str) -> None:
         """执行任务"""
@@ -49,6 +56,8 @@ class TaskExecutor:
             return
 
         self._cancel_events[task_id] = asyncio.Event()
+        self._pause_events[task_id] = asyncio.Event()
+        self._paused_flags[task_id] = False
 
         try:
             self.queue.start_task(task_id)
@@ -75,6 +84,8 @@ class TaskExecutor:
         finally:
             self._running_tasks.pop(task_id, None)
             self._cancel_events.pop(task_id, None)
+            self._pause_events.pop(task_id, None)
+            self._paused_flags.pop(task_id, None)
 
     async def _notify_progress(self, task_id: str) -> None:
         """通知进度更新"""
@@ -92,6 +103,51 @@ class TaskExecutor:
         if task_id in self._cancel_events:
             if self._cancel_events[task_id].is_set():
                 return True
+
+        task = self.queue.get_task(task_id)
+        if task and task.status == "cancelled":
+            return True
+
+        return False
+
+    async def _check_paused(self, task_id: str) -> bool:
+        """检查是否暂停，如果暂停则等待恢复或取消"""
+        task = self.queue.get_task(task_id)
+        if task and task.status == "cancelled":
+            if task_id in self._paused_flags:
+                self._paused_flags[task_id] = False
+            return True
+
+        if task and task.status == "paused":
+            if task_id not in self._pause_events:
+                self._pause_events[task_id] = asyncio.Event()
+                self._pause_events[task_id].set()
+            if task_id not in self._paused_flags:
+                self._paused_flags[task_id] = False
+
+        if task_id not in self._pause_events:
+            return False
+
+        if not self._pause_events[task_id].is_set():
+            return False
+
+        self._paused_flags[task_id] = True
+
+        while self._pause_events[task_id].is_set():
+            task = self.queue.get_task(task_id)
+            if task and task.status == "cancelled":
+                self._paused_flags[task_id] = False
+                return True
+            if (
+                self._cancel_events.get(task_id)
+                and self._cancel_events[task_id].is_set()
+            ):
+                self._paused_flags[task_id] = False
+                return True
+            await asyncio.sleep(0.5)
+
+        self._paused_flags[task_id] = False
+        self.queue.update_status(task_id, "running", "继续执行")
         return False
 
     def _get_vector_store(self, kb_id: str) -> "LanceDBVectorStore":
@@ -228,13 +284,11 @@ class TaskExecutor:
 
         # ===== 并行处理阶段（embedding + LanceDB 写入）=====
         lance_store = vs._get_lance_vector_store()
-        node_parser = get_node_parser(
-            chunk_size=CHUNK_SIZE,
-            chunk_overlap=CHUNK_OVERLAP,
-        )
+        node_parser = get_node_parser()
 
         # 启动写入队列
         await lance_write_queue.start()
+        processed_sources = []
 
         # 获取并行处理器
         embed_processor = get_parallel_processor()
@@ -247,6 +301,11 @@ class TaskExecutor:
         )
 
         for rel_path, abs_path in all_docs:
+            if await self._check_cancelled(task.task_id):
+                return
+            if await self._check_paused(task.task_id):
+                return
+
             try:
                 content = abs_path.read_text(encoding="utf-8", errors="ignore")
 
@@ -263,15 +322,21 @@ class TaskExecutor:
                 nodes = node_parser.get_nodes_from_documents([doc])
 
                 if nodes:
-                    # 收集所有文本
                     texts = [node.get_content() for node in nodes]
 
-                    # 真正并行获取 embeddings（两个端点同时工作）
-                    results = await embed_processor.process_batch(texts)
+                    # 流式处理：embedding 完成后立即写入（不等待所有文件）
+                    results: List[Optional[EmbeddingResult]] = [None] * len(texts)
+                    async for idx, result in embed_processor.process_batch_streaming(
+                        texts
+                    ):
+                        results[idx] = result
 
-                    # 赋值 embeddings
-                    for j, (ep_name, embedding, error) in enumerate(results):
-                        nodes[j].id_ = f"{rel_path}_{j}"
+                    # 赋值 embeddings 并写入
+                    for j in range(len(results)):
+                        result_item = results[j]
+                        if result_item is None:
+                            continue
+                        _, embedding, _ = result_item
                         nodes[j].embedding = embedding
 
                     # 发送到写入队列（串行执行）
@@ -288,6 +353,7 @@ class TaskExecutor:
                         vault_root=vault_root,
                     )
 
+                processed_sources.append(str(abs_path))
                 processed_files += 1
 
                 # 定期更新进度
@@ -312,13 +378,19 @@ class TaskExecutor:
         failure_stats = embed_processor.get_failure_stats()
         logger.info(f"端点使用统计: {stats}, 失败统计: {failure_stats}")
 
+        settings = get_settings()
+
+        vs.set_chunk_strategy(settings.chunk_strategy)
+
         self.queue.complete_task(
             task.task_id,
             result={
                 "kb_id": kb_id,
                 "files": processed_files,
                 "nodes": processed_chunks,
+                "sources": processed_sources,
                 "endpoint_stats": stats,
+                "chunk_strategy": settings.chunk_strategy,
             },
         )
 
@@ -428,6 +500,7 @@ class TaskExecutor:
                     "kb_id": kb_id,
                     "items": stats.get("items", 0),
                     "nodes": stats.get("nodes", 0),
+                    "sources": stats.get("processed_sources", []),
                     "endpoint_stats": embed_processor.get_stats(),
                 },
             )
@@ -444,14 +517,16 @@ class TaskExecutor:
         """执行通用文件导入"""
         from kb.generic_processor import GenericImporter
         from kb.parallel_embedding import get_parallel_processor
-        from llamaindex_study.ollama_utils import create_parallel_ollama_embedding
+        from kb.ingest_vdb import lance_write_queue
+        from llamaindex_study.node_parser import get_node_parser
 
         kb_id = task.kb_id
         params = task.params
 
         vs = self._get_vector_store(kb_id)
-        embed_model = create_parallel_ollama_embedding()
         embed_processor = get_parallel_processor()
+        lance_store = vs._get_lance_vector_store()
+        node_parser = get_node_parser()
 
         raw_paths = params.get("paths")
         if raw_paths is None:
@@ -467,7 +542,11 @@ class TaskExecutor:
                     all_files.append(p)
                 elif p.is_dir():
                     importer = GenericImporter()
-                    files = importer.collect_files([p])
+                    files = importer.collect_files(
+                        [p],
+                        include_exts=params.get("include_exts"),
+                        exclude_exts=params.get("exclude_exts"),
+                    )
                     all_files.extend(files)
 
         total_files = len(all_files)
@@ -489,22 +568,47 @@ class TaskExecutor:
             )
             return
 
-        importer = GenericImporter()
+        await lance_write_queue.start()
+
         stats = {"files": 0, "nodes": 0, "failed": 0}
+        processed_sources = []
 
         for i, file_path in enumerate(all_files):
             if await self._check_cancelled(task.task_id):
                 return
+            if await self._check_paused(task.task_id):
+                return
 
             try:
-                file_stats = importer.process_file(
-                    path=file_path,
-                    vector_store=vs,
-                    embed_model=embed_model,
-                )
-                stats["files"] += file_stats.get("files", 0)
-                stats["nodes"] += file_stats.get("nodes", 0)
-                stats["failed"] += file_stats.get("failed", 0)
+                from kb.document_processor import DocumentProcessor
+
+                processor = DocumentProcessor()
+                docs = processor.process_file(str(file_path))
+
+                if docs:
+                    for doc in docs:
+                        nodes = node_parser.get_nodes_from_documents([doc])
+
+                        if nodes:
+                            texts = [node.get_content() for node in nodes]
+
+                            # 流式处理：embedding 完成后立即写入
+                            results: List = [None] * len(texts)
+                            async for (
+                                idx,
+                                result,
+                            ) in embed_processor.process_batch_streaming(texts):
+                                results[idx] = result
+
+                            for j, (ep_name, embedding, error) in enumerate(results):
+                                if results[j] is not None:
+                                    nodes[j].embedding = embedding
+
+                            await lance_write_queue.enqueue(lance_store, nodes, kb_id)
+                            stats["nodes"] += len(nodes)
+
+                    processed_sources.append(str(file_path))
+                    stats["files"] += 1
 
                 progress = int((i + 1) / total_files * 100) if total_files > 0 else 0
                 self.queue.update_progress(
@@ -515,6 +619,9 @@ class TaskExecutor:
                 logger.warning(f"处理文件失败 {file_path}: {e}")
                 stats["failed"] += 1
 
+        await lance_write_queue.wait_until_empty()
+
+        settings = get_settings()
         self.queue.complete_task(
             task.task_id,
             result={
@@ -522,9 +629,13 @@ class TaskExecutor:
                 "files": stats["files"],
                 "nodes": stats["nodes"],
                 "failed": stats["failed"],
+                "sources": processed_sources,
                 "endpoint_stats": embed_processor.get_stats(),
+                "chunk_strategy": settings.chunk_strategy,
             },
         )
+
+        vs.set_chunk_strategy(settings.chunk_strategy)
 
         self._update_kb_topics(kb_id, has_new_docs=stats["files"] > 0)
 
@@ -548,6 +659,37 @@ class TaskExecutor:
         """取消任务"""
         if task_id in self._cancel_events:
             self._cancel_events[task_id].set()
+            if task_id in self._pause_events:
+                self._pause_events[task_id].clear()
+            if task_id in self._running_tasks:
+                task = self._running_tasks[task_id]
+                if isinstance(task, asyncio.Task):
+                    task.cancel()
+            return True
+
+        if task_id in self._running_tasks:
+            task = self._running_tasks[task_id]
+            if isinstance(task, asyncio.Task):
+                task.cancel()
+            if task_id in self._cancel_events:
+                self._cancel_events[task_id].set()
+            if task_id in self._pause_events:
+                self._pause_events[task_id].clear()
+            return True
+
+        return False
+
+    def pause_task(self, task_id: str) -> bool:
+        """暂停任务"""
+        if task_id in self._pause_events:
+            self._pause_events[task_id].set()
+            return True
+        return False
+
+    def resume_task(self, task_id: str) -> bool:
+        """恢复任务"""
+        if task_id in self._pause_events:
+            self._pause_events[task_id].clear()
             return True
         return False
 
@@ -563,7 +705,7 @@ class TaskExecutor:
 
         thread = threading.Thread(target=run_in_thread, daemon=True)
         thread.start()
-        self._running_tasks[task_id] = thread  # type: ignore
+        self._running_tasks[task_id] = task_id  # 标记任务已提交
 
 
 # 全局实例
@@ -633,3 +775,75 @@ class TaskScheduler:
     def stop(self) -> None:
         """停止调度器"""
         self._running = False
+
+
+def get_scheduler_pid_file() -> Path:
+    """获取调度器 PID 文件路径"""
+    import tempfile
+
+    return Path(tempfile.gettempdir()) / "llamaindex_scheduler.pid"
+
+
+def is_scheduler_running() -> bool:
+    """检查调度器是否正在运行"""
+    pid_file = get_scheduler_pid_file()
+    if not pid_file.exists():
+        return False
+
+    try:
+        pid = int(pid_file.read_text().strip())
+        # 检查进程是否存在
+        os.kill(pid, 0)  # 信号 0 不做任何事，只检查进程是否存在
+        return True
+    except (ProcessLookupError, ValueError, OSError):
+        # 进程不存在或 PID 文件无效
+        return False
+
+
+def write_scheduler_pid() -> None:
+    """写入当前进程 PID 到文件"""
+    pid_file = get_scheduler_pid_file()
+    pid_file.write_text(str(os.getpid()))
+
+
+def cleanup_scheduler_pid() -> None:
+    """清理 PID 文件"""
+    pid_file = get_scheduler_pid_file()
+    if pid_file.exists():
+        pid_file.unlink()
+
+
+class SchedulerStarter:
+    """调度器单例启动器 - 确保只有一个调度器运行"""
+
+    _process: Optional[subprocess.Popen] = None
+
+    @classmethod
+    def ensure_scheduler_running(cls) -> bool:
+        """确保调度器正在运行，如果不是则启动它"""
+        if is_scheduler_running():
+            logger.info("调度器已在运行")
+            return True
+
+        # 启动新的调度器进程
+        logger.info("启动调度器进程...")
+        cmd = [
+            sys.executable,
+            "-m",
+            "kb.scheduler",
+        ]
+        try:
+            # 显式传递当前环境变量，确保加载了 .env 的配置
+            cls._process = subprocess.Popen(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+                env=os.environ.copy(),
+            )
+            logger.info(f"调度器进程已启动 (PID: {cls._process.pid})")
+            return True
+        except Exception as e:
+            logger.error(f"启动调度器失败: {e}")
+            return False

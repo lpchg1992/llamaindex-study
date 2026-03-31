@@ -9,7 +9,7 @@
 
 import os
 from pathlib import Path
-from typing import ClassVar, Optional
+from typing import ClassVar, List, Optional
 
 from dotenv import load_dotenv
 
@@ -36,7 +36,7 @@ class Settings:
     _DEFAULT_ZOTERO_PERSIST_DIR: ClassVar[str] = str(
         PROJECT_ROOT / ".llamaindex" / "storage" / "zotero"
     )
-    _DEFAULT_DATA_DIR: ClassVar[str] = str(PROJECT_ROOT / ".llamaindex")
+    _DEFAULT_DATA_DIR: ClassVar[str] = str(Path.home() / ".llamaindex")
     _DEFAULT_TOP_K: ClassVar[int] = 5
     _DEFAULT_RERANK_MODEL: ClassVar[str] = "Pro/BAAI/bge-reranker-v2-m3"
     _DEFAULT_USE_RERANKER: ClassVar[bool] = False
@@ -118,6 +118,17 @@ class Settings:
         self.chunk_overlap: int = int(os.getenv("CHUNK_OVERLAP", "50"))
         self.embed_batch_size: int = int(os.getenv("EMBED_BATCH_SIZE", "32"))
 
+        # ========== 分块策略配置 ==========
+        self.chunk_strategy: str = os.getenv("CHUNK_STRATEGY", "hierarchical")
+        self.hierarchical_chunk_sizes: List[int] = [
+            int(x)
+            for x in os.getenv("HIERARCHICAL_CHUNK_SIZES", "2048,512,128").split(",")
+        ]
+        self.sentence_chunk_size: int = int(os.getenv("SENTENCE_CHUNK_SIZE", "512"))
+        self.sentence_chunk_overlap: int = int(
+            os.getenv("SENTENCE_CHUNK_OVERLAP", "50")
+        )
+
         # ========== Query Transform 配置 ==========
         self.use_hyde: bool = os.getenv("USE_HYDE", "false").lower() == "true"
         self.use_query_rewrite: bool = (
@@ -146,6 +157,13 @@ class Settings:
         # Qdrant 专用配置
         self.qdrant_url: str = os.getenv("QDRANT_URL", self._DEFAULT_QDRANT_URL)
         self.qdrant_api_key: Optional[str] = os.getenv("QDRANT_API_KEY")
+
+        # Doc2x 配置
+        self.doc2x_api_key: Optional[str] = os.getenv("DOC2X_API_KEY")
+
+        # MinerU 配置
+        self.mineru_api_key: Optional[str] = os.getenv("MINERU_API_KEY")
+        self.mineru_pipeline_id: Optional[str] = os.getenv("MINERU_PIPELINE_ID")
 
     def __repr__(self) -> str:
         """返回配置的字符串表示"""

@@ -27,6 +27,7 @@ def get_node_parser(
     chunk_overlap: Optional[int] = None,
     use_semantic: bool = False,
     embed_model: Optional[Any] = None,
+    strategy: Optional[str] = None,
 ) -> Any:
     """
     获取节点解析器
@@ -34,17 +35,25 @@ def get_node_parser(
     Args:
         chunk_size: 分块大小（默认从配置读取）
         chunk_overlap: 分块重叠大小（默认从配置读取）
-        use_semantic: 是否使用语义分块（默认 False，使用 SentenceSplitter）
+        use_semantic: 是否使用语义分块（默认 False）
         embed_model: embedding 模型（语义分块时需要）
+        strategy: 分块策略，可选 'hierarchical'/'sentence'/'semantic'
+                 默认从配置读取 CHUNK_STRATEGY
 
     Returns:
         BaseNodeParser: 节点解析器实例
     """
     settings = get_settings()
+
+    if strategy is None:
+        strategy = getattr(settings, "chunk_strategy", "hierarchical")
+
     chunk_size = chunk_size or settings.chunk_size or 512
     chunk_overlap = chunk_overlap or settings.chunk_overlap or 50
 
-    if use_semantic:
+    if strategy == "hierarchical":
+        return get_hierarchical_node_parser()
+    elif strategy == "semantic" or use_semantic:
         return _create_semantic_chunker(
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
@@ -52,8 +61,8 @@ def get_node_parser(
         )
     else:
         return _create_sentence_splitter(
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap,
+            chunk_size=settings.sentence_chunk_size or chunk_size,
+            chunk_overlap=settings.sentence_chunk_overlap or chunk_overlap,
         )
 
 
@@ -124,7 +133,7 @@ def _create_semantic_chunker(
 
 def get_hierarchical_node_parser(
     chunk_sizes: Optional[List[int]] = None,
-    chunk_overlap: int = 50,
+    chunk_overlap: Optional[int] = None,
 ) -> Any:
     """
     创建 HierarchicalNodeParser（父子节点分块）
@@ -137,16 +146,21 @@ def get_hierarchical_node_parser(
     每个子/叶子节点都包含对父节点的引用（parent_node_id）。
 
     Args:
-        chunk_sizes: 各层分块大小列表，默认 [2048, 512, 128]
-        chunk_overlap: 分块重叠大小
+        chunk_sizes: 各层分块大小列表，默认从配置 HIERARCHICAL_CHUNK_SIZES 读取
+        chunk_overlap: 分块重叠大小，默认从配置 CHUNK_OVERLAP 读取
 
     Returns:
         HierarchicalNodeParser 实例
     """
     from llama_index.core.node_parser import HierarchicalNodeParser
 
+    settings = get_settings()
+
     if chunk_sizes is None:
-        chunk_sizes = [2048, 512, 128]
+        chunk_sizes = settings.hierarchical_chunk_sizes
+
+    if chunk_overlap is None:
+        chunk_overlap = settings.chunk_overlap or 50
 
     return HierarchicalNodeParser.from_defaults(
         chunk_sizes=chunk_sizes,
