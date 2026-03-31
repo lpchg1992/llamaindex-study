@@ -579,9 +579,12 @@ class SearchService:
         query: str,
         top_k: int = 5,
         with_metadata: bool = True,
+        use_auto_merging: Optional[bool] = None,
     ) -> List[Dict[str, Any]]:
-        """向量检索"""
+        from llamaindex_study.config import get_settings
+
         configure_global_embed_model()
+        settings = get_settings()
 
         vs = VectorStoreService.get_vector_store(kb_id)
         index = vs.load_index()
@@ -589,7 +592,29 @@ class SearchService:
         if index is None:
             return []
 
-        retriever = index.as_retriever(similarity_top_k=top_k)
+        base_retriever = index.as_retriever(similarity_top_k=top_k * 3)
+
+        _use_auto_merging = (
+            use_auto_merging
+            if use_auto_merging is not None
+            else settings.use_auto_merging
+        )
+
+        if _use_auto_merging:
+            try:
+                from llama_index.core.retrievers import AutoMergingRetriever
+
+                merger = AutoMergingRetriever(
+                    base_retriever,
+                    index.storage_context,
+                    verbose=False,
+                )
+                retriever = merger
+            except Exception:
+                retriever = base_retriever
+        else:
+            retriever = base_retriever
+
         results = retriever.retrieve(query)
 
         return [
@@ -794,18 +819,8 @@ class QueryRouter:
         top_k: int = 5,
         mode: str = "auto",
         exclude: Optional[List[str]] = None,
+        use_auto_merging: Optional[bool] = None,
     ) -> Dict[str, Any]:
-        """自动路由搜索
-
-        Args:
-            query: 用户查询
-            top_k: 每个知识库检索的数量
-            mode: 检索模式 (auto=自动路由, all=所有知识库)
-            exclude: 排除的知识库 ID 列表
-
-        Returns:
-            合并后的搜索结果
-        """
         if mode == "all":
             all_kbs = KnowledgeBaseService.list_all()
             exclude = exclude or []
@@ -819,7 +834,9 @@ class QueryRouter:
         all_results = []
         for kb_id in kb_ids:
             try:
-                results = SearchService.search(kb_id, query, top_k=top_k)
+                results = SearchService.search(
+                    kb_id, query, top_k=top_k, use_auto_merging=use_auto_merging
+                )
                 for r in results:
                     r["kb_id"] = kb_id
                 all_results.extend(results)

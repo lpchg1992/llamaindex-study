@@ -636,15 +636,27 @@ def handle_search(args: argparse.Namespace) -> int:
         print("错误: 请提供查询内容", file=sys.stderr)
         return 1
 
+    use_auto_merging = getattr(args, "auto_merging", False)
+
     if getattr(args, "auto", False):
         from kb.services import QueryRouter
 
         exclude = getattr(args, "exclude", None)
         if exclude:
             exclude = [e.strip() for e in exclude.split(",") if e.strip()]
-        result = QueryRouter.search(query, top_k=args.top_k, exclude=exclude)
+        result = QueryRouter.search(
+            query,
+            top_k=args.top_k,
+            exclude=exclude,
+            use_auto_merging=use_auto_merging,
+        )
     else:
-        result = SearchService.search(args.kb_id, query, top_k=args.top_k)
+        result = SearchService.search(
+            args.kb_id,
+            query,
+            top_k=args.top_k,
+            use_auto_merging=use_auto_merging,
+        )
     print_json(result)
     return 0
 
@@ -1201,6 +1213,11 @@ def build_parser() -> argparse.ArgumentParser:
     search_parser.add_argument("--auto", action="store_true", help="自动选择知识库")
     search_parser.add_argument(
         "--exclude", help="排除的知识库 ID（逗号分隔，如: tech_tools,academic）"
+    )
+    search_parser.add_argument(
+        "--auto-merging",
+        action="store_true",
+        help="启用 Auto-Merging（合并子节点到父节点）",
     )
     search_parser.set_defaults(handler=handle_search)
 

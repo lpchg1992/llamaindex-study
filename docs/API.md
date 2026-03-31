@@ -299,6 +299,15 @@ curl -X POST "http://localhost:37241/kbs/tech_tools/search" \
   -d '{"query": "Python 异步编程", "top_k": 5}'
 ```
 
+**请求参数说明：**
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `query` | string | 必填 | 查询内容 |
+| `top_k` | int | `5` | 返回结果数量 |
+| `exclude` | string[] | null | 排除的知识库 ID 列表 |
+| `use_auto_merging` | bool | null | 启用 Auto-Merging（null=使用配置默认值） |
+
 ```json
 [
   {
@@ -307,6 +316,15 @@ curl -X POST "http://localhost:37241/kbs/tech_tools/search" \
     "metadata": {"file_path": "IT/Python异步.md"}
   }
 ]
+```
+
+**Auto-Merging 检索示例：**
+
+```bash
+# 启用 Auto-Merging（自动合并子节点到父节点）
+curl -X POST "http://localhost:37241/kbs/tech_tools/search" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "Python 异步编程", "top_k": 5, "use_auto_merging": true}'
 ```
 
 #### POST /kbs/{kb_id}/query

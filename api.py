@@ -136,6 +136,9 @@ class SearchRequest(BaseModel):
     query: str = Field(..., description="搜索查询")
     top_k: int = Field(5, ge=1, le=100)
     exclude: Optional[List[str]] = Field(None, description="排除的知识库 ID 列表")
+    use_auto_merging: Optional[bool] = Field(
+        None, description="启用 Auto-Merging（合并子节点到父节点）"
+    )
 
 
 class SearchResult(BaseModel):
@@ -530,7 +533,12 @@ def delete_kb(kb_id: str):
 @app.post("/kbs/{kb_id}/search", response_model=List[SearchResult])
 def search(kb_id: str, req: SearchRequest):
     """向量检索"""
-    results = SearchService.search(kb_id, req.query, req.top_k)
+    results = SearchService.search(
+        kb_id,
+        req.query,
+        top_k=req.top_k,
+        use_auto_merging=req.use_auto_merging,
+    )
     return [SearchResult(**r) for r in results]
 
 
@@ -555,7 +563,12 @@ def search_auto(req: SearchRequest):
     """自动路由向量检索"""
     from kb.services import QueryRouter
 
-    result = QueryRouter.search(req.query, req.top_k, exclude=req.exclude)
+    result = QueryRouter.search(
+        req.query,
+        top_k=req.top_k,
+        exclude=req.exclude,
+        use_auto_merging=req.use_auto_merging,
+    )
     return [SearchResult(**r) for r in result.get("results", [])]
 
 

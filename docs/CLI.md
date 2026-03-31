@@ -209,7 +209,7 @@ uv run python kb/scripts/analyze_kb_topics_local.py <kb_id> [--update]
 ### 向量检索
 
 ```bash
-uv run llamaindex-study search [<kb_id>] "<查询词>" [-k <top_k>] [--auto] [--exclude <kb1,kb2>]
+uv run llamaindex-study search [<kb_id>] "<查询词>" [-k <top_k>] [--auto] [--exclude <kb1,kb2>] [--auto-merging]
 ```
 
 参数说明：
@@ -219,12 +219,16 @@ uv run llamaindex-study search [<kb_id>] "<查询词>" [-k <top_k>] [--auto] [--
 | `kb_id` | 知识库 ID | 省略时自动选择 |
 | `--auto` | 自动选择知识库 | False |
 | `--exclude` | 排除的知识库 ID（逗号分隔） | 无 |
+| `--auto-merging` | 启用 Auto-Merging（合并子节点到父节点） | False |
 
 示例：
 
 ```bash
 # 指定知识库检索
 uv run llamaindex-study search tech_tools "Python 异步编程" -k 5
+
+# 启用 Auto-Merging 检索
+uv run llamaindex-study search tech_tools "Python 异步编程" -k 5 --auto-merging
 
 # 自动选择知识库检索
 uv run llamaindex-study search "Python 异步编程" --auto -k 5

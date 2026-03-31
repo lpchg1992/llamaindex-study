@@ -291,6 +291,7 @@ uv run llamaindex-study kb show tech_tools
 
 # 向量检索 / RAG 问答
 uv run llamaindex-study search tech_tools "Python 异步编程" -k 5
+uv run llamaindex-study search tech_tools "Python 异步编程" -k 5 --auto-merging
 uv run llamaindex-study query tech_tools "总结当前知识库重点"
 
 # 启用 HyDE 查询转换
