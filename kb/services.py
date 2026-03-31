@@ -482,6 +482,7 @@ class KnowledgeBaseService:
                 stats = vs.get_stats()
                 info["status"] = "indexed" if stats.get("row_count", 0) > 0 else "empty"
                 info["row_count"] = stats.get("row_count", 0)
+                info["chunk_strategy"] = vs.get_chunk_strategy()
             except Exception:
                 info["status"] = "error"
         else:
@@ -1119,9 +1120,22 @@ class TaskService:
         status: Optional[str] = None,
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
-        from kb.task_queue import TaskQueue
+        from kb.task_queue import TaskQueue, TaskStatus
+        from kb.task_executor import task_executor, is_scheduler_running
 
         queue = TaskQueue()
+
+        # Only detect orphans if scheduler is not running
+        if not is_scheduler_running():
+            running_tasks = queue.list_tasks(status=TaskStatus.RUNNING.value, limit=100)
+            for task in running_tasks:
+                if task.task_id not in task_executor._running_tasks:
+                    queue.update_status(
+                        task.task_id,
+                        TaskStatus.FAILED.value,
+                        "孤儿任务（执行进程已终止）",
+                    )
+
         return [
             task.to_dict()
             for task in queue.list_tasks(kb_id=kb_id, status=status, limit=limit)
@@ -1129,39 +1143,246 @@ class TaskService:
 
     @staticmethod
     def get_task(task_id: str) -> Optional[Dict[str, Any]]:
-        from kb.task_queue import TaskQueue
+        from kb.task_queue import TaskQueue, TaskStatus
+        from kb.task_executor import task_executor, is_scheduler_running
 
         queue = TaskQueue()
         task = queue.get_task(task_id)
+
+        if task and task.status == TaskStatus.RUNNING.value:
+            # Only mark as orphan if scheduler is not running AND task not in local _running_tasks
+            # Scheduler runs in separate process, so its _running_tasks is different
+            if (
+                task_id not in task_executor._running_tasks
+                and not is_scheduler_running()
+            ):
+                queue.update_status(
+                    task_id,
+                    TaskStatus.FAILED.value,
+                    "孤儿任务（执行进程已终止）",
+                )
+                task = queue.get_task(task_id)
+
         return task.to_dict() if task else None
 
     @staticmethod
     def cancel(task_id: str) -> Dict[str, Any]:
-        from kb.task_queue import TaskQueue
+        from kb.task_queue import TaskQueue, TaskStatus
         from kb.task_executor import task_executor
 
         queue = TaskQueue()
-        if queue.cancel_task(task_id):
+        task = queue.get_task(task_id)
+        if not task:
+            raise ValueError(f"任务不存在: {task_id}")
+
+        if task.status == TaskStatus.CANCELLED.value:
             return {
                 "status": "cancelled",
                 "task_id": task_id,
-                "message": "已取消等待中的任务",
-            }
-        if task_executor.cancel_task(task_id):
-            return {
-                "status": "cancelled",
-                "task_id": task_id,
-                "message": "已请求取消运行中的任务",
+                "message": "任务已取消",
             }
 
-        task = queue.get_task(task_id)
-        if task:
+        if task.status in (TaskStatus.COMPLETED.value, TaskStatus.FAILED.value):
             return {
                 "status": task.status,
                 "task_id": task_id,
-                "message": f"任务当前状态为 {task.status}，无法取消",
+                "message": f"任务已完成，无法取消",
             }
-        raise ValueError(f"任务不存在: {task_id}")
+
+        queue.update_status(task_id, TaskStatus.CANCELLED.value, "已取消")
+        task_executor.cancel_task(task_id)
+
+        return {
+            "status": "cancelled",
+            "task_id": task_id,
+            "message": "已取消任务",
+        }
+
+    @staticmethod
+    def cleanup_orphan_task(task_id: str) -> bool:
+        from kb.task_queue import TaskQueue, TaskStatus
+
+        queue = TaskQueue()
+        task = queue.get_task(task_id)
+
+        if task and task.status == TaskStatus.RUNNING.value:
+            queue.update_status(
+                task_id,
+                TaskStatus.FAILED.value,
+                "孤儿任务（执行进程已终止）",
+            )
+            return True
+        return False
+
+    @staticmethod
+    def pause(task_id: str) -> Dict[str, Any]:
+        from kb.task_queue import TaskQueue, TaskStatus
+        from kb.task_executor import task_executor
+
+        queue = TaskQueue()
+        task = queue.get_task(task_id)
+        if not task:
+            raise ValueError(f"任务不存在: {task_id}")
+
+        if task.status != TaskStatus.RUNNING.value:
+            return {
+                "status": task.status,
+                "task_id": task_id,
+                "message": f"任务当前状态为 {task.status}，无法暂停",
+            }
+
+        queue.update_status(task_id, TaskStatus.PAUSED.value, "已暂停")
+        task_executor.pause_task(task_id)
+        return {
+            "status": "paused",
+            "task_id": task_id,
+            "message": "任务已暂停",
+        }
+
+    @staticmethod
+    def resume(task_id: str) -> Dict[str, Any]:
+        from kb.task_queue import TaskQueue, TaskStatus
+        from kb.task_executor import task_executor
+
+        queue = TaskQueue()
+        task = queue.get_task(task_id)
+        if not task:
+            raise ValueError(f"任务不存在: {task_id}")
+
+        if task.status != TaskStatus.PAUSED.value:
+            return {
+                "status": task.status,
+                "task_id": task_id,
+                "message": f"任务当前状态为 {task.status}，无法恢复",
+            }
+
+        queue.update_status(task_id, TaskStatus.RUNNING.value, "继续执行")
+        task_executor.resume_task(task_id)
+        return {
+            "status": "running",
+            "task_id": task_id,
+            "message": "任务已恢复",
+        }
+
+    @staticmethod
+    def pause_all(status: str = "running") -> Dict[str, Any]:
+        from kb.task_queue import TaskQueue, TaskStatus
+
+        queue = TaskQueue()
+        tasks = queue.list_tasks(status=status)
+        paused = []
+        failed = []
+
+        for task in tasks:
+            if task.status == TaskStatus.RUNNING.value:
+                queue.update_status(task.task_id, TaskStatus.PAUSED.value, "已暂停")
+                paused.append(task.task_id)
+            else:
+                failed.append(task.task_id)
+
+        return {
+            "status": "completed",
+            "paused": paused,
+            "failed": failed,
+            "message": f"已暂停 {len(paused)} 个任务，{len(failed)} 个无法暂停",
+        }
+
+    @staticmethod
+    def resume_all() -> Dict[str, Any]:
+        from kb.task_queue import TaskQueue, TaskStatus
+
+        queue = TaskQueue()
+        tasks = queue.list_tasks(status="paused")
+        resumed = []
+
+        for task in tasks:
+            queue.update_status(task.task_id, TaskStatus.RUNNING.value, "继续执行")
+            resumed.append(task.task_id)
+
+        return {
+            "status": "completed",
+            "resumed": resumed,
+            "message": f"已恢复 {len(resumed)} 个任务",
+        }
+
+    @staticmethod
+    def delete_all(status: str = "completed", cleanup: bool = False) -> Dict[str, Any]:
+        from kb.task_queue import TaskQueue, TaskStatus
+
+        queue = TaskQueue()
+        tasks = queue.list_tasks(status=status)
+        deleted = []
+        cleaned_results = []
+
+        for task in tasks:
+            try:
+                if task.status == TaskStatus.RUNNING.value:
+                    continue
+
+                if cleanup:
+                    sources = task.result.get("sources") if task.result else None
+                    cleaned = TaskService._cleanup_task_data(
+                        task.kb_id, task.task_type, sources=sources
+                    )
+                    cleaned_results.append(
+                        {"task_id": task.task_id, "cleanup": cleaned}
+                    )
+
+                queue.delete_task(task.task_id)
+                deleted.append(task.task_id)
+            except Exception:
+                pass
+
+        result = {
+            "status": "completed",
+            "deleted": deleted,
+            "message": f"已删除 {len(deleted)} 个任务",
+        }
+
+        if cleaned_results:
+            result["cleaned"] = cleaned_results
+
+        return result
+
+    @staticmethod
+    def cleanup_orphan_tasks(cleanup: bool = True) -> Dict[str, Any]:
+        from kb.task_queue import TaskQueue, TaskStatus
+        from kb.task_executor import task_executor, is_scheduler_running
+
+        queue = TaskQueue()
+        tasks = queue.list_tasks(status="running")
+        cleaned = []
+        cleaned_data = []
+
+        if not is_scheduler_running():
+            for task in tasks:
+                if task.task_id not in task_executor._running_tasks:
+                    cleaned.append(task.task_id)
+                    queue.update_status(
+                        task.task_id,
+                        TaskStatus.FAILED.value,
+                        "孤儿任务（执行进程已终止）",
+                    )
+
+                    if cleanup:
+                        sources = task.result.get("sources") if task.result else None
+                        result = TaskService._cleanup_task_data(
+                            task.kb_id, task.task_type, sources=sources
+                        )
+                        cleaned_data.append(
+                            {"task_id": task.task_id, "cleanup": result}
+                        )
+
+        result = {
+            "status": "completed",
+            "cleaned": cleaned,
+            "message": f"已清理 {len(cleaned)} 个孤儿任务",
+        }
+
+        if cleaned_data:
+            result["cleaned_data"] = cleaned_data
+
+        return result
 
     @staticmethod
     def delete(task_id: str, cleanup: bool = False) -> Dict[str, Any]:
@@ -1169,7 +1390,7 @@ class TaskService:
 
         Args:
             task_id: 任务ID
-            cleanup: 是否清理关联的知识库数据（仅对 failed/cancelled 任务有效）
+            cleanup: 是否清理关联的知识库数据
                     - True: 同时清空该知识库的 dedup 状态和向量数据
                     - False: 仅删除任务记录
         """
@@ -1189,32 +1410,55 @@ class TaskService:
 
         result = {"status": "deleted", "task_id": task_id, "message": "任务已删除"}
 
-        if cleanup and task.status in ("failed", "cancelled"):
-            cleaned = TaskService._cleanup_task_data(task.kb_id, task.task_type)
+        if cleanup:
+            sources = task.result.get("sources") if task.result else None
+            cleaned = TaskService._cleanup_task_data(
+                task.kb_id, task.task_type, sources=sources
+            )
             result["cleanup"] = cleaned
 
         return result
 
     @staticmethod
-    def _cleanup_task_data(kb_id: str, task_type: str) -> Dict[str, Any]:
-        """清理任务产生的关联数据"""
+    def _cleanup_task_data(
+        kb_id: str, task_type: str, sources: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """清理任务产生的关联数据
+
+        Args:
+            kb_id: 知识库ID
+            task_type: 任务类型
+            sources: 要删除的源文件路径列表
+        """
         from kb.deduplication import DeduplicationManager
         from kb.registry import get_storage_root
 
-        cleaned = {"dedup_state": False, "vector_store": False}
+        cleaned = {"dedup_state": False, "vector_store": False, "deleted_nodes": 0}
 
         persist_dir = get_storage_root() / kb_id
-
         dedup_manager = DeduplicationManager(kb_id, persist_dir)
-        dedup_manager.clear()
-        cleaned["dedup_state"] = True
 
         if task_type == "rebuild":
+            dedup_manager.clear()
+            cleaned["dedup_state"] = True
+
             from kb.services import VectorStoreService
 
             vs = VectorStoreService.get_vector_store(kb_id)
             vs.delete_table()
             cleaned["vector_store"] = True
+        elif sources:
+            for source in sources:
+                dedup_manager.remove_record(source)
+            cleaned["dedup_state"] = True
+
+            from kb.services import VectorStoreService
+
+            vs = VectorStoreService.get_vector_store(kb_id)
+            lance_store = vs._get_lance_vector_store()
+            deleted = lance_store.delete_by_source(sources)
+            cleaned["deleted_nodes"] = deleted
+            cleaned["vector_store"] = deleted > 0
 
         return cleaned
 
