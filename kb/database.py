@@ -1271,12 +1271,13 @@ class KnowledgeBaseMetaDB:
         """
         count = 0
         for kb in kb_configs:
+            persist_path = kb.get("persist_path") or kb.get("persist_name", "")
             self.upsert(
                 kb_id=kb["id"],
                 name=kb.get("name", kb["id"]),
                 description=kb.get("description", ""),
                 source_type=source_type,
-                persist_path=kb.get("persist_path", ""),
+                persist_path=persist_path,
                 tags=kb.get("tags", []),
                 topics=kb.get("topics", []),
                 source_paths=kb.get("source_paths", []),

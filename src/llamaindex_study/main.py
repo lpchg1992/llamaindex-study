@@ -637,8 +637,25 @@ def handle_search(args: argparse.Namespace) -> int:
         return 1
 
     use_auto_merging = getattr(args, "auto_merging", False)
+    kb_ids = getattr(args, "kb_ids", None)
 
-    if getattr(args, "auto", False):
+    if kb_ids:
+        kb_id_list = [k.strip() for k in kb_ids.split(",") if k.strip()]
+        if len(kb_id_list) == 1:
+            result = SearchService.search(
+                kb_id_list[0],
+                query,
+                top_k=args.top_k,
+                use_auto_merging=use_auto_merging,
+            )
+        else:
+            result = SearchService.search_multi(
+                kb_id_list,
+                query,
+                top_k=args.top_k,
+                use_auto_merging=use_auto_merging,
+            )
+    elif getattr(args, "auto", False):
         from kb.services import QueryRouter
 
         exclude = getattr(args, "exclude", None)
@@ -667,7 +684,37 @@ def handle_query(args: argparse.Namespace) -> int:
         print("错误: 请提供查询内容", file=sys.stderr)
         return 1
 
-    if getattr(args, "auto", False):
+    kb_ids = getattr(args, "kb_ids", None)
+    use_hyde = getattr(args, "use_hyde", None)
+    use_multi_query = getattr(args, "use_multi_query", None)
+    use_auto_merging = getattr(args, "use_auto_merging", None)
+    response_mode = getattr(args, "response_mode", None)
+
+    if kb_ids:
+        kb_id_list = [k.strip() for k in kb_ids.split(",") if k.strip()]
+        if len(kb_id_list) == 1:
+            result = SearchService.query(
+                kb_id_list[0],
+                query,
+                top_k=args.top_k,
+                use_hyde=use_hyde,
+                use_multi_query=use_multi_query,
+                use_auto_merging=use_auto_merging,
+                response_mode=response_mode,
+            )
+        else:
+            from kb.services import QueryRouter
+
+            result = QueryRouter.query_multi(
+                kb_id_list,
+                query,
+                top_k=args.top_k,
+                use_hyde=use_hyde,
+                use_multi_query=use_multi_query,
+                use_auto_merging=use_auto_merging,
+                response_mode=response_mode,
+            )
+    elif getattr(args, "auto", False):
         from kb.services import QueryRouter
 
         exclude = getattr(args, "exclude", None)
@@ -677,20 +724,20 @@ def handle_query(args: argparse.Namespace) -> int:
             query,
             top_k=args.top_k,
             exclude=exclude,
-            use_hyde=getattr(args, "use_hyde", None),
-            use_multi_query=getattr(args, "use_multi_query", None),
-            use_auto_merging=getattr(args, "use_auto_merging", None),
-            response_mode=getattr(args, "response_mode", None),
+            use_hyde=use_hyde,
+            use_multi_query=use_multi_query,
+            use_auto_merging=use_auto_merging,
+            response_mode=response_mode,
         )
     else:
         result = SearchService.query(
             args.kb_id,
             query,
             top_k=args.top_k,
-            use_hyde=getattr(args, "use_hyde", None),
-            use_multi_query=getattr(args, "use_multi_query", None),
-            use_auto_merging=getattr(args, "use_auto_merging", None),
-            response_mode=getattr(args, "response_mode", None),
+            use_hyde=use_hyde,
+            use_multi_query=use_multi_query,
+            use_auto_merging=use_auto_merging,
+            response_mode=response_mode,
         )
     print_json(result)
     return 0
@@ -1215,6 +1262,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--exclude", help="排除的知识库 ID（逗号分隔，如: tech_tools,academic）"
     )
     search_parser.add_argument(
+        "--kb-ids", help="指定多个知识库 ID（逗号分隔，如: kb1,kb2,kb3）"
+    )
+    search_parser.add_argument(
         "--auto-merging",
         action="store_true",
         help="启用 Auto-Merging（合并子节点到父节点）",
@@ -1230,6 +1280,9 @@ def build_parser() -> argparse.ArgumentParser:
     query_parser.add_argument("--auto", action="store_true", help="自动选择知识库")
     query_parser.add_argument(
         "--exclude", help="排除的知识库 ID（逗号分隔，如: tech_tools,academic）"
+    )
+    query_parser.add_argument(
+        "--kb-ids", help="指定多个知识库 ID（逗号分隔，如: kb1,kb2,kb3）"
     )
     query_parser.add_argument("--hyde", action="store_true", help="启用 HyDE 查询转换")
     query_parser.add_argument(

@@ -543,9 +543,8 @@ OLLAMA_REMOTE_URL=http://192.168.31.169:11434
 
 # ==================== 存储配置 ====================
 OBSIDIAN_VAULT_ROOT=~/Documents/Obsidian Vault
-PERSIST_DIR=~/.llamaindex/storage
-ZOTERO_STORAGE_DIR=~/.llamaindex/storage/zotero
-PERSIST_DIR=~/.llamaindex/storage
+PERSIST_DIR=/Volumes/online/llamaindex
+ZOTERO_PERSIST_DIR=/Volumes/online/llamaindex/zotero
 
 # ==================== 任务处理配置 ====================
 CHUNK_SIZE=512
@@ -562,7 +561,10 @@ RETRY_DELAY=1.0
 
 ```python
 # kb/registry.py
-DEFAULT_STORAGE_ROOT = Path.home() / ".llamaindex" / "storage"
+# 注意：实际路径由环境变量 PERSIST_DIR 和 ZOTERO_PERSIST_DIR 配置
+# 通用 KB: PERSIST_DIR/{kb_id}/
+# Zotero KB: ZOTERO_PERSIST_DIR/{kb_id}/
+DEFAULT_STORAGE_ROOT = Path.home() / ".llamaindex" / "storage"  # 仅作默认值参考
 DEFAULT_VAULT_ROOT = Path.home() / "Documents" / "Obsidian Vault"
 
 # kb/parallel_embedding.py

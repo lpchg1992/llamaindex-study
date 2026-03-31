@@ -105,160 +105,9 @@ class KnowledgeBase:
 # ==================== 知识库定义（默认值，用于初始化数据库） ====================
 # 注意：source_paths 使用相对于 vault_root 的相对路径
 # 可通过环境变量配置实际路径：OBSIDIAN_VAULT_ROOT
+# 已清理：只保留 zotero_nutrition
 
 KNOWLEDGE_BASES: List[KnowledgeBase] = [
-    KnowledgeBase(
-        id="hitech_history",
-        name="🏢 高新历史项目库",
-        description="高新技术企业历史研发项目资料（2022-2024）",
-        source_paths=[
-            "高新历史/2022年",
-            "高新历史/2023年",
-            "高新历史/2024年",
-        ],
-        persist_name="hitech_history",
-        tags=["高新", "研发项目", "历史资料"],
-        source_tags=["#高新", "#研发", "#项目"],
-    ),
-    KnowledgeBase(
-        id="swine_nutrition",
-        name="🐷 猪营养技术库",
-        description="猪营养学理论、饲料原料知识、配方技术",
-        source_paths=[
-            "技术理论及方法",
-            "饲料原料笔记",
-        ],
-        persist_name="kb_swine_nutrition",
-        tags=["猪营养", "饲料配方", "技术理论"],
-        source_tags=[
-            "#猪营养",
-            "#饲料",
-            "#配方",
-            "#原料",
-            "#swine",
-            "#nutrition",
-            "#feed",
-            "#消化率",
-            "#净能",
-            "#氨基酸",
-        ],
-    ),
-    KnowledgeBase(
-        id="rd_experiments",
-        name="📊 试验研发库",
-        description="历史试验记录、研发日志、工作日志",
-        source_paths=[
-            "试验研发",
-            "工作日志",
-        ],
-        persist_name="kb_rd_experiments",
-        tags=["试验", "研发", "工作日志"],
-        source_tags=[
-            "#试验",
-            "#研发",
-            "#实验",
-            "#研究",
-            "#工作日志",
-            "#日报",
-            "#周报",
-            "#experiment",
-            "#trial",
-            "#study",
-        ],
-    ),
-    KnowledgeBase(
-        id="hitech_projects",
-        name="📝 项目申报库",
-        description="高新技术企业认定项目申报材料",
-        source_paths=[
-            "高新技术企业专题工作",
-        ],
-        persist_name="kb_hitech_projects",
-        tags=["高新年", "项目申报", "材料"],
-        source_tags=[
-            "#高新年",
-            "#项目申报",
-            "#高新技术",
-            "#hitech",
-            "#project",
-        ],
-    ),
-    KnowledgeBase(
-        id="tech_tools",
-        name="💻 技术工具库",
-        description="IT技术、AI工具使用、服务器配置、编程技能",
-        source_paths=[
-            "IT",
-        ],
-        persist_name="kb_tech_tools",
-        tags=["IT", "AI工具", "编程", "服务器"],
-        source_tags=[
-            "#IT",
-            "#编程",
-            "#服务器",
-            "#AI工具",
-            "#python",
-            "#编程",
-            "#docker",
-            "#linux",
-            "#code",
-            "#programming",
-            "#server",
-            "#技术",
-            "#工具",
-            "#软件",
-        ],
-    ),
-    KnowledgeBase(
-        id="academic",
-        name="📚 学术资料库",
-        description="博士专项学习资料、收藏的学术文章和研究文献",
-        source_paths=[
-            "博士专项",
-            "知识库/收藏知识库/AI",
-            "知识库/收藏知识库/农业",
-        ],
-        persist_name="kb_academic",
-        tags=["学术", "博士", "AI研究"],
-        source_tags=[
-            "#学术",
-            "#论文",
-            "#博士",
-            "#研究",
-            "#论文笔记",
-            "#文献",
-            "#AI研究",
-            "#academic",
-            "#research",
-            "#paper",
-            "#PhD",
-            "#博士论文",
-        ],
-    ),
-    KnowledgeBase(
-        id="industry_news",
-        name="🌐 行业资讯库",
-        description="AI新闻日报、畜牧行业资讯、市场动态",
-        source_paths=[
-            "知识库/AI 行业新闻日报",
-            "知识库/AI 行业学术日报",
-            "知识库/收藏知识库/新闻",
-        ],
-        persist_name="kb_industry_news",
-        tags=["行业新闻", "AI日报", "畜牧资讯"],
-        source_tags=[
-            "#新闻",
-            "#日报",
-            "#资讯",
-            "#行业动态",
-            "#news",
-            "#daily",
-            "#industry",
-            "#AI新闻",
-            "#畜牧",
-            "#市场",
-        ],
-    ),
     KnowledgeBase(
         id="zotero_nutrition",
         name="📚 Zotero 营养文献库",
@@ -289,7 +138,7 @@ class KnowledgeBaseRegistry:
             from kb.database import init_kb_meta_db
 
             db = init_kb_meta_db()
-            all_kbs = db.get_all(active_only=False)
+            all_kbs = db.get_all(active_only=True)
             if all_kbs:
                 for row in all_kbs:
                     kb = self._row_to_kb(row)
@@ -297,18 +146,11 @@ class KnowledgeBaseRegistry:
                         self._bases[kb.id] = kb
                 logger.debug(f"从数据库加载了 {len(self._bases)} 个知识库")
             else:
-                self._load_fallback()
-                logger.debug("数据库为空，使用注册表默认配置")
+                logger.debug("数据库为空，无知识库")
         except Exception as e:
             logger.warning(f"从数据库加载失败: {e}")
-            self._load_fallback()
 
         self._loaded = True
-
-    def _load_fallback(self) -> None:
-        for kb in KNOWLEDGE_BASES:
-            if kb.id not in self._bases:
-                self._bases[kb.id] = kb
 
     def _row_to_kb(self, row: Dict[str, Any]) -> Optional[KnowledgeBase]:
         try:

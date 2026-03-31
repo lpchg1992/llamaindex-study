@@ -201,7 +201,8 @@ curl -X POST "http://localhost:8000/kbs/my_kb/query" \
 | `OLLAMA_LOCAL_URL` | `http://localhost:11434` | 本地 Ollama |
 | `OLLAMA_REMOTE_URL` | 空 | 远程 Ollama，留空表示禁用 |
 | `OBSIDIAN_VAULT_ROOT` | `~/Documents/Obsidian Vault` | Vault 目录 |
-| `PERSIST_DIR` | `~/.llamaindex/storage` | 向量存储目录 |
+| `PERSIST_DIR` | `/Volumes/online/llamaindex` | 向量存储目录 |
+| `ZOTERO_PERSIST_DIR` | `/Volumes/online/llamaindex/zotero` | Zotero 存储目录 |
 | `CHUNK_SIZE` | `512` | 分块大小 |
 | `MAX_RETRIES` | `3` | 最大重试次数 |
 | `MAX_CONCURRENT_TASKS` | `10` | 最大并发 |

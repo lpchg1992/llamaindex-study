@@ -29,23 +29,19 @@ class VectorStoreService:
 
     @staticmethod
     def get_vector_store(kb_id: str) -> LanceDBVectorStore:
-        """获取知识库的向量存储
+        """获取知识库的向量存储"""
+        from kb.registry import registry
 
-        Obsidian 知识库使用 get_storage_root()
-        Zotero 知识库使用 ZOTERO_PERSIST_DIR
-        """
-        settings = get_settings()
-        zotero_path = Path(settings.zotero_persist_dir) / kb_id
+        kb = registry.get(kb_id)
+        if kb:
+            persist_dir = kb.persist_dir
+        else:
+            settings = get_settings()
+            if kb_id.startswith("zotero_"):
+                persist_dir = Path(settings.zotero_persist_dir) / kb_id
+            else:
+                persist_dir = get_storage_root() / kb_id
 
-        if zotero_path.exists():
-            # Zotero 知识库
-            return LanceDBVectorStore(
-                persist_dir=zotero_path,
-                table_name=kb_id,
-            )
-
-        # 默认使用 Obsidian 存储
-        persist_dir = get_storage_root() / kb_id
         return LanceDBVectorStore(
             persist_dir=persist_dir,
             table_name=kb_id,
@@ -54,12 +50,15 @@ class VectorStoreService:
     @staticmethod
     def get_persist_dir(kb_id: str) -> Path:
         """获取知识库持久化目录"""
+        from kb.registry import registry
+
+        kb = registry.get(kb_id)
+        if kb:
+            return kb.persist_dir
+
         settings = get_settings()
-        zotero_path = Path(settings.zotero_persist_dir) / kb_id
-
-        if zotero_path.exists():
-            return zotero_path
-
+        if kb_id.startswith("zotero_"):
+            return Path(settings.zotero_persist_dir) / kb_id
         return get_storage_root() / kb_id
 
 
@@ -540,13 +539,15 @@ class KnowledgeBaseService:
 
     @staticmethod
     def delete(kb_id: str) -> bool:
-        """删除知识库"""
+        """删除知识库（软删除 + 清理物理数据）"""
+        from kb.registry import registry
         from kb.database import init_kb_meta_db
 
         info = KnowledgeBaseService.get_info(kb_id)
         if not info:
             return False
 
+        # 1. 删除向量存储表
         persist_dir = Path(info["persist_dir"])
         vs = LanceDBVectorStore(persist_dir=persist_dir, table_name=kb_id)
         try:
@@ -554,12 +555,20 @@ class KnowledgeBaseService:
         except Exception:
             pass
 
+        # 2. 删除物理数据目录
         import shutil
 
         if persist_dir.exists():
             shutil.rmtree(persist_dir)
 
-        init_kb_meta_db().delete(kb_id)
+        # 3. 软删除：设置 is_active = 0（而不是硬删除）
+        # 这样注册表不会从 KNOWLEDGE_BASES 回退加载已删除的 KB
+        init_kb_meta_db().set_active(kb_id, is_active=False)
+
+        # 4. 清除注册表缓存，强制重新加载
+        registry._loaded = False
+        registry._bases.clear()
+
         return True
 
     @staticmethod
@@ -625,6 +634,30 @@ class SearchService:
             }
             for r in results[:top_k]
         ]
+
+    @staticmethod
+    def search_multi(
+        kb_ids: List[str],
+        query: str,
+        top_k: int = 5,
+        use_auto_merging: Optional[bool] = None,
+    ) -> List[Dict[str, Any]]:
+        configure_global_embed_model()
+
+        all_results = []
+        for kb_id in kb_ids:
+            try:
+                results = SearchService.search(
+                    kb_id, query, top_k=top_k, use_auto_merging=use_auto_merging
+                )
+                for r in results:
+                    r["kb_id"] = kb_id
+                all_results.extend(results)
+            except Exception:
+                continue
+
+        all_results.sort(key=lambda x: x.get("score", 0), reverse=True)
+        return all_results[:top_k]
 
     @staticmethod
     def query(
@@ -908,6 +941,98 @@ class QueryRouter:
         for kb_id in kb_ids:
             try:
                 result = SearchService.search(kb_id, query, top_k=top_k)
+                for r in result:
+                    contexts.append(f"[{kb_id}] {r['text']}")
+                    sources.append(
+                        {
+                            "kb_id": kb_id,
+                            "text": r["text"][:200],
+                            "score": r.get("score", 0),
+                        }
+                    )
+            except Exception:
+                continue
+
+        if not contexts:
+            return {
+                "response": "在所有知识库中都没有找到相关内容",
+                "sources": [],
+                "kbs_queried": kb_ids,
+            }
+
+        context_text = "\n\n".join(contexts[:10])
+
+        prompt = f"""基于以下上下文信息回答用户问题。如果上下文中没有相关信息，请说明。
+
+上下文：
+{context_text}
+
+用户问题：{query}
+
+回答："""
+
+        try:
+            from llama_index.llms.openai import OpenAI
+
+            settings = get_settings()
+            configure_llamaindex_for_siliconflow()
+
+            client = OpenAI(
+                model=settings.siliconflow_model,
+                api_key=settings.siliconflow_api_key,
+                api_base=settings.siliconflow_base_url,
+            )
+
+            response = client.complete(prompt)
+            answer = response.text.strip()
+
+        except Exception as e:
+            logger = get_logger(__name__)
+            logger.warning(f"LLM 生成失败: {e}")
+            answer = f"（在 {', '.join(kb_ids)} 中找到 {len(contexts)} 条相关内容）"
+
+        return {
+            "response": answer,
+            "sources": sources[:top_k],
+            "kbs_queried": kb_ids,
+        }
+
+    @staticmethod
+    def query_multi(
+        kb_ids: List[str],
+        query: str,
+        top_k: int = 5,
+        use_hyde: Optional[bool] = None,
+        use_multi_query: Optional[bool] = None,
+        use_auto_merging: Optional[bool] = None,
+        response_mode: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        if not kb_ids:
+            return {
+                "response": "没有指定知识库",
+                "sources": [],
+                "kbs_queried": [],
+            }
+
+        if len(kb_ids) == 1:
+            return SearchService.query(
+                kb_ids[0],
+                query,
+                top_k=top_k,
+                use_hyde=use_hyde,
+                use_multi_query=use_multi_query,
+                use_auto_merging=use_auto_merging,
+                response_mode=response_mode,
+            )
+
+        contexts = []
+        sources = []
+
+        for kb_id in kb_ids:
+            try:
+                result = SearchService.search(
+                    kb_id, query, top_k=top_k, use_auto_merging=use_auto_merging
+                )
                 for r in result:
                     contexts.append(f"[{kb_id}] {r['text']}")
                     sources.append(

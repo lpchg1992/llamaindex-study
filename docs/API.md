@@ -305,17 +305,30 @@ curl -X POST "http://localhost:37241/kbs/tech_tools/search" \
 |------|------|--------|------|
 | `query` | string | 必填 | 查询内容 |
 | `top_k` | int | `5` | 返回结果数量 |
+| `kb_ids` | string | null | 指定多个知识库 ID（逗号分隔，如: kb1,kb2） |
 | `exclude` | string[] | null | 排除的知识库 ID 列表 |
 | `use_auto_merging` | bool | null | 启用 Auto-Merging（null=使用配置默认值） |
+
+> **注意**：`kb_ids` 优先级高于 `kb_id` 路径参数。指定 `kb_ids` 时会在多个知识库中搜索并合并结果。
 
 ```json
 [
   {
     "text": "异步编程是 Python 中的重要概念...",
     "score": 0.85,
-    "metadata": {"file_path": "IT/Python异步.md"}
+    "metadata": {"file_path": "IT/Python异步.md"},
+    "kb_id": "tech_tools"
   }
 ]
+```
+
+**多库检索示例：**
+
+```bash
+# 在多个知识库中检索
+curl -X POST "http://localhost:37241/kbs/tech_tools/search" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "Python 异步编程", "kb_ids": "tech_tools,academic", "top_k": 5}'
 ```
 
 **Auto-Merging 检索示例：**
@@ -346,11 +359,21 @@ curl -X POST "http://localhost:37241/kbs/tech_tools/query" \
 | `query` | string | 必填 | 查询内容 |
 | `mode` | string | `vector` | 检索模式：`vector` 或 `hybrid` |
 | `top_k` | int | `5` | 返回结果数量 |
+| `kb_ids` | string | null | 指定多个知识库 ID（逗号分隔，如: kb1,kb2） |
 | `exclude` | string[] | null | 排除的知识库 ID 列表 |
 | `use_hyde` | bool | null | 启用 HyDE 查询转换（null=使用配置默认值） |
 | `use_multi_query` | bool | null | 启用多查询转换（null=使用配置默认值） |
 | `use_auto_merging` | bool | null | 启用 Auto-Merging（null=使用配置默认值） |
 | `response_mode` | string | null | 答案生成模式（null=使用配置默认值） |
+
+**多库问答示例：**
+
+```bash
+# 在多个知识库中问答
+curl -X POST "http://localhost:37241/kbs/tech_tools/query" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "如何优化 Python 性能？", "kb_ids": "tech_tools,academic", "top_k": 5}'
+```
 
 ### 检索查询扩展功能
 
@@ -641,8 +664,8 @@ curl -X POST "http://localhost:37241/kbs/tech_tools/search" \
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `OBSIDIAN_VAULT_ROOT` | `~/Documents/Obsidian Vault` | Obsidian Vault 根目录 |
-| `PERSIST_DIR` | `~/.llamaindex/storage` | 向量存储目录 |
-| `ZOTERO_STORAGE_DIR` | `~/.llamaindex/storage/zotero` | Zotero 存储目录 |
+| `PERSIST_DIR` | `/Volumes/online/llamaindex` | 向量存储目录（通用 KB） |
+| `ZOTERO_PERSIST_DIR` | `/Volumes/online/llamaindex/zotero` | Zotero 存储目录 |
 
 ### API 服务配置
 
@@ -715,18 +738,27 @@ curl -X POST "http://localhost:37241/kbs/tech_tools/search" \
 ## 存储位置
 
 ```
-~/.llamaindex/                    # 本地存储根目录
-├── storage/                      # 向量数据
-│   ├── kb_swine_nutrition/      # 知识库存储
-│   └── kb_tech_tools/
+/Volumes/online/llamaindex/       # 主存储目录
+├── obsidian/                    # Obsidian 来源 KB（通用 KB）
+│   └── <kb_id>/
+└── zotero/                      # Zotero 来源 KB
+    └── <kb_id>/
+        └── <kb_id>.lance/       # LanceDB 向量数据
+
+~/.llamaindex/                    # 项目数据库目录
 ├── project.db                   # SQLite 数据库
 │   ├── sync_states              # 同步状态
 │   ├── dedup_records            # 去重记录
 │   ├── progress                 # 处理进度
-│   ├── knowledge_bases          # 知识库元数据
+│   ├── knowledge_bases          # 知识库元数据（唯一数据源）
 │   └── kb_category_rules         # 分类规则
 └── tasks.db                     # 任务队列
 ```
+
+**存储策略：**
+- 通用 KB（Obsidian 等）→ `PERSIST_DIR/{kb_id}/`
+- Zotero KB → `ZOTERO_PERSIST_DIR/{kb_id}/`
+- 知识库元数据全部存储在数据库中，`KNOWLEDGE_BASES` 仅作种子数据
 
 ---
 

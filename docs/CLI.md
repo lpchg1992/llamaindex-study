@@ -209,7 +209,7 @@ uv run python kb/scripts/analyze_kb_topics_local.py <kb_id> [--update]
 ### 向量检索
 
 ```bash
-uv run llamaindex-study search [<kb_id>] "<查询词>" [-k <top_k>] [--auto] [--exclude <kb1,kb2>] [--auto-merging]
+uv run llamaindex-study search [<kb_id>] "<查询词>" [-k <top_k>] [--auto] [--exclude <kb1,kb2>] [--kb-ids <kb1,kb2>] [--auto-merging]
 ```
 
 参数说明：
@@ -219,6 +219,7 @@ uv run llamaindex-study search [<kb_id>] "<查询词>" [-k <top_k>] [--auto] [--
 | `kb_id` | 知识库 ID | 省略时自动选择 |
 | `--auto` | 自动选择知识库 | False |
 | `--exclude` | 排除的知识库 ID（逗号分隔） | 无 |
+| `--kb-ids` | 指定多个知识库 ID（逗号分隔） | 无 |
 | `--auto-merging` | 启用 Auto-Merging（合并子节点到父节点） | False |
 
 示例：
@@ -230,6 +231,9 @@ uv run llamaindex-study search tech_tools "Python 异步编程" -k 5
 # 启用 Auto-Merging 检索
 uv run llamaindex-study search tech_tools "Python 异步编程" -k 5 --auto-merging
 
+# 多库检索
+uv run llamaindex-study search "Python 异步编程" --kb-ids tech_tools,academic -k 5
+
 # 自动选择知识库检索
 uv run llamaindex-study search "Python 异步编程" --auto -k 5
 
@@ -240,7 +244,7 @@ uv run llamaindex-study search "赖氨酸配比" --auto --exclude tech_tools,aca
 ### RAG 问答
 
 ```bash
-uv run llamaindex-study query [<kb_id>] "<问题>" [-k <top_k>] [--auto] [--exclude <kb1,kb2>] [--hyde] [--multi-query] [--auto-merging] [--response-mode <mode>]
+uv run llamaindex-study query [<kb_id>] "<问题>" [-k <top_k>] [--auto] [--exclude <kb1,kb2>] [--kb-ids <kb1,kb2>] [--hyde] [--multi-query] [--auto-merging] [--response-mode <mode>]
 ```
 
 参数说明：
@@ -250,6 +254,7 @@ uv run llamaindex-study query [<kb_id>] "<问题>" [-k <top_k>] [--auto] [--excl
 | `kb_id` | 知识库 ID | 省略时自动选择 |
 | `--auto` | 自动选择知识库 | False |
 | `--exclude` | 排除的知识库 ID（逗号分隔） | 无 |
+| `--kb-ids` | 指定多个知识库 ID（逗号分隔） | 无 |
 | `--hyde` | 启用 HyDE 查询转换 | False |
 | `--multi-query` | 启用多查询转换 | False |
 | `--auto-merging` | 启用 Auto-Merging Retriever | False |
@@ -261,6 +266,12 @@ uv run llamaindex-study query [<kb_id>] "<问题>" [-k <top_k>] [--auto] [--excl
 
 ```bash
 # 指定知识库问答
+uv run llamaindex-study query tech_tools "如何优化 Python 异步代码？"
+
+# 多库问答
+uv run llamaindex-study query "如何优化 Python 性能？" --kb-ids tech_tools,academic
+
+# 启用 HyDE 查询转换
 uv run llamaindex-study query tech_tools "如何优化 Python 异步代码？"
 
 # 自动选择知识库问答
@@ -837,4 +848,5 @@ CLI 工具读取以下环境变量（参见 `.env.example`）：
 | `OLLAMA_LOCAL_URL` | 本地 Ollama | `http://localhost:11434` |
 | `OLLAMA_REMOTE_URL` | 远程 Ollama | 空（禁用） |
 | `OBSIDIAN_VAULT_ROOT` | Obsidian Vault 根目录 | `~/Documents/Obsidian Vault` |
-| `PERSIST_DIR` | 向量存储目录 | `~/.llamaindex/storage` |
+| `PERSIST_DIR` | 向量存储目录（通用 KB） | `/Volumes/online/llamaindex` |
+| `ZOTERO_PERSIST_DIR` | Zotero 存储目录 | `/Volumes/online/llamaindex/zotero` |

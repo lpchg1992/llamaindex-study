@@ -108,8 +108,8 @@ OLLAMA_REMOTE_URL=http://192.168.31.169:11434
 
 # ==================== 存储配置 ====================
 OBSIDIAN_VAULT_ROOT=~/Documents/Obsidian Vault
-PERSIST_DIR=~/.llamaindex/storage
-ZOTERO_PERSIST_DIR=~/.llamaindex/storage/zotero
+PERSIST_DIR=/Volumes/online/llamaindex
+ZOTERO_PERSIST_DIR=/Volumes/online/llamaindex/zotero
 
 # ==================== 检索配置（可选）====================
 USE_HYBRID_SEARCH=false
@@ -431,8 +431,8 @@ result = QueryRouter.query("猪饲料配方", top_k=5)
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `OBSIDIAN_VAULT_ROOT` | `~/Documents/Obsidian Vault` | Obsidian Vault 根目录 |
-| `PERSIST_DIR` | `~/.llamaindex/storage` | 向量存储目录 |
-| `ZOTERO_PERSIST_DIR` | `~/.llamaindex/storage/zotero` | Zotero 向量存储目录 |
+| `PERSIST_DIR` | `/Volumes/online/llamaindex` | 向量存储目录（通用 KB） |
+| `ZOTERO_PERSIST_DIR` | `/Volumes/online/llamaindex/zotero` | Zotero 向量存储目录 |
 | `DATA_DIR` | `~/.llamaindex` | 任务队列与项目数据库目录 |
 
 ### 检索配置
@@ -470,18 +470,27 @@ result = QueryRouter.query("猪饲料配方", top_k=5)
 ## 存储位置
 
 ```
-~/.llamaindex/                    # 本地存储根目录
-├── storage/                      # 向量数据
-│   ├── kb_swine_nutrition/     # 知识库存储
-│   └── kb_tech_tools/
+/Volumes/online/llamaindex/       # 主存储目录
+├── obsidian/                    # Obsidian 来源 KB（通用 KB）
+│   └── <kb_id>/
+└── zotero/                      # Zotero 来源 KB
+    └── <kb_id>/
+        └── <kb_id>.lance/       # LanceDB 向量数据
+
+~/.llamaindex/                    # 项目数据库目录
 ├── project.db                   # SQLite 数据库
 │   ├── sync_states              # 同步状态
 │   ├── dedup_records            # 去重记录
 │   ├── progress                 # 处理进度
-│   ├── knowledge_bases          # 知识库元数据
+│   ├── knowledge_bases          # 知识库元数据（唯一数据源）
 │   └── kb_category_rules         # 分类规则
 └── tasks.db                     # 任务队列
 ```
+
+**存储策略：**
+- 通用 KB（Obsidian 等）→ `PERSIST_DIR/{kb_id}/`
+- Zotero KB → `ZOTERO_PERSIST_DIR/{kb_id}/`
+- 知识库元数据全部存储在数据库中，`KNOWLEDGE_BASES` 仅作种子数据
 
 ## 硅基流动模型推荐
 
