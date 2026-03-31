@@ -150,11 +150,10 @@ uv run llamaindex-study kb delete <kb_id> --yes
 ### 重建知识库
 
 ```bash
-uv run llamaindex-study kb rebuild <kb_id> [--wait]
+uv run llamaindex-study kb rebuild <kb_id>
 ```
 
-- 不加 `--wait`：异步提交任务，立即返回 task_id
-- 加 `--wait`：同步执行，等待完成
+任务在后台执行，可通过 `task list/pause/cancel` 管理。
 
 ### 知识库主题分析
 
@@ -220,7 +219,7 @@ uv run llamaindex-study search [<kb_id>] "<查询词>" [-k <top_k>] [--auto] [--
 | `--auto` | 自动选择知识库 | False |
 | `--exclude` | 排除的知识库 ID（逗号分隔） | 无 |
 | `--kb-ids` | 指定多个知识库 ID（逗号分隔） | 无 |
-| `--auto-merging` | 启用 Auto-Merging（合并子节点到父节点） | False |
+| `--auto-merging` | 启用 Auto-Merging（需 KB 使用 hierarchical 分块） | False |
 
 示例：
 
@@ -314,7 +313,7 @@ uv run llamaindex-study ingest obsidian <kb_id> \
     [--folder-path <folder>] \
     [--recursive] \
     [--rebuild] \
-    [--wait]
+   
 ```
 
 参数说明：
@@ -327,7 +326,6 @@ uv run llamaindex-study ingest obsidian <kb_id> \
 | `--rebuild` | 重建（清空后重新导入） | False |
 | `--force-delete` | 强制删除已有数据 | True |
 | `--persist-dir` | 自定义持久化目录 | 空 |
-| `--wait` | 同步执行 | False |
 
 示例：
 
@@ -339,7 +337,7 @@ uv run llamaindex-study ingest obsidian tech_tools
 uv run llamaindex-study ingest obsidian tech_tools --folder-path IT
 
 # 递归导入并等待完成
-uv run llamaindex-study ingest obsidian tech_tools --folder-path IT --recursive --wait
+uv run llamaindex-study ingest obsidian tech_tools --folder-path IT --recursive
 
 # 指定 Vault 路径
 uv run llamaindex-study ingest obsidian tech_tools --vault-path ~/Documents/MyVault --folder-path IT
@@ -358,7 +356,7 @@ uv run llamaindex-study ingest zotero <kb_id> \
     [--collection-id <id>] \
     [--collection-name <name>] \
     [--rebuild] \
-    [--wait]
+   
 ```
 
 参数说明：
@@ -368,7 +366,6 @@ uv run llamaindex-study ingest zotero <kb_id> \
 | `--collection-id` | Zotero 收藏夹 ID（精确） |
 | `--collection-name` | 收藏夹名称（可能模糊匹配） |
 | `--rebuild` | 重建知识库 |
-| `--wait` | 同步执行 |
 
 示例：
 
@@ -386,8 +383,10 @@ uv run llamaindex-study ingest zotero zotero_nutrition --collection-name "营养
 ### 导入单个文件
 
 ```bash
-uv run llamaindex-study ingest file <kb_id> <file_path> [--wait]
+uv run llamaindex-study ingest file <kb_id> <file_path>
 ```
+
+> **验证**：提交任务前会检查路径是否存在、是否为有效文件/目录，以及目录中是否有可处理的文件。如果没有找到文件，命令会报错而不会提交空任务。
 
 示例：
 
@@ -399,8 +398,10 @@ uv run llamaindex-study ingest file tech_tools README.md
 ### 批量导入
 
 ```bash
-uv run llamaindex-study ingest batch <kb_id> <path1> <path2> ... [--wait]
+uv run llamaindex-study ingest batch <kb_id> <path1> <path2> ...
 ```
+
+> **验证**：提交任务前会检查所有路径是否存在，并统计可处理的文件总数。如果所有路径都不存在或没有可处理的文件，命令会报错而不会提交空任务。
 
 示例：
 
@@ -411,7 +412,7 @@ uv run llamaindex-study ingest batch tech_tools ./docs ./notes /tmp/papers
 ### 提交重建任务
 
 ```bash
-uv run llamaindex-study ingest rebuild <kb_id> [--wait]
+uv run llamaindex-study ingest rebuild <kb_id>
 ```
 
 ---
@@ -449,7 +450,7 @@ uv run llamaindex-study obsidian mappings
 uv run llamaindex-study obsidian import-all \
     [--vault-path <path>] \
     [--rebuild] \
-    [--wait]
+   
 ```
 
 根据配置的映射规则，自动将 Vault 中的文件夹分类导入到不同知识库。
@@ -492,7 +493,7 @@ uv run llamaindex-study zotero search "营养"
 uv run llamaindex-study task submit <task_type> <kb_id> \
     [--param <key=value>] \
     [--source <source>] \
-    [--wait]
+   
 ```
 
 示例：
@@ -509,6 +510,8 @@ uv run llamaindex-study task submit obsidian tech_tools \
 ```bash
 uv run llamaindex-study task list [--kb-id <kb_id>] [--status <status>] [--limit <num>]
 ```
+
+> 执行 `task list` 会自动清理孤儿任务（运行中但实际无后台进程的任务）。
 
 状态过滤：`pending`、`running`、`completed`、`failed`、`cancelled`
 
@@ -534,6 +537,40 @@ uv run llamaindex-study task show <task_id>
 uv run llamaindex-study task cancel <task_id>
 ```
 
+> 取消正在运行的任务。任务会在当前文件处理完成后进入已取消状态。
+
+### 暂停任务
+
+```bash
+uv run llamaindex-study task pause <task_id>
+```
+
+> 暂停正在运行的任务，任务会在当前文件处理完成后进入暂停状态。
+
+### 恢复任务
+
+```bash
+uv run llamaindex-study task resume <task_id>
+```
+
+> 恢复已暂停的任务，继续执行。只能恢复通过 `task pause` 暂停的任务。
+
+### 暂停所有任务
+
+```bash
+uv run llamaindex-study task pause-all [--status running]
+```
+
+> 暂停所有运行中的任务。
+
+### 恢复所有任务
+
+```bash
+uv run llamaindex-study task resume-all
+```
+
+> 恢复所有已暂停的任务。
+
 ### 删除任务
 
 ```bash
@@ -545,10 +582,37 @@ uv run llamaindex-study task delete <task_id> [--cleanup]
 | 参数 | 说明 |
 |------|------|
 | `task_id` | 任务 ID |
-| `--cleanup` | 同时清理关联的知识库数据（dedup 状态），仅对 failed/cancelled 任务有效 |
+| `--cleanup` | 同时清理关联的知识库数据（去重记录 + 向量数据），仅清理该任务产生的源文件 |
 
 > ⚠️ 只能删除已完成的、失败的、已取消的任务。正在运行的任务无法删除。
-> ⚠️ 使用 `--cleanup` 会清空该知识库的去重状态，可能导致部分数据重新处理。
+> ⚠️ `--cleanup` 会清理该任务处理的源文件对应的去重记录和向量数据，不影响其他数据。
+
+### 删除所有任务
+
+```bash
+uv run llamaindex-study task delete-all [--status completed] [--cleanup]
+```
+
+> 删除所有指定状态的任务。
+
+| 参数 | 说明 |
+|------|------|
+| `--status` | 筛选任务状态（pending/running/completed/failed/cancelled） |
+| `--cleanup` | 同时清理关联的知识库数据 |
+
+### 清理孤儿任务
+
+```bash
+uv run llamaindex-study task cleanup [--no-cleanup]
+```
+
+> 清理孤儿任务（状态为 running 但实际无后台进程执行的任务）。当执行进程被强制终止时，数据库中的任务状态仍为 running，需要用此命令清理。
+
+| 参数 | 说明 |
+|------|------|
+| `--no-cleanup` | 仅标记孤儿任务为 failed，不清理关联的向量数据 |
+
+> 默认会清理孤儿任务关联的向量数据（去重记录 + 向量数据）。
 
 ### 持续观察任务
 
@@ -755,7 +819,7 @@ uv run llamaindex-study config set RESPONSE_MODE refine
 uv run llamaindex-study kb create tech_tools --name "技术工具" --description "技术文档"
 
 # 2. 导入 Obsidian 笔记
-uv run llamaindex-study ingest obsidian tech_tools --folder-path IT --wait
+uv run llamaindex-study ingest obsidian tech_tools --folder-path IT
 
 # 3. 开始查询
 uv run llamaindex-study query tech_tools "如何配置 Docker？"
@@ -765,7 +829,7 @@ uv run llamaindex-study query tech_tools "如何配置 Docker？"
 
 ```bash
 # 自动检测变更并增量导入
-uv run llamaindex-study ingest obsidian tech_tools --folder-path IT --wait
+uv run llamaindex-study ingest obsidian tech_tools --folder-path IT
 
 # 或进入交互模式直接问答
 uv run llamaindex-study
@@ -778,7 +842,7 @@ uv run llamaindex-study
 uv run llamaindex-study zotero collections --limit 20
 
 # 2. 导入收藏夹
-uv run llamaindex-study ingest zotero research --collection-name "机器学习" --wait
+uv run llamaindex-study ingest zotero research --collection-name "机器学习"
 
 # 3. 检索文献
 uv run llamaindex-study search research "transformer attention"
@@ -850,3 +914,7 @@ CLI 工具读取以下环境变量（参见 `.env.example`）：
 | `OBSIDIAN_VAULT_ROOT` | Obsidian Vault 根目录 | `~/Documents/Obsidian Vault` |
 | `PERSIST_DIR` | 向量存储目录（通用 KB） | `/Volumes/online/llamaindex` |
 | `ZOTERO_PERSIST_DIR` | Zotero 存储目录 | `/Volumes/online/llamaindex/zotero` |
+| `CHUNK_STRATEGY` | 分块策略 | `hierarchical` |
+| `HIERARCHICAL_CHUNK_SIZES` | 层级分块各层大小 | `2048,512,128` |
+| `SENTENCE_CHUNK_SIZE` | 句子分块大小 | `512` |
+| `SENTENCE_CHUNK_OVERLAP` | 句子分块重叠 | `50` |

@@ -102,7 +102,13 @@ curl "http://localhost:37241/tasks/abc12345"
 | GET | `/tasks` | 列出任务 |
 | GET | `/tasks/{task_id}` | 查询任务状态 |
 | DELETE | `/tasks/{task_id}` | 取消任务 |
+| POST | `/tasks/{task_id}/pause` | 暂停任务 |
+| POST | `/tasks/{task_id}/resume` | 恢复任务 |
 | DELETE | `/tasks/{task_id}/delete` | 删除任务（可选 cleanup=true 清理关联数据） |
+| POST | `/tasks/pause-all` | 暂停所有运行中的任务 |
+| POST | `/tasks/resume-all` | 恢复所有已暂停的任务 |
+| DELETE | `/tasks/delete-all` | 删除所有任务 |
+| POST | `/tasks/cleanup` | 清理孤儿任务 |
 
 ### 知识库管理
 
@@ -231,9 +237,69 @@ curl http://localhost:37241/tasks/abc12345
 curl "http://localhost:37241/tasks?status=running&limit=10"
 ```
 
+#### DELETE /tasks/{task_id} - 取消任务
+
+```bash
+curl -X DELETE "http://localhost:37241/tasks/abc12345"
+```
+
+```json
+{"status": "cancelled", "task_id": "abc12345", "message": "已取消运行中的任务"}
+```
+
+#### POST /tasks/{task_id}/pause - 暂停任务
+
+```bash
+curl -X POST "http://localhost:37241/tasks/abc12345/pause"
+```
+
+```json
+{"status": "paused", "task_id": "abc12345", "message": "任务已暂停"}
+```
+
+#### POST /tasks/{task_id}/resume - 恢复任务
+
+```bash
+curl -X POST "http://localhost:37241/tasks/abc12345/resume"
+```
+
+```json
+{"status": "running", "task_id": "abc12345", "message": "任务已恢复"}
+```
+
 ---
 
 ### 文档导入
+
+#### POST /kbs/{kb_id}/ingest
+
+通用文件导入（本地文件、文件夹）：
+
+```bash
+curl -X POST "http://localhost:37241/kbs/my_kb/ingest" \
+  -H "Content-Type: application/json" \
+  -d '{"path": "/path/to/file.pdf"}'
+```
+
+> **预验证**：提交任务前会检查路径是否存在、是否有可处理的文件。如果路径不存在或没有找到文件，返回 400 错误。
+
+```json
+{
+  "status": "pending",
+  "task_id": "abc12345",
+  "message": "导入任务已提交，ID: abc12345，文件数: 5"
+}
+```
+
+**错误响应**（路径不存在）：
+```json
+{"detail": "路径不存在: /path/to/file.pdf"}
+```
+
+**错误响应**（没有可处理的文件）：
+```json
+{"detail": "没有找到可处理的文件: /path/to/folder"}
+```
 
 #### POST /kbs/{kb_id}/ingest/obsidian
 
@@ -410,7 +476,7 @@ curl -X POST "http://localhost:37241/kbs/tech_tools/query" \
   -d '{"query": "Python 异步编程", "top_k": 5, "use_auto_merging": true}'
 ```
 
-> **注意**：Auto-Merging 需要知识库使用 HierarchicalNodeParser 构建（父子节点分块）。
+> **注意**：Auto-Merging 需要知识库使用 `hierarchical` 分块策略（父子节点分块）。如果 KB 使用 `sentence` 或 `semantic` 策略，查询时会自动回退到普通 retriever。
 
 #### Response Synthesizer
 
@@ -646,14 +712,43 @@ curl -X POST "http://localhost:37241/kbs/tech_tools/search" \
   "kb_id": "tech_tools",
   "files": 26,
   "nodes": 248,
+  "sources": ["/path/to/file1.md", "/path/to/file2.md"],
   "endpoint_stats": {
     "本地": 124,
     "远程": 124
-  }
+  },
+  "chunk_strategy": "hierarchical"
 }
 ```
 
-`endpoint_stats` 显示每个 Ollama 端点处理的 chunk 数量。
+| 字段 | 说明 |
+|------|------|
+| `kb_id` | 知识库 ID |
+| `files` | 处理的文件数 |
+| `nodes` | 生成的节点数 |
+| `sources` | 处理的源文件路径列表（用于清理） |
+| `endpoint_stats` | 每个 Ollama 端点处理的 chunk 数量 |
+| `chunk_strategy` | 分块策略：`hierarchical`/`sentence`/`semantic` |
+
+## 知识库详情
+
+`GET /kbs/{kb_id}` 返回：
+
+```json
+{
+  "id": "tech_tools",
+  "name": "技术工具",
+  "description": "技术文档知识库",
+  "persist_dir": "/path/to/persist",
+  "status": "indexed",
+  "row_count": 1248,
+  "chunk_strategy": "hierarchical"
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| `chunk_strategy` | 知识库的分块策略，用于判断是否支持 Auto-Merging |
 
 ---
 
@@ -706,8 +801,12 @@ curl -X POST "http://localhost:37241/kbs/tech_tools/search" \
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `TOP_K` | `5` | 每个知识库返回的结果数量 |
+| `CHUNK_STRATEGY` | `hierarchical` | 分块策略：`hierarchical`/`sentence`/`semantic` |
+| `HIERARCHICAL_CHUNK_SIZES` | `2048,512,128` | 层级分块各层大小 |
+| `SENTENCE_CHUNK_SIZE` | `512` | 句子分块大小 |
+| `SENTENCE_CHUNK_OVERLAP` | `50` | 句子分块重叠 |
 | `USE_SEMANTIC_CHUNKING` | `false` | 启用语义分块（需重建知识库） |
-| `USE_AUTO_MERGING` | `false` | 启用 Auto-Merging Retriever（需重建知识库） |
+| `USE_AUTO_MERGING` | `false` | 启用 Auto-Merging Retriever（需知识库使用 hierarchical 分块） |
 | `USE_HYBRID_SEARCH` | `false` | 启用混合搜索（向量 + BM25） |
 | `HYBRID_SEARCH_ALPHA` | `0.5` | 混合搜索向量权重（0-1，1=仅向量） |
 | `HYBRID_SEARCH_MODE` | `relative_score` | 混合搜索融合模式 |

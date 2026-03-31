@@ -43,8 +43,9 @@
 | **混合搜索** | 向量检索 + BM25 关键词融合 | `USE_HYBRID_SEARCH=true` |
 | **HyDE 查询转换** | 假设文档嵌入，提升检索质量 | `USE_HYDE=true` 或 API 参数 |
 | **多查询转换** | 生成多个查询变体，减少遗漏 | `USE_MULTI_QUERY=true` 或 API 参数 |
-| **Auto-Merging** | 检索时自动合并子节点为父节点 | `USE_AUTO_MERGING=true` 或 API 参数 |
+| **Auto-Merging** | 检索时自动合并子节点为父节点（需 hierarchical 分块） | `USE_AUTO_MERGING=true` 或 API 参数 |
 | **语义分块** | 基于 embedding 相似度的智能分块 | `USE_SEMANTIC_CHUNKING=true` |
+| **层级分块** | 父子节点分块（Auto-Merging 基础） | `CHUNK_STRATEGY=hierarchical`（默认） |
 | **Response Synthesizer** | 多样化答案生成模式 | API 参数 `response_mode` |
 | **RAG 评估** | 基于 Ragas 框架的评估指标 | 默认启用 |
 
@@ -222,10 +223,12 @@ Chunk 队列：
 用户查询 → LLM 生成 N 个查询变体 → 分别检索 → 融合结果
 ```
 
-#### Auto-Merging Retriever（需启用 `USE_AUTO_MERGING=true`）
+#### Auto-Merging Retriever（需启用 `USE_AUTO_MERGING=true`，且 KB 使用 hierarchical 分块）
 ```
 用户查询 → 叶子节点检索 → 合并到父节点 → 更完整的上下文
 ```
+
+> 如果 KB 使用 `sentence` 或 `semantic` 分块策略，Auto-Merging 会自动回退到普通 retriever。
 
 ### 3. Response Synthesizer 模式
 
@@ -309,9 +312,17 @@ uv run llamaindex-study ingest file tech_tools README.md
 uv run llamaindex-study ingest zotero zotero_nutrition --collection-name "营养"
 
 # 任务管理
-uv run llamaindex-study task list
-uv run llamaindex-study task show <task_id>
-uv run llamaindex-study task watch <task_id>
+uv run llamaindex-study task list              # 查看任务（自动清理孤儿任务）
+uv run llamaindex-study task show <task_id>  # 查看任务详情
+uv run llamaindex-study task watch <task_id>  # 持续观察任务
+uv run llamaindex-study task cancel <task_id>  # 取消任务
+uv run llamaindex-study task pause <task_id>   # 暂停任务
+uv run llamaindex-study task resume <task_id>  # 恢复任务
+uv run llamaindex-study task pause-all         # 暂停所有任务
+uv run llamaindex-study task resume-all       # 恢复所有任务
+uv run llamaindex-study task delete <task_id> [--cleanup]  # 删除任务记录
+uv run llamaindex-study task delete-all [--status completed]  # 删除所有任务
+uv run llamaindex-study task cleanup          # 清理孤儿任务
 
 # 配置管理
 uv run llamaindex-study config list
@@ -387,6 +398,7 @@ result = QueryRouter.query("猪饲料配方", top_k=5)
 
 | 方法 | 端点 | 功能 |
 |------|------|------|
+| POST | `/kbs/{kb_id}/ingest` | 通用文件导入（本地文件/文件夹） |
 | POST | `/kbs/{kb_id}/ingest/obsidian` | Obsidian 导入 |
 | POST | `/kbs/{kb_id}/ingest/zotero` | Zotero 导入 |
 | POST | `/kbs/{kb_id}/rebuild` | 重建知识库 |
@@ -440,13 +452,17 @@ result = QueryRouter.query("猪饲料配方", top_k=5)
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `TOP_K` | `5` | 每个知识库返回的结果数量 |
+| `CHUNK_STRATEGY` | `hierarchical` | 分块策略：`hierarchical`/`sentence`/`semantic` |
+| `HIERARCHICAL_CHUNK_SIZES` | `2048,512,128` | 层级分块各层大小 |
+| `SENTENCE_CHUNK_SIZE` | `512` | 句子分块大小 |
+| `SENTENCE_CHUNK_OVERLAP` | `50` | 句子分块重叠 |
 | `USE_HYBRID_SEARCH` | `false` | 启用混合搜索（向量 + BM25） |
 | `HYBRID_SEARCH_ALPHA` | `0.5` | 混合搜索向量权重（0-1） |
 | `HYBRID_SEARCH_MODE` | `relative_score` | 混合搜索融合模式 |
 | `USE_HYDE` | `false` | 启用 HyDE 查询转换 |
 | `USE_MULTI_QUERY` | `false` | 启用多查询转换 |
 | `USE_QUERY_REWRITE` | `false` | 启用 Query Rewriting |
-| `USE_AUTO_MERGING` | `false` | 启用 Auto-Merging Retriever |
+| `USE_AUTO_MERGING` | `false` | 启用 Auto-Merging Retriever（需 KB 使用 hierarchical 分块） |
 | `USE_SEMANTIC_CHUNKING` | `false` | 启用语义分块（需重建知识库） |
 | `RESPONSE_MODE` | `compact` | 答案生成模式 |
 

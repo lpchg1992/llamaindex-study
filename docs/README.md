@@ -56,7 +56,13 @@
 | GET | `/tasks` | 列出任务 |
 | GET | `/tasks/{task_id}` | 查询任务状态 |
 | DELETE | `/tasks/{task_id}` | 取消任务 |
+| POST | `/tasks/{task_id}/pause` | 暂停任务 |
+| POST | `/tasks/{task_id}/resume` | 恢复任务 |
 | DELETE | `/tasks/{task_id}/delete` | 删除任务（可选 cleanup=true 清理关联数据）|
+| POST | `/tasks/pause-all` | 暂停所有任务 |
+| POST | `/tasks/resume-all` | 恢复所有任务 |
+| DELETE | `/tasks/delete-all` | 删除所有任务 |
+| POST | `/tasks/cleanup` | 清理孤儿任务 |
 
 ### 分类规则
 | 方法 | 端点 | 功能 |
@@ -137,9 +143,17 @@ uv run llamaindex-study search "<query>" --auto  # 自动选择知识库
 uv run llamaindex-study query "<question>" --auto  # 自动选择知识库
 
 # 任务管理
-uv run llamaindex-study task list
-uv run llamaindex-study task watch <task_id>
-uv run llamaindex-study task delete <task_id> --cleanup  # 删除任务并清理数据
+uv run llamaindex-study task list              # 查看任务（自动清理孤儿任务）
+uv run llamaindex-study task show <task_id>  # 查看任务详情
+uv run llamaindex-study task watch <task_id>  # 持续观察任务
+uv run llamaindex-study task cancel <task_id>  # 取消任务
+uv run llamaindex-study task pause <task_id>   # 暂停任务
+uv run llamaindex-study task resume <task_id>  # 恢复任务
+uv run llamaindex-study task pause-all         # 暂停所有任务
+uv run llamaindex-study task resume-all       # 恢复所有任务
+uv run llamaindex-study task delete <task_id> [--cleanup]  # 删除任务记录
+uv run llamaindex-study task delete-all [--status completed]  # 删除所有任务
+uv run llamaindex-study task cleanup          # 清理孤儿任务（无进程但状态为running）
 ```
 
 ## 使用示例

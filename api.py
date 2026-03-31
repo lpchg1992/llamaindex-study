@@ -474,12 +474,37 @@ def get_task(task_id: str):
 @app.delete("/tasks/{task_id}")
 def cancel_task(task_id: str):
     """取消任务"""
-    from kb.task_queue import task_queue
-    from kb.task_executor import task_executor
+    from kb.services import TaskService
 
-    if task_executor.cancel_task(task_id):
-        return {"status": "cancelled", "task_id": task_id}
-    raise HTTPException(status_code=404, detail="Task not found or already completed")
+    try:
+        result = TaskService.cancel(task_id)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.post("/tasks/{task_id}/pause")
+def pause_task(task_id: str):
+    """暂停任务"""
+    from kb.services import TaskService
+
+    try:
+        result = TaskService.pause(task_id)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.post("/tasks/{task_id}/resume")
+def resume_task(task_id: str):
+    """恢复任务"""
+    from kb.services import TaskService
+
+    try:
+        result = TaskService.resume(task_id)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @app.delete("/tasks/{task_id}/delete")
@@ -495,6 +520,38 @@ def delete_task(task_id: str, cleanup: bool = False):
         return TaskService.delete(task_id, cleanup=cleanup)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/tasks/pause-all")
+def pause_all_tasks(status: str = "running"):
+    """暂停所有运行中的任务"""
+    from kb.services import TaskService
+
+    return TaskService.pause_all(status)
+
+
+@app.post("/tasks/resume-all")
+def resume_all_tasks():
+    """恢复所有已暂停的任务"""
+    from kb.services import TaskService
+
+    return TaskService.resume_all()
+
+
+@app.delete("/tasks/delete-all")
+def delete_all_tasks(status: str = "completed", cleanup: bool = False):
+    """删除所有任务"""
+    from kb.services import TaskService
+
+    return TaskService.delete_all(status, cleanup)
+
+
+@app.post("/tasks/cleanup")
+def cleanup_orphan_tasks():
+    """清理孤儿任务（执行进程已终止的任务）"""
+    from kb.services import TaskService
+
+    return TaskService.cleanup_orphan_tasks()
 
 
 # ============== 知识库接口 ==============
@@ -653,9 +710,32 @@ def query_auto(req: QueryRequest):
 
 @app.post("/kbs/{kb_id}/ingest")
 def ingest(kb_id: str, req: IngestRequest):
-    """通用文件导入"""
+    """通用文件导入
+
+    预验证：检查路径是否存在、是否有可处理的文件
+    """
+    from pathlib import Path
+
+    path = Path(req.path)
+    if not path.exists():
+        raise HTTPException(status_code=400, detail=f"路径不存在: {req.path}")
+
+    from kb.generic_processor import GenericImporter
+
+    all_files: List[Path] = []
+    if path.is_file():
+        all_files.append(path)
+    elif path.is_dir():
+        importer = GenericImporter()
+        all_files = importer.collect_files([path], recursive=True)
+
+    if not all_files:
+        raise HTTPException(
+            status_code=400,
+            detail=f"没有找到可处理的文件: {req.path}",
+        )
+
     from kb.task_queue import task_queue
-    from kb.task_executor import task_executor
 
     task_id = task_queue.submit_task(
         task_type="generic",
@@ -664,12 +744,10 @@ def ingest(kb_id: str, req: IngestRequest):
         source=req.path,
     )
 
-    # 任务由调度器启动
-
     return IngestResponse(
         status="pending",
         task_id=task_id,
-        message=f"导入任务已提交，ID: {task_id}",
+        message=f"导入任务已提交，ID: {task_id}，文件数: {len(all_files)}",
     )
 
 
