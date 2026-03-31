@@ -12,7 +12,7 @@ import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from queue import Queue, Empty
-from typing import Dict, List, Optional, Tuple
+from typing import AsyncIterator, Dict, List, Optional, Tuple
 
 from llama_index.embeddings.ollama import OllamaEmbedding
 from llamaindex_study.config import get_settings
@@ -112,8 +112,9 @@ class ParallelEmbeddingProcessor:
                 start = time.perf_counter()
                 with self._lock:
                     ep.inflight += 1
-                model = self._get_model(ep.url)
-                embedding = model.get_text_embedding(text)
+
+                embedding = self._call_ollama_embed(ep.url, text)
+
                 latency = time.perf_counter() - start
                 with self._lock:
                     self._stats[ep.name] += 1
@@ -146,6 +147,26 @@ class ParallelEmbeddingProcessor:
             f"重试{MAX_RETRIES}次后失败: {last_error}",
         )
 
+    def _call_ollama_embed(self, url: str, text: str) -> List[float]:
+        """直接调用 Ollama /api/embed 端点"""
+        import httpx
+
+        model_name = EMBEDDING_MODEL
+        if not model_name.endswith(":latest"):
+            model_name = f"{model_name}:latest"
+
+        payload = {
+            "model": model_name,
+            "input": text[:8192],
+        }
+
+        with httpx.Client(timeout=60.0) as client:
+            response = client.post(f"{url}/api/embed", json=payload)
+            if response.status_code != 200:
+                raise Exception(f"API error: {response.status_code}")
+            result = response.json()
+            return result["embedding"]
+
     def _get_best_endpoint(self) -> EmbeddingEndpoint:
         """选择当前最优的端点（基于速度和负载）"""
         with self._lock:
@@ -177,6 +198,55 @@ class ParallelEmbeddingProcessor:
             self._executor, lambda: self._get_embedding_with_retry(text, ep)
         )
 
+    async def process_batch_streaming(
+        self, texts: List[str], base_idx: int = 0
+    ) -> AsyncIterator[Tuple[int, EmbeddingResult]]:
+        """
+        流式处理文本列表（按完成顺序yield）
+
+        与 process_batch 不同，这个方法会在每个 embedding 完成后立即 yield，
+        而不是等待所有完成。适合需要边处理边写入的场景。
+
+        Args:
+            texts: 文本列表
+            base_idx: 起始索引（用于多批次场景）
+
+        Yields:
+            (index, (ep_name, embedding, error))
+        """
+        if not texts:
+            return
+
+        self._chunk_queue = deque(range(len(texts)))
+        futures: List[Tuple[int, asyncio.Task]] = []
+
+        for i in range(len(texts)):
+            ep = self._get_best_endpoint()
+            coro = self._run_embedding_in_thread(texts[i], ep)
+            task = asyncio.create_task(coro)
+            futures.append((i, task))
+
+        for _, coro in asyncio.as_completed([f for _, f in futures]):
+            idx = next(i for i, t in futures if t == coro)
+            try:
+                result = await coro
+                yield (base_idx + idx, result)
+            except Exception as e:
+                logger.warning(f"Embedding 流式处理失败 idx={idx}: {e}")
+                yield (
+                    base_idx + idx,
+                    (self.endpoints[0].name, [0.0] * EMBEDDING_DIM, str(e)),
+                )
+
+    async def _run_embedding_in_thread(
+        self, text: str, ep: "EmbeddingEndpoint"
+    ) -> EmbeddingResult:
+        """在线程池中运行 embedding（保持线程安全）"""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            self._executor, lambda: self._get_embedding_with_retry(text, ep)
+        )
+
     async def process_batch(self, texts: List[str]) -> List[EmbeddingResult]:
         """
         批量处理文本列表（自适应负载均衡）
@@ -198,7 +268,7 @@ class ParallelEmbeddingProcessor:
         loop = asyncio.get_running_loop()
         results: List[EmbeddingResult] = [None] * len(texts)
         completed = 0
-        lock = asyncio.Lock()
+        lock = threading.Lock()
 
         def worker(ep: EmbeddingEndpoint) -> None:
             nonlocal completed
