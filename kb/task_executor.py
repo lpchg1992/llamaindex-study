@@ -138,10 +138,10 @@ class TaskExecutor:
         """
         from kb.registry import KnowledgeBaseRegistry
         from kb.task_lock import DedupLock
-        from llama_index.core.node_parser import SentenceSplitter
         from llama_index.core.schema import Document as LlamaDocument
         from kb.parallel_embedding import get_parallel_processor
         from kb.ingest_vdb import lance_write_queue
+        from llamaindex_study.node_parser import get_node_parser
 
         kb_id = task.kb_id
         params = task.params
@@ -228,8 +228,9 @@ class TaskExecutor:
 
         # ===== 并行处理阶段（embedding + LanceDB 写入）=====
         lance_store = vs._get_lance_vector_store()
-        node_parser = SentenceSplitter(
-            chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP
+        node_parser = get_node_parser(
+            chunk_size=CHUNK_SIZE,
+            chunk_overlap=CHUNK_OVERLAP,
         )
 
         # 启动写入队列

@@ -11,6 +11,8 @@
 - **任务队列** - 异步提交，随时查询状态
 - **增量同步** - 基于文件哈希检测变更
 - **资源保护** - 去重串行访问、LanceDB 串行写入
+- **混合搜索** - 向量检索 + BM25 关键词融合（需启用）
+- **Auto-Merging** - 检索时自动合并相关子节点（需启用）
 
 ## 启动服务
 
@@ -314,8 +316,10 @@ RAG 问答：
 ```bash
 curl -X POST "http://localhost:37241/kbs/tech_tools/query" \
   -H "Content-Type: application/json" \
-  -d '{"query": "如何优化 Python 性能？", "mode": "hybrid", "top_k": 5}'
+  -d '{"query": "如何优化 Python 性能？", "mode": "vector", "top_k": 5}'
 ```
+
+> **检索模式**：`mode` 参数支持 `vector`（默认）和 `hybrid`（向量+BM25融合）。混合搜索需设置环境变量 `USE_HYBRID_SEARCH=true`。
 
 ```json
 {

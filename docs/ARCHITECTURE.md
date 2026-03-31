@@ -176,7 +176,8 @@ def _get_embedding_with_retry(self, text: str, ep: EmbeddingEndpoint) -> Embeddi
 │  ├── embedding_loadbalancer.py  # 负载均衡                  │
 │  ├── vector_store.py        # 向量数据库（多后端）          │
 │  ├── query_engine.py        # 查询引擎                     │
-│  └── reranker.py            # 重排序                       │
+│  ├── reranker.py           # 重排序                       │
+│  └── node_parser.py        # 统一节点解析器               │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -297,6 +298,32 @@ class LanceDBWriteQueue:
             return False
 ```
 
+### 5. 节点解析器（统一分块策略）
+
+```python
+# src/llamaindex_study/node_parser.py
+
+from llamaindex_study.node_parser import get_node_parser, get_hierarchical_node_parser
+
+# 普通分块（SentenceSplitter 或 SemanticChunker）
+parser = get_node_parser(chunk_size=512, chunk_overlap=50)
+
+# 语义分块（基于 embedding 相似度动态决定分块边界）
+parser = get_node_parser(chunk_size=512, use_semantic=True)
+
+# 父子节点分块（用于 Auto-Merging Retriever）
+parser = get_hierarchical_node_parser()
+# 生成三层: [2048, 512, 128]
+```
+
+**支持的解析器**：
+
+| 解析器 | 说明 | 适用场景 |
+|--------|------|---------|
+| `SentenceSplitter` | 固定大小分块 | 默认，向后兼容 |
+| `SemanticChunker` | 基于语义的分块 | 需要启用 USE_SEMANTIC_CHUNKING |
+| `HierarchicalNodeParser` | 父子节点分块 | 启用 Auto-Merging Retriever |
+
 ## 任务队列系统
 
 ```
@@ -371,7 +398,7 @@ API 提交任务
         Body: {"query": "猪营养配方设计"}
 
 2. 向量检索
-   └── LanceDBVectorStore.as_retriever()
+   └── index.as_retriever()
        └── similarity_top_k=15
 
 3. Rerank（可选）
@@ -384,6 +411,40 @@ API 提交任务
 
 5. 返回结果
    └── {"response": "...", "sources": [...]}
+```
+
+### 检索模式
+
+#### 纯向量检索（默认）
+```
+用户查询 → 向量检索器 → Top-K 结果
+```
+
+#### 混合搜索（需启用 USE_HYBRID_SEARCH=true）
+```
+用户查询
+    │
+    ├── 向量检索器 (similarity_top_k=15)
+    │
+    └── BM25 检索器 (similarity_top_k=15)
+            │
+            ▼
+    QueryFusionRetriever 融合
+    (mode=relative_score, RRF, 或 dist_based_score)
+            │
+            ▼
+        融合结果
+            │
+            ▼
+    (可选) Reranker 重排
+            │
+            ▼
+        Top-K 结果
+```
+
+#### Auto-Merging Retriever（需启用 USE_AUTO_MERGING=true，需配合 HierarchicalNodeParser 构建的知识库）
+```
+用户查询 → 叶子节点检索 → 合并到父节点 → 更完整的上下文
 ```
 
 ## 数据库 Schema

@@ -67,26 +67,26 @@ class SiliconFlowReranker(BaseNodePostprocessor):
             "top_n": min(self.top_n, len(documents)),
         }
 
-        data = json.dumps(payload).encode("utf-8")
-        import urllib.request
-
-        req = urllib.request.Request(
-            f"{self.base_url}/rerank",
-            data=data,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.api_key}",
-            },
-            method="POST",
-        )
-
         print(f"   🔄 SiliconFlow Reranker: 正在对 {len(nodes)} 个结果进行重排序...")
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
+        import httpx
+
+        with httpx.Client(timeout=60.0) as client:
+            response = client.post(
+                f"{self.base_url}/rerank",
+                json=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self.api_key}",
+                },
+            )
+            response.raise_for_status()
+            result = response.json()
             api_results = result["results"]
 
         # 建立 index → score 映射并更新节点
-        index_to_score = {item["index"]: item["relevance_score"] for item in api_results}
+        index_to_score = {
+            item["index"]: item["relevance_score"] for item in api_results
+        }
         for node in nodes:
             node.score = index_to_score.get(nodes.index(node), 0.0)
 
@@ -104,21 +104,23 @@ class SiliconFlowReranker(BaseNodePostprocessor):
             "documents": documents,
             "top_n": len(documents),
         }
-        import urllib.request
+        import httpx
 
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            f"{self.base_url}/rerank",
-            data=data,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.api_key}",
-            },
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
-        return [(documents[item["index"]], item["relevance_score"]) for item in result["results"]]
+        with httpx.Client(timeout=60.0) as client:
+            response = client.post(
+                f"{self.base_url}/rerank",
+                json=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self.api_key}",
+                },
+            )
+            response.raise_for_status()
+            result = response.json()
+        return [
+            (documents[item["index"]], item["relevance_score"])
+            for item in result["results"]
+        ]
 
 
 class EmbeddingSimilarityReranker(BaseNodePostprocessor):
@@ -137,18 +139,17 @@ class EmbeddingSimilarityReranker(BaseNodePostprocessor):
 
     def _get_embedding(self, text: str) -> List[float]:
         """调用 Ollama 获取文本的 embedding 向量"""
-        import urllib.request
+        import httpx
 
         payload = {"model": self.embed_model, "prompt": text[:2048]}
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            f"{self.base_url}/api/embeddings",
-            data=data,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
+        with httpx.Client(timeout=60.0) as client:
+            response = client.post(
+                f"{self.base_url}/api/embeddings",
+                json=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            response.raise_for_status()
+            result = response.json()
             return result["embedding"]
 
     def _postprocess_nodes(

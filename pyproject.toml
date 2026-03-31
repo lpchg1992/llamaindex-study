@@ -39,6 +39,8 @@ dependencies = [
     "python-dotenv>=1.0.0",
     # Semantic chunking
     "llama-index-packs-node-parser-semantic-chunking>=0.5.1,<0.6.0",
+    # Hybrid search
+    "llama-index-retrievers-bm25>=0.3.0",
 ]
 
 [project.optional-dependencies]
@@ -48,11 +50,8 @@ dev = [
 ]
 
 [build-system]
-requires = ["poetry-core>=2.0.0,<3.0.0"]
-build-backend = "poetry.core.masonry.api"
-
-[tool.poetry]
-package-mode = true
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project.scripts]
 llamaindex-study = "llamaindex_study.main:main"

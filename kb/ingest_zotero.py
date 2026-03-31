@@ -28,6 +28,7 @@ from typing import Optional, List, Dict, Set
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from dotenv import load_dotenv
+
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 from kb.zotero_reader import create_zotero_reader
@@ -44,10 +45,13 @@ NUTRITION_FEED_COLLECTION_ID = 8
 @dataclass
 class ProgressState:
     """进度状态"""
+
     total_items: int = 0
     processed_items: List[int] = field(default_factory=list)  # 已处理的文献 ID
-    failed_items: List[int] = field(default_factory=list)      # 失败的文献 ID
-    converted_pdfs: Dict[int, str] = field(default_factory=dict)  # item_id -> 转换后的 MD 路径
+    failed_items: List[int] = field(default_factory=list)  # 失败的文献 ID
+    converted_pdfs: Dict[int, str] = field(
+        default_factory=dict
+    )  # item_id -> 转换后的 MD 路径
     started_at: Optional[float] = None
     last_item_id: Optional[int] = None
     last_updated: Optional[float] = None
@@ -92,19 +96,23 @@ class ProgressState:
 
 def configure_embed_model():
     """配置全局 Embedding 模型"""
-    from llama_index.core import Settings
+    from llama_index.core import Settings as LlamaSettings
     from llama_index.embeddings.ollama import OllamaEmbedding
+    from llamaindex_study.config import get_settings
 
-    Settings.embed_model = OllamaEmbedding(
+    settings = get_settings()
+    LlamaSettings.embed_model = OllamaEmbedding(
         model_name="bge-m3",
         base_url="http://localhost:11434",
     )
-    Settings.chunk_size = 512
+    LlamaSettings.chunk_size = 512
+    LlamaSettings.embed_batch_size = settings.embed_batch_size
 
 
 def get_embed_model():
     """获取 Embedding 模型"""
     from llama_index.embeddings.ollama import OllamaEmbedding
+
     return OllamaEmbedding(
         model_name="bge-m3",
         base_url="http://localhost:11434",
@@ -139,9 +147,9 @@ def is_scanned_pdf(pdf_path: str) -> bool:
             text = page.extract_text() or ""
 
             # 统计中英文有效字符
-            chinese_chars = len(re.findall(r'[\u4e00-\u9fff]', text))
-            english_chars = len(re.findall(r'[a-zA-Z]', text))
-            number_chars = len(re.findall(r'[0-9]', text))
+            chinese_chars = len(re.findall(r"[\u4e00-\u9fff]", text))
+            english_chars = len(re.findall(r"[a-zA-Z]", text))
+            number_chars = len(re.findall(r"[0-9]", text))
             valid_chars = chinese_chars + english_chars + number_chars
 
             total_text_len += valid_chars
@@ -170,7 +178,8 @@ def is_scanned_pdf(pdf_path: str) -> bool:
                 if "/Resources" in page and "/XObject" in page["/Resources"]:
                     xobjects = page["/Resources"]["/XObject"].get_object()
                     image_count = sum(
-                        1 for obj in xobjects.values()
+                        1
+                        for obj in xobjects.values()
                         if obj.get("/Subtype") == "/Image"
                     )
                     if image_count > 0:
@@ -189,7 +198,9 @@ def is_scanned_pdf(pdf_path: str) -> bool:
         return True  # 检测失败时保守处理
 
 
-def convert_pdf_to_markdown(pdf_path: str, item_id: int, timeout: int = 300, title: str = "") -> Optional[str]:
+def convert_pdf_to_markdown(
+    pdf_path: str, item_id: int, timeout: int = 300, title: str = ""
+) -> Optional[str]:
     """
     使用 MinerU 或 doc2x 将 PDF 转换为 Markdown
 
@@ -210,17 +221,19 @@ def convert_pdf_to_markdown(pdf_path: str, item_id: int, timeout: int = 300, tit
         result = subprocess.run(
             [
                 "node",
-                "/Users/luopingcheng/.nvm/versions/node/v24.13.1/lib/node_modules/mineru-mcp/dist/index.js"
+                "/Users/luopingcheng/.nvm/versions/node/v24.13.1/lib/node_modules/mineru-mcp/dist/index.js",
             ],
-            input=json.dumps({
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "tools/call",
-                "params": {
-                    "name": "mineru_convert",
-                    "arguments": {"file_path": pdf_path}
+            input=json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "mineru_convert",
+                        "arguments": {"file_path": pdf_path},
+                    },
                 }
-            }),
+            ),
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -241,13 +254,25 @@ def convert_pdf_to_markdown(pdf_path: str, item_id: int, timeout: int = 300, tit
     if not markdown_content:
         try:
             result = subprocess.run(
-                ["npx", "-y", "@noedgeai-org/doc2x-mcp@latest", "convert", pdf_path, "--format", "markdown"],
+                [
+                    "npx",
+                    "-y",
+                    "@noedgeai-org/doc2x-mcp@latest",
+                    "convert",
+                    pdf_path,
+                    "--format",
+                    "markdown",
+                ],
                 capture_output=True,
                 text=True,
                 timeout=timeout,
             )
 
-            if result.returncode == 0 and result.stdout and len(result.stdout.strip()) > 100:
+            if (
+                result.returncode == 0
+                and result.stdout
+                and len(result.stdout.strip()) > 100
+            ):
                 markdown_content = result.stdout
                 print(f"   ✅ doc2x 转换成功")
 
@@ -296,7 +321,9 @@ def save_md_to_zotero(item_id: int, content: str, title: str = "") -> Optional[s
     item_dir.mkdir(parents=True, exist_ok=True)
 
     # 生成文件名
-    safe_title = re.sub(r'[<>:"/\\|?*]', '_', title)[:50] if title else f"converted_{item_id}"
+    safe_title = (
+        re.sub(r'[<>:"/\\|?*]', "_", title)[:50] if title else f"converted_{item_id}"
+    )
     md_filename = f"{safe_title}.md"
     md_path = item_dir / md_filename
 
@@ -317,22 +344,31 @@ def save_md_to_zotero(item_id: int, content: str, title: str = "") -> Optional[s
         new_item_id = (cursor.fetchone()[0] or 0) + 1
 
         # 添加到 items 表
-        cursor.execute("""
+        cursor.execute(
+            """
             INSERT INTO items (itemID, libraryID, key, itemTypeID, dateAdded, clientDateModified, synced, version)
             VALUES (?, 1, ?, 2, datetime('now'), datetime('now'), 0, 1)
-        """, (new_item_id, item_key))
+        """,
+            (new_item_id, item_key),
+        )
 
         # 添加文件类型关联 (2 = document, 需查 itemTypes 表确认)
         cursor.execute("SELECT itemTypeID FROM itemTypes WHERE type = 'document'")
         doc_type_row = cursor.fetchone()
         if doc_type_row:
-            cursor.execute("UPDATE items SET itemTypeID = ? WHERE itemID = ?", (doc_type_row[0], new_item_id))
+            cursor.execute(
+                "UPDATE items SET itemTypeID = ? WHERE itemID = ?",
+                (doc_type_row[0], new_item_id),
+            )
 
         # 添加到 itemAttachments 表
-        cursor.execute("""
+        cursor.execute(
+            """
             INSERT INTO itemAttachments (itemID, parentItemID, linkMode, contentType, path, storageHash, charset)
             VALUES (?, ?, 0, 'text/markdown', ?, ?, NULL)
-        """, (new_item_id, item_id, f"storage:{md_filename}", storage_hash))
+        """,
+            (new_item_id, item_id, f"storage:{md_filename}", storage_hash),
+        )
 
         conn.commit()
         conn.close()
@@ -346,8 +382,17 @@ def save_md_to_zotero(item_id: int, content: str, title: str = "") -> Optional[s
     return str(md_path)
 
 
-def process_pdf(pdf_path: str, item_id: int, title: str, creators: List[str], item, 
-                embed_model, node_parser, vector_store, progress: ProgressState) -> int:
+def process_pdf(
+    pdf_path: str,
+    item_id: int,
+    title: str,
+    creators: List[str],
+    item,
+    embed_model,
+    node_parser,
+    vector_store,
+    progress: ProgressState,
+) -> int:
     """
     处理单个 PDF 文件
 
@@ -392,6 +437,7 @@ def process_pdf(pdf_path: str, item_id: int, title: str, creators: List[str], it
         # 先尝试直接读取（可能有部分文字）
         try:
             from llama_index.core import SimpleDirectoryReader
+
             pdf_reader = SimpleDirectoryReader(
                 input_files=[pdf_path],
                 filename_as_id=True,
@@ -426,8 +472,17 @@ def process_pdf(pdf_path: str, item_id: int, title: str, creators: List[str], it
         if md_path:
             progress.converted_pdfs[item_id] = md_path
             # 递归调用使用转换后的 MD
-            return process_pdf(md_path, item_id, title, creators, item, 
-                             embed_model, node_parser, vector_store, progress)
+            return process_pdf(
+                md_path,
+                item_id,
+                title,
+                creators,
+                item,
+                embed_model,
+                node_parser,
+                vector_store,
+                progress,
+            )
         else:
             print(f"   ⚠️  PDF 转换失败，跳过")
             return 0
@@ -436,6 +491,7 @@ def process_pdf(pdf_path: str, item_id: int, title: str, creators: List[str], it
         # 正常 PDF，直接读取
         try:
             from llama_index.core import SimpleDirectoryReader
+
             pdf_reader = SimpleDirectoryReader(
                 input_files=[pdf_path],
                 filename_as_id=True,
@@ -511,7 +567,9 @@ def process_document(
         return 0
 
 
-def save_nodes_incrementally(vector_store, nodes, embed_model, progress: ProgressState, batch_size: int = 50):
+def save_nodes_incrementally(
+    vector_store, nodes, embed_model, progress: ProgressState, batch_size: int = 50
+):
     """
     增量保存节点（每 50 个节点保存一次）
     """
@@ -555,12 +613,12 @@ def ingest_zotero_incremental(
     - 完善的断点续传
     - PDF 扫描件检测和 OCR 转换
     """
-    from llama_index.core.node_parser import SentenceSplitter
     from llama_index.core.schema import Document as LlamaDocument
+    from llamaindex_study.node_parser import get_node_parser
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"📚 Zotero: {collection_name}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     progress_file = persist_dir / f".{table_name}_progress.json"
 
@@ -600,7 +658,7 @@ def ingest_zotero_incremental(
     # 配置 embedding 模型
     configure_embed_model()
     embed_model = get_embed_model()
-    node_parser = SentenceSplitter(chunk_size=512, chunk_overlap=50)
+    node_parser = get_node_parser(chunk_size=512, chunk_overlap=50)
 
     # 已处理的文献集合
     processed_set = set(progress.processed_items)
@@ -621,7 +679,9 @@ def ingest_zotero_incremental(
         elapsed = time.time() - progress.started_at if progress.started_at else 0
 
         if item_idx % 5 == 0:
-            print(f"\n   进度: {item_idx+1}/{len(item_ids)} ({100*(item_idx+1)//len(item_ids)}%)")
+            print(
+                f"\n   进度: {item_idx + 1}/{len(item_ids)} ({100 * (item_idx + 1) // len(item_ids)}%)"
+            )
             print(f"   节点: {total_nodes}, 耗时: {elapsed:.0f}s")
             if progress.started_at is None:
                 progress.started_at = time.time()
@@ -646,7 +706,7 @@ def ingest_zotero_incremental(
                 text_parts.append("\n## 标注:")
                 for ann in item.annotations:
                     text_parts.append(f"- {ann['text']}")
-                    if ann['comment']:
+                    if ann["comment"]:
                         text_parts.append(f"  注: {ann['comment']}")
 
             text = "\n".join(text_parts)
@@ -672,8 +732,10 @@ def ingest_zotero_incremental(
             file_size = os.path.getsize(file_path) / 1024 / 1024
 
             # 根据文件类型处理
-            if file_ext == '.pdf':
-                print(f"   📄 [{item_idx+1}/{len(item_ids)}] {item.title[:40]}... ({file_size:.1f}MB)")
+            if file_ext == ".pdf":
+                print(
+                    f"   📄 [{item_idx + 1}/{len(item_ids)}] {item.title[:40]}... ({file_size:.1f}MB)"
+                )
                 nodes_count = process_pdf(
                     pdf_path=str(file_path),
                     item_id=item.item_id,
@@ -687,20 +749,56 @@ def ingest_zotero_incremental(
                 )
                 nodes_this_item += nodes_count
                 total_pdfs += 1
-            elif file_ext in ['.docx', '.doc']:
-                print(f"   📝 [{item_idx+1}/{len(item_ids)}] Word: {item.title[:40]}... ({file_size:.1f}MB)")
-                nodes_count = process_document(str(file_path), item.item_id, item.title, item.creators or [], node_parser, vector_store, embed_model, progress, source="zotero_docx")
+            elif file_ext in [".docx", ".doc"]:
+                print(
+                    f"   📝 [{item_idx + 1}/{len(item_ids)}] Word: {item.title[:40]}... ({file_size:.1f}MB)"
+                )
+                nodes_count = process_document(
+                    str(file_path),
+                    item.item_id,
+                    item.title,
+                    item.creators or [],
+                    node_parser,
+                    vector_store,
+                    embed_model,
+                    progress,
+                    source="zotero_docx",
+                )
                 nodes_this_item += nodes_count
-            elif file_ext in ['.xlsx', '.xls']:
-                print(f"   📊 [{item_idx+1}/{len(item_ids)}] Excel: {item.title[:40]}... ({file_size:.1f}MB)")
-                nodes_count = process_document(str(file_path), item.item_id, item.title, item.creators or [], node_parser, vector_store, embed_model, progress, source="zotero_xlsx")
+            elif file_ext in [".xlsx", ".xls"]:
+                print(
+                    f"   📊 [{item_idx + 1}/{len(item_ids)}] Excel: {item.title[:40]}... ({file_size:.1f}MB)"
+                )
+                nodes_count = process_document(
+                    str(file_path),
+                    item.item_id,
+                    item.title,
+                    item.creators or [],
+                    node_parser,
+                    vector_store,
+                    embed_model,
+                    progress,
+                    source="zotero_xlsx",
+                )
                 nodes_this_item += nodes_count
-            elif file_ext == '.pptx':
-                print(f"   📽️ [{item_idx+1}/{len(item_ids)}] PPTX: {item.title[:40]}... ({file_size:.1f}MB)")
-                nodes_count = process_document(str(file_path), item.item_id, item.title, item.creators or [], node_parser, vector_store, embed_model, progress, source="zotero_pptx")
+            elif file_ext == ".pptx":
+                print(
+                    f"   📽️ [{item_idx + 1}/{len(item_ids)}] PPTX: {item.title[:40]}... ({file_size:.1f}MB)"
+                )
+                nodes_count = process_document(
+                    str(file_path),
+                    item.item_id,
+                    item.title,
+                    item.creators or [],
+                    node_parser,
+                    vector_store,
+                    embed_model,
+                    progress,
+                    source="zotero_pptx",
+                )
                 nodes_this_item += nodes_count
             else:
-                print(f"   ❓ [{item_idx+1}/{len(item_ids)}] 未知格式: {file_ext}")
+                print(f"   ❓ [{item_idx + 1}/{len(item_ids)}] 未知格式: {file_ext}")
 
         elif item.file_path:
             print(f"   ⚠️  文件不存在: {item.file_path}")
@@ -720,7 +818,7 @@ def ingest_zotero_incremental(
 
     elapsed = time.time() - progress.started_at if progress.started_at else 0
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"✅ 完成!")
     print(f"   ⏱️  耗时: {elapsed:.1f}秒")
     print(f"   📚 文献: {len(progress.processed_items)}/{progress.total_items}")
@@ -740,7 +838,9 @@ def ingest_zotero_incremental(
 
 def show_status():
     """显示导入状态"""
-    settings = __import__("llamaindex_study.config", fromlist=["get_settings"]).get_settings()
+    settings = __import__(
+        "llamaindex_study.config", fromlist=["get_settings"]
+    ).get_settings()
     persist_dir = Path(settings.zotero_persist_dir)
     progress_file = persist_dir / ".zotero_nutrition_progress.json"
 
@@ -777,7 +877,9 @@ def main():
     parser = argparse.ArgumentParser(description="Zotero 营养饲料理论导入工具")
     parser.add_argument("--status", "-s", action="store_true", help="查看状态")
     parser.add_argument("--rebuild", "-r", action="store_true", help="强制重建")
-    parser.add_argument("--batch-size", "-b", type=int, default=50, help="每批保存节点数")
+    parser.add_argument(
+        "--batch-size", "-b", type=int, default=50, help="每批保存节点数"
+    )
 
     args = parser.parse_args()
 
@@ -785,7 +887,9 @@ def main():
         show_status()
         return
 
-    settings = __import__("llamaindex_study.config", fromlist=["get_settings"]).get_settings()
+    settings = __import__(
+        "llamaindex_study.config", fromlist=["get_settings"]
+    ).get_settings()
     persist_dir = Path(settings.zotero_persist_dir)
 
     success = ingest_zotero_incremental(

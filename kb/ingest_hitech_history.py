@@ -22,6 +22,7 @@ from typing import List, Optional, Set
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from dotenv import load_dotenv
+
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 from llamaindex_study.vector_store import VectorStoreType, create_vector_store
@@ -38,21 +39,37 @@ PERSIST_DIR = Path("/volumes/online/llamaindex/hitech_history")
 
 # 数据源目录
 DATA_SOURCES = [
-    Path("/Volumes/online/nutsync/2025年工作/【A】高新技术企业专项工作/AAA202501整改要求/2022年"),
-    Path("/Volumes/online/nutsync/2025年工作/【A】高新技术企业专项工作/AAA202501整改要求/2023年"),
-    Path("/Volumes/online/nutsync/2025年工作/【A】高新技术企业专项工作/AAA202501整改要求/2024年"),
+    Path(
+        "/Volumes/online/nutsync/2025年工作/【A】高新技术企业专项工作/AAA202501整改要求/2022年"
+    ),
+    Path(
+        "/Volumes/online/nutsync/2025年工作/【A】高新技术企业专项工作/AAA202501整改要求/2023年"
+    ),
+    Path(
+        "/Volumes/online/nutsync/2025年工作/【A】高新技术企业专项工作/AAA202501整改要求/2024年"
+    ),
 ]
 
 # 排除的文件类型（表格）
-EXCLUDE_EXTENSIONS = {'.xls', '.xlsx', '.DS_Store'}
+EXCLUDE_EXTENSIONS = {".xls", ".xlsx", ".DS_Store"}
 
 # 支持的文件类型
-SUPPORTED_EXTENSIONS = {'.pdf', '.docx', '.doc', '.txt', '.md', '.pptx', '.xlsx', '.xls'}
+SUPPORTED_EXTENSIONS = {
+    ".pdf",
+    ".docx",
+    ".doc",
+    ".txt",
+    ".md",
+    ".pptx",
+    ".xlsx",
+    ".xls",
+}
 
 
 @dataclass
 class ProgressState:
     """进度状态"""
+
     total_files: int = 0
     processed_files: int = 0
     total_nodes: int = 0
@@ -78,19 +95,23 @@ class ProgressState:
 
 def configure_embed_model():
     """配置全局 Embedding 模型"""
-    from llama_index.core import Settings
+    from llama_index.core import Settings as LlamaSettings
     from llama_index.embeddings.ollama import OllamaEmbedding
+    from llamaindex_study.config import get_settings
 
-    Settings.embed_model = OllamaEmbedding(
+    settings = get_settings()
+    LlamaSettings.embed_model = OllamaEmbedding(
         model_name="bge-m3",
         base_url="http://localhost:11434",
     )
-    Settings.chunk_size = 512
+    LlamaSettings.chunk_size = 512
+    LlamaSettings.embed_batch_size = settings.embed_batch_size
 
 
 def get_embed_model():
     """获取 Embedding 模型"""
     from llama_index.embeddings.ollama import OllamaEmbedding
+
     return OllamaEmbedding(
         model_name="bge-m3",
         base_url="http://localhost:11434",
@@ -104,32 +125,34 @@ def collect_files(directories: List[Path]) -> List[Path]:
         if not directory.exists():
             print(f"⚠️  目录不存在: {directory}")
             continue
-        
+
         for root, _, filenames in os.walk(directory):
             for filename in filenames:
                 file_path = Path(root) / filename
                 ext = file_path.suffix.lower()
-                
+
                 # 排除表格文件
                 if ext in EXCLUDE_EXTENSIONS:
                     continue
-                
+
                 # 排除隐藏文件
-                if filename.startswith('.'):
+                if filename.startswith("."):
                     continue
-                
+
                 files.append(file_path)
-    
+
     return files
 
 
-def process_file(file_path: Path, node_parser, embed_model, vector_store, batch_size: int = 50) -> int:
+def process_file(
+    file_path: Path, node_parser, embed_model, vector_store, batch_size: int = 50
+) -> int:
     """处理单个文件"""
     from llama_index.core import SimpleDirectoryReader
     from llama_index.core.schema import Document as LlamaDocument
 
     ext = file_path.suffix.lower()
-    
+
     try:
         reader = SimpleDirectoryReader(
             input_files=[str(file_path)],
@@ -142,7 +165,7 @@ def process_file(file_path: Path, node_parser, embed_model, vector_store, batch_
 
         # 获取相对路径作为来源标识
         rel_path = file_path.name
-        
+
         all_nodes = []
         for doc in docs:
             llama_doc = LlamaDocument(
@@ -164,7 +187,7 @@ def process_file(file_path: Path, node_parser, embed_model, vector_store, batch_
             batch = all_nodes[:batch_size]
             all_nodes = all_nodes[batch_size:]
             save_batch(vector_store, batch, embed_model)
-        
+
         # 保存剩余
         if all_nodes:
             save_batch(vector_store, all_nodes, embed_model)
@@ -207,11 +230,11 @@ def ingest_hitech_history(
     """
     导入高新技术企业历史项目资料
     """
-    from llama_index.core.node_parser import SentenceSplitter
+    from llamaindex_study.node_parser import get_node_parser
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"🏢 {KB_DISPLAY_NAME}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     progress_file = persist_dir / f".{TABLE_NAME}_progress.json"
 
@@ -248,10 +271,14 @@ def ingest_hitech_history(
     # 配置 embedding 模型
     configure_embed_model()
     embed_model = get_embed_model()
-    node_parser = SentenceSplitter(chunk_size=512, chunk_overlap=50)
+    node_parser = get_node_parser(chunk_size=512, chunk_overlap=50)
 
     # 已处理文件集合
-    processed_set = set(progress.processed_files) if isinstance(progress.processed_files, list) else set()
+    processed_set = (
+        set(progress.processed_files)
+        if isinstance(progress.processed_files, list)
+        else set()
+    )
 
     print(f"\n🚀 开始导入 (每 {batch_size} 节点保存一次)")
 
@@ -267,7 +294,9 @@ def ingest_hitech_history(
         elapsed = time.time() - progress.started_at if progress.started_at else 0
 
         if i % 10 == 0:
-            print(f"\n   进度: {i+1}/{len(all_files)} ({100*(i+1)//len(all_files)}%)")
+            print(
+                f"\n   进度: {i + 1}/{len(all_files)} ({100 * (i + 1) // len(all_files)}%)"
+            )
             print(f"   节点: {total_nodes}, 耗时: {elapsed:.0f}s")
 
         # 显示文件信息
@@ -278,7 +307,7 @@ def ingest_hitech_history(
         nodes_count = process_file(
             file_path, node_parser, embed_model, vector_store, batch_size
         )
-        
+
         total_nodes += nodes_count
         progress.processed_files = i + 1
         progress.total_nodes = total_nodes
@@ -290,7 +319,7 @@ def ingest_hitech_history(
 
     elapsed = time.time() - progress.started_at if progress.started_at else 0
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"✅ 完成!")
     print(f"   ⏱️  耗时: {elapsed:.1f}秒")
     print(f"   📄 文件: {progress.processed_files}/{progress.total_files}")

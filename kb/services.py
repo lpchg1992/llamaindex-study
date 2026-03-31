@@ -605,15 +605,22 @@ class SearchService:
     def query(
         kb_id: str,
         query: str,
-        mode: str = "hybrid",
+        mode: str = "vector",
         top_k: int = 5,
     ) -> Dict[str, Any]:
         """RAG 问答"""
         from llamaindex_study.query_engine import create_query_engine
+        from llamaindex_study.config import get_settings
 
         configure_global_embed_model()
+        settings = get_settings()
 
-        query_engine = create_query_engine(kb_id, mode=mode, top_k=top_k)
+        query_engine = create_query_engine(
+            kb_id,
+            mode=mode,
+            top_k=top_k,
+            use_auto_merging=settings.use_auto_merging,
+        )
         response = query_engine.query(query)
 
         return {

@@ -24,8 +24,8 @@ from pathlib import Path
 from typing import Optional, List, Callable, Set
 
 from llama_index.core import SimpleDirectoryReader
-from llama_index.core.node_parser import SentenceSplitter
 from llama_index.core.schema import Document as LlamaDocument
+from llamaindex_study.node_parser import get_node_parser
 
 from llamaindex_study.logger import get_logger
 
@@ -35,6 +35,7 @@ logger = get_logger(__name__)
 @dataclass
 class DocumentProcessorConfig:
     """文档处理器配置"""
+
     chunk_size: int = 1024
     chunk_overlap: int = 100
     batch_size: int = 50  # 每 N 个节点保存一次
@@ -48,6 +49,7 @@ class DocumentProcessorConfig:
 @dataclass
 class ProcessingProgress:
     """处理进度"""
+
     total_items: int = 0
     processed_items: List[str] = field(default_factory=list)  # 文件路径或 ID
     failed_items: List[str] = field(default_factory=list)
@@ -91,7 +93,7 @@ class DocumentProcessor:
     ):
         self.config = config or DocumentProcessorConfig()
         self.embed_model = embed_model
-        self.node_parser = node_parser or SentenceSplitter(
+        self.node_parser = node_parser or get_node_parser(
             chunk_size=self.config.chunk_size,
             chunk_overlap=self.config.chunk_overlap,
         )
@@ -103,7 +105,7 @@ class DocumentProcessor:
     def _upsert_nodes(self, lance_store, nodes):
         """
         使用 merge_insert 实现去重插入
-        
+
         Args:
             lance_store: LanceDB vector store
             nodes: 节点列表
@@ -111,22 +113,22 @@ class DocumentProcessor:
         try:
             import lancedb
             import pyarrow as pa
-            
+
             # 获取底层 table
             uri = lance_store.uri
             table_name = lance_store.table_name
-            
+
             # 连接并获取 table
             db = lancedb.connect(uri)
             table = db.open_table(table_name)
-            
+
             # 将节点转换为 dict
             data = []
             for node in nodes:
                 row = {"id": node.id_}
                 row["text"] = node.get_content()
                 row["embedding"] = node.embedding
-                
+
                 # 添加所有 metadata
                 if node.metadata:
                     for k, v in node.metadata.items():
@@ -137,14 +139,14 @@ class DocumentProcessor:
                         else:
                             row[k] = str(v)
                 data.append(row)
-            
+
             # 使用 merge_insert (id 存在则覆盖)
             df = pa.Table.from_pylist(data)
-            
+
             # 执行 merge_insert
             table.merge_insert("id").when_matched_update_all().execute(df)
             print(f"   ✅ Upsert {len(nodes)} 节点")
-            
+
         except Exception as e:
             # 如果 upsert 失败，回退到普通 add
             print(f"   ⚠️  Upsert 失败: {e}")
@@ -154,10 +156,10 @@ class DocumentProcessor:
     def compute_file_hash(file_path: str) -> str:
         """
         计算文件的 MD5 哈希值
-        
+
         Args:
             file_path: 文件路径
-            
+
         Returns:
             MD5 哈希值字符串
         """
@@ -170,31 +172,33 @@ class DocumentProcessor:
             return hash_md5.hexdigest()
         except Exception:
             return ""
-    
-    def is_file_changed(self, file_path: str, progress: ProcessingProgress = None) -> bool:
+
+    def is_file_changed(
+        self, file_path: str, progress: ProcessingProgress = None
+    ) -> bool:
         """
         检查文件是否已修改（用于增量更新）
-        
+
         Args:
             file_path: 文件路径
             progress: 进度记录
-            
+
         Returns:
             True 如果文件已修改或新文件，需要处理
         """
         if not self.config.incremental:
             return True
-        
+
         current_hash = self.compute_file_hash(file_path)
         if not current_hash:
             return True
-        
+
         # 检查是否是新文件或已修改
         if file_path not in (progress.file_hashes if progress else {}):
             return True
-        
+
         return progress.file_hashes.get(file_path) != current_hash
-    
+
     def is_scanned_pdf(self, pdf_path: str) -> bool:
         """
         检测 PDF 是否为扫描件
@@ -219,9 +223,9 @@ class DocumentProcessor:
 
             for page in reader.pages[:pages_to_check]:
                 text = page.extract_text() or ""
-                chinese_chars = len(re.findall(r'[\u4e00-\u9fff]', text))
-                english_chars = len(re.findall(r'[a-zA-Z]', text))
-                number_chars = len(re.findall(r'[0-9]', text))
+                chinese_chars = len(re.findall(r"[\u4e00-\u9fff]", text))
+                english_chars = len(re.findall(r"[a-zA-Z]", text))
+                number_chars = len(re.findall(r"[0-9]", text))
                 valid_chars = chinese_chars + english_chars + number_chars
                 total_text_len += valid_chars
 
@@ -244,7 +248,8 @@ class DocumentProcessor:
                     if "/Resources" in page and "/XObject" in page["/Resources"]:
                         xobjects = page["/Resources"]["/XObject"].get_object()
                         image_count = sum(
-                            1 for obj in xobjects.values()
+                            1
+                            for obj in xobjects.values()
                             if obj.get("/Subtype") == "/Image"
                         )
                         if image_count > 0:
@@ -261,7 +266,9 @@ class DocumentProcessor:
             print(f"   ⚠️  PDF 检测失败: {e}")
             return True  # 保守处理
 
-    def convert_pdf_to_markdown(self, pdf_path: str, timeout: int = None) -> Optional[str]:
+    def convert_pdf_to_markdown(
+        self, pdf_path: str, timeout: int = None
+    ) -> Optional[str]:
         """
         将 PDF 转换为 Markdown
 
@@ -282,17 +289,19 @@ class DocumentProcessor:
             result = subprocess.run(
                 [
                     "node",
-                    "/Users/luopingcheng/.nvm/versions/node/v24.13.1/lib/node_modules/mineru-mcp/dist/index.js"
+                    "/Users/luopingcheng/.nvm/versions/node/v24.13.1/lib/node_modules/mineru-mcp/dist/index.js",
                 ],
-                input=json.dumps({
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": "tools/call",
-                    "params": {
-                        "name": "mineru_convert",
-                        "arguments": {"file_path": pdf_path}
+                input=json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "mineru_convert",
+                            "arguments": {"file_path": pdf_path},
+                        },
                     }
-                }),
+                ),
                 capture_output=True,
                 text=True,
                 timeout=timeout,
@@ -313,13 +322,25 @@ class DocumentProcessor:
         if not markdown_content:
             try:
                 result = subprocess.run(
-                    ["npx", "-y", "@noedgeai-org/doc2x-mcp@latest", "convert", pdf_path, "--format", "markdown"],
+                    [
+                        "npx",
+                        "-y",
+                        "@noedgeai-org/doc2x-mcp@latest",
+                        "convert",
+                        pdf_path,
+                        "--format",
+                        "markdown",
+                    ],
                     capture_output=True,
                     text=True,
                     timeout=timeout,
                 )
 
-                if result.returncode == 0 and result.stdout and len(result.stdout.strip()) > 100:
+                if (
+                    result.returncode == 0
+                    and result.stdout
+                    and len(result.stdout.strip()) > 100
+                ):
                     markdown_content = result.stdout
                     print(f"   ✅ doc2x 转换成功")
 
@@ -390,7 +411,9 @@ class DocumentProcessor:
 
         return docs
 
-    def process_document(self, file_path: str, metadata: dict = None) -> List[LlamaDocument]:
+    def process_document(
+        self, file_path: str, metadata: dict = None
+    ) -> List[LlamaDocument]:
         """
         处理通用文档（Word, Excel, PPTX, Markdown, TXT）
 
@@ -410,17 +433,17 @@ class DocumentProcessor:
             raw_docs = reader.load_data()
 
             source_map = {
-                '.docx': 'word',
-                '.doc': 'word',
-                '.xlsx': 'excel',
-                '.xls': 'excel',
-                '.pptx': 'pptx',
-                '.md': 'markdown',
-                '.txt': 'text',
-                '.html': 'html',
+                ".docx": "word",
+                ".doc": "word",
+                ".xlsx": "excel",
+                ".xls": "excel",
+                ".pptx": "pptx",
+                ".md": "markdown",
+                ".txt": "text",
+                ".html": "html",
             }
 
-            source = source_map.get(ext, 'document')
+            source = source_map.get(ext, "document")
 
             for doc in raw_docs:
                 doc.metadata["source"] = source
@@ -433,7 +456,9 @@ class DocumentProcessor:
 
         return docs
 
-    def process_file(self, file_path: str, metadata: dict = None) -> List[LlamaDocument]:
+    def process_file(
+        self, file_path: str, metadata: dict = None
+    ) -> List[LlamaDocument]:
         """
         自动识别文件类型并处理
 
@@ -456,9 +481,9 @@ class DocumentProcessor:
 
         ext = path.suffix.lower()
 
-        if ext == '.pdf':
+        if ext == ".pdf":
             return self.process_pdf(str(path), metadata)
-        elif ext in ['.docx', '.doc', '.xlsx', '.xls', '.pptx', '.md', '.txt', '.html']:
+        elif ext in [".docx", ".doc", ".xlsx", ".xls", ".pptx", ".md", ".txt", ".html"]:
             return self.process_document(str(path), metadata)
         else:
             print(f"   ❓ 不支持的文件类型: {ext}")
@@ -472,7 +497,9 @@ class DocumentProcessor:
             nodes.extend(doc_nodes)
         return nodes
 
-    def save_nodes(self, vector_store, nodes: List, progress: ProcessingProgress = None) -> int:
+    def save_nodes(
+        self, vector_store, nodes: List, progress: ProcessingProgress = None
+    ) -> int:
         """
         保存节点到向量存储
 
@@ -491,8 +518,11 @@ class DocumentProcessor:
 
         # 优先使用批量 embedding
         from llamaindex_study.ollama_utils import BatchEmbeddingHelper
-        batch_helper = BatchEmbeddingHelper(embed_model=self.embed_model, batch_size=self.config.batch_size)
-        
+
+        batch_helper = BatchEmbeddingHelper(
+            embed_model=self.embed_model, batch_size=self.config.batch_size
+        )
+
         saved = 0
         processed_batch = []
 
@@ -514,7 +544,9 @@ class DocumentProcessor:
                 # 回退到逐个 embedding
                 for node in processed_batch:
                     try:
-                        node.embedding = self.embed_model.get_text_embedding(node.get_content())
+                        node.embedding = self.embed_model.get_text_embedding(
+                            node.get_content()
+                        )
                     except Exception as ex:
                         print(f"      ⚠️  Embedding 失败: {ex}")
                         processed_batch.remove(node)

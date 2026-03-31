@@ -28,6 +28,9 @@ class QueryEngineWrapper:
         index: Any,
         top_k: Optional[int] = None,
         use_reranker: Optional[bool] = None,
+        use_auto_merging: bool = False,
+        auto_merging_threshold: float = 0.5,
+        mode: str = "vector",
     ):
         """
         初始化查询引擎
@@ -36,18 +39,76 @@ class QueryEngineWrapper:
             index: VectorStoreIndex 实例
             top_k: 检索返回的节点数量
             use_reranker: 是否使用 reranker（None=读取 .env 配置，True=启用，False=禁用）
+            use_auto_merging: 是否使用 Auto-Merging Retriever（需要知识库使用 HierarchicalNodeParser 构建）
+            auto_merging_threshold: 自动合并阈值（0-1），默认 0.5
+            mode: 检索模式 ("vector", "hybrid")，默认 "vector"
         """
         self.index = index
         self.settings = get_settings()
         self.top_k = top_k or self.settings.top_k
-        # None 表示使用 .env 中的配置
         if use_reranker is None:
             self.use_reranker = self.settings.use_reranker
         else:
             self.use_reranker = use_reranker
+        self.use_auto_merging = use_auto_merging
+        self.auto_merging_threshold = auto_merging_threshold
+        self.mode = mode
 
-        # 创建底层的查询引擎
         self._query_engine = self._create_query_engine()
+
+    def _create_retriever(self) -> Any:
+        """创建检索器，支持 Auto-Merging 和混合搜索"""
+        base_retriever = self.index.as_retriever(similarity_top_k=self.top_k * 3)
+
+        if self.use_auto_merging:
+            try:
+                from llama_index.core.retrievers import AutoMergingRetriever
+
+                storage_context = self.index.storage_context
+                merger = AutoMergingRetriever(
+                    base_retriever,
+                    storage_context,
+                    verbose=True,
+                )
+                logger.info("启用 Auto-Merging Retriever")
+                base_retriever = merger
+            except Exception as e:
+                logger.warning(f"Auto-Merging Retriever 初始化失败: {e}")
+
+        if self.mode == "hybrid" or self.settings.use_hybrid_search:
+            return self._create_hybrid_retriever(base_retriever)
+
+        return base_retriever
+
+    def _create_hybrid_retriever(self, vector_retriever: Any) -> Any:
+        """创建混合搜索检索器（向量 + BM25 + 融合）"""
+        try:
+            from llama_index.core.retrievers import QueryFusionRetriever
+            from llama_index.retrievers.bm25 import BM25Retriever
+
+            bm25_retriever = BM25Retriever.from_defaults(
+                docstore=self.index.docstore,
+                similarity_top_k=self.top_k * 3,
+            )
+
+            fusion_retriever = QueryFusionRetriever(
+                retrievers=[vector_retriever, bm25_retriever],
+                similarity_top_k=self.top_k,
+                num_queries=1,
+                mode=self.settings.hybrid_search_mode,
+                use_async=False,
+                verbose=True,
+            )
+            logger.info(
+                f"启用混合搜索: vector + BM25, mode={self.settings.hybrid_search_mode}, alpha={self.settings.hybrid_search_alpha}"
+            )
+            return fusion_retriever
+        except ImportError as e:
+            logger.warning(f"混合搜索依赖未安装，回退到向量检索: {e}")
+            return vector_retriever
+        except Exception as e:
+            logger.warning(f"混合搜索初始化失败，回退到向量检索: {e}")
+            return vector_retriever
 
     def _create_query_engine(self) -> Any:
         """
@@ -56,15 +117,15 @@ class QueryEngineWrapper:
         Returns:
             BaseQueryEngine: 查询引擎实例
         """
-        # 配置 LlamaIndex 使用 SiliconFlow
         configure_llamaindex_for_siliconflow()
 
-        # 构建查询引擎参数
-        # similarity_top_k 设置更大，让 reranker 有更多候选
-        similarity_k = self.top_k * 3  # 初始检索 3 倍数量的结果
-        kwargs: dict[str, Any] = {"top_k": self.top_k, "similarity_top_k": similarity_k}
+        retriever = self._create_retriever()
 
-        # 如果启用 reranker，添加后处理器
+        kwargs: dict[str, Any] = {
+            "retriever": retriever,
+            "top_k": self.top_k,
+        }
+
         if self.use_reranker:
             from llamaindex_study.reranker import SiliconFlowReranker
 
@@ -186,16 +247,18 @@ class QueryEngineWrapper:
 
 def create_query_engine(
     kb_id: str,
-    mode: str = "hybrid",
+    mode: str = "vector",
     top_k: int = 5,
+    use_auto_merging: bool = False,
 ) -> Any:
     """
     根据知识库 ID 创建查询引擎
 
     Args:
         kb_id: 知识库 ID
-        mode: 检索模式 (hybrid, vector, keyword)
+        mode: 检索模式 ("vector", "hybrid")
         top_k: 返回结果数量
+        use_auto_merging: 是否使用 Auto-Merging Retriever（需要知识库使用 HierarchicalNodeParser 构建）
 
     Returns:
         BaseQueryEngine: 查询引擎实例
@@ -204,19 +267,18 @@ def create_query_engine(
 
     settings = get_settings()
 
-    # 使用 VectorStoreService 获取向量存储（自动处理 Zotero 路径）
     vector_store = VectorStoreService.get_vector_store(kb_id)
 
-    # 加载索引
     index = vector_store.load_index()
     if index is None:
         raise ValueError(f"知识库 {kb_id} 不存在或未建立索引")
 
-    # 创建查询引擎
     wrapper = QueryEngineWrapper(
         index=index,
         top_k=top_k,
         use_reranker=settings.use_reranker,
+        use_auto_merging=use_auto_merging,
+        mode=mode,
     )
 
     return wrapper._query_engine

@@ -103,6 +103,20 @@ class Settings:
 
         # ========== 检索配置 ==========
         self.top_k: int = int(os.getenv("TOP_K", str(self._DEFAULT_TOP_K)))
+        self.use_semantic_chunking: bool = (
+            os.getenv("USE_SEMANTIC_CHUNKING", "false").lower() == "true"
+        )
+        self.use_auto_merging: bool = (
+            os.getenv("USE_AUTO_MERGING", "false").lower() == "true"
+        )
+        self.use_hybrid_search: bool = (
+            os.getenv("USE_HYBRID_SEARCH", "false").lower() == "true"
+        )
+        self.hybrid_search_alpha: float = float(os.getenv("HYBRID_SEARCH_ALPHA", "0.5"))
+        self.hybrid_search_mode: str = os.getenv("HYBRID_SEARCH_MODE", "relative_score")
+        self.chunk_size: int = int(os.getenv("CHUNK_SIZE", "512"))
+        self.chunk_overlap: int = int(os.getenv("CHUNK_OVERLAP", "50"))
+        self.embed_batch_size: int = int(os.getenv("EMBED_BATCH_SIZE", "32"))
 
         # ========== Reranker 配置 ==========
         self.rerank_model: str = os.getenv("RERANK_MODEL", self._DEFAULT_RERANK_MODEL)

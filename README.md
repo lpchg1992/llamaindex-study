@@ -40,6 +40,10 @@
 | **LLM 主题提取** | 导入时自动使用 LLM 提取专业主题词 |
 | **自动路由** | 根据问题内容自动选择相关知识库 |
 | **相似度去重** | 避免重复主题词（如"猪营养"与"猪的营养"） |
+| **语义分块** | 基于 embedding 相似度的智能分块（需启用） |
+| **父子节点** | HierarchicalNodeParser 支持 Auto-Merging Retriever（需启用） |
+| **混合搜索** | 向量检索 + BM25 关键词融合（需启用） |
+| **Auto-Merging Retriever** | 检索时自动合并相关子节点为父节点（需启用） |
 
 ## 环境要求
 
@@ -131,7 +135,8 @@ llamaindex-study/
 │   ├── ollama_utils.py      # Ollama 工具
 │   ├── vector_store.py       # 向量数据库管理（多后端）
 │   ├── query_engine.py       # 查询引擎
-│   └── reranker.py           # 重排序
+│   ├── reranker.py           # 重排序
+│   └── node_parser.py        # 统一节点解析器（支持语义分块、父子节点）
 │
 ├── kb/                      # 知识库模块
 │   ├── __init__.py
@@ -373,8 +378,20 @@ print(f"结果: {task.result}")
 |------|--------|------|
 | `CHUNK_SIZE` | `512` | 文本分块大小 |
 | `CHUNK_OVERLAP` | `50` | 文本分块重叠 |
+| `EMBED_BATCH_SIZE` | `32` | Embedding 批处理大小 |
 | `PROGRESS_UPDATE_INTERVAL` | `10` | 进度更新间隔 |
 | `MAX_CONCURRENT_TASKS` | `10` | 最大并发任务数 |
+
+### 检索配置
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `TOP_K` | `5` | 每个知识库返回的结果数量 |
+| `USE_SEMANTIC_CHUNKING` | `false` | 启用语义分块（需要重建知识库） |
+| `USE_AUTO_MERGING` | `false` | 启用 Auto-Merging Retriever（需要重建知识库） |
+| `USE_HYBRID_SEARCH` | `false` | 启用混合搜索（向量 + BM25） |
+| `HYBRID_SEARCH_MODE` | `relative_score` | 混合搜索融合模式 |
+| `HYBRID_SEARCH_ALPHA` | `0.5` | 混合搜索权重 |
 
 ### 并行 Embedding 配置
 

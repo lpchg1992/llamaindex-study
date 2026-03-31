@@ -29,15 +29,17 @@ logger = get_logger(__name__)
 
 def configure_embed_model():
     """配置全局 Embedding 模型"""
-    from llama_index.core import Settings
+    from llama_index.core import Settings as LlamaSettings
     from llama_index.embeddings.ollama import OllamaEmbedding
+    from llamaindex_study.config import get_settings
 
-    Settings.embed_model = OllamaEmbedding(
+    settings = get_settings()
+    LlamaSettings.embed_model = OllamaEmbedding(
         model_name="bge-m3",
         base_url="http://localhost:11434",
     )
-    Settings.chunk_size = 1024
-    Settings.embed_batch_size = 3  # 极小批量
+    LlamaSettings.chunk_size = 1024
+    LlamaSettings.embed_batch_size = settings.embed_batch_size
 
 
 def build_index_incremental(documents, persist_dir, show_progress=False, max_retries=5):
@@ -46,13 +48,15 @@ def build_index_incremental(documents, persist_dir, show_progress=False, max_ret
     避免 Ollama 一次性处理过多文档导致断开
     """
     from llama_index.core import VectorStoreIndex, StorageContext
-    from llama_index.core.node_parser import SentenceSplitter
+    from llamaindex_study.node_parser import get_node_parser
 
-    node_parser = SentenceSplitter(chunk_size=1024, chunk_overlap=50)
+    node_parser = get_node_parser(chunk_size=1024, chunk_overlap=50)
 
     # 分批处理文档
     batch_size = 10  # 每批 10 个文档
-    batches = [documents[i:i+batch_size] for i in range(0, len(documents), batch_size)]
+    batches = [
+        documents[i : i + batch_size] for i in range(0, len(documents), batch_size)
+    ]
 
     print(f"   📦 共 {len(documents)} 文档，分 {len(batches)} 批处理")
 
@@ -60,7 +64,11 @@ def build_index_incremental(documents, persist_dir, show_progress=False, max_ret
     total_nodes = 0
 
     for batch_idx, batch in enumerate(batches):
-        print(f"   处理批次 {batch_idx+1}/{len(batches)} ({len(batch)} 文档)...", end="", flush=True)
+        print(
+            f"   处理批次 {batch_idx + 1}/{len(batches)} ({len(batch)} 文档)...",
+            end="",
+            flush=True,
+        )
 
         # 切分文档为节点
         batch_nodes = []
@@ -81,12 +89,14 @@ def build_index_incremental(documents, persist_dir, show_progress=False, max_ret
             except Exception as e:
                 if attempt < max_retries - 1:
                     wait_time = (attempt + 1) * 10
-                    print(f"\n      ⚠️ 批次 {batch_idx+1} 失败，{wait_time}秒后重试 ({attempt+1}/{max_retries})")
-                    logger.warning(f"批次 {batch_idx+1} 失败，将重试: {e}")
+                    print(
+                        f"\n      ⚠️ 批次 {batch_idx + 1} 失败，{wait_time}秒后重试 ({attempt + 1}/{max_retries})"
+                    )
+                    logger.warning(f"批次 {batch_idx + 1} 失败，将重试: {e}")
                     time.sleep(wait_time)
                 else:
-                    print(f"\n      ❌ 批次 {batch_idx+1} 最终失败: {e}")
-                    logger.error(f"批次 {batch_idx+1} 最终失败: {e}")
+                    print(f"\n      ❌ 批次 {batch_idx + 1} 最终失败: {e}")
+                    logger.error(f"批次 {batch_idx + 1} 最终失败: {e}")
                     raise
 
         total_nodes += len(batch_nodes)
@@ -170,8 +180,10 @@ def ingest_kb(kb_id: str, rebuild: bool = False, verbose: bool = False) -> bool:
     print(f"\n   ✅ 索引已保存: {kb.persist_dir}")
     print(f"   ⏱️  耗时: {elapsed:.1f}秒")
     print(f"   📝 文档数: {len(all_docs)}, 节点数: {node_count}")
-    
-    logger.info(f"知识库 {kb_id} 导入完成: {len(all_docs)} 文档, {node_count} 节点, 耗时 {elapsed:.1f}秒")
+
+    logger.info(
+        f"知识库 {kb_id} 导入完成: {len(all_docs)} 文档, {node_count} 节点, 耗时 {elapsed:.1f}秒"
+    )
 
     return True
 
@@ -221,7 +233,7 @@ def main():
                 fail_count += 1
 
         print(f"\n\n🎉 导入完成: {success_count} 成功, {fail_count} 失败")
-        
+
         if fail_count > 0:
             logger.warning(f"批量导入完成: {success_count} 成功, {fail_count} 失败")
         else:

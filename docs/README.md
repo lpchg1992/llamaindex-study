@@ -80,6 +80,7 @@
 | 向量存储 | `vector_store.py` | LanceDB/Chroma/Qdrant |
 | 查询引擎 | `query_engine.py` | RAG 查询 |
 | 重排序 | `reranker.py` | SiliconFlow Reranker |
+| 节点解析器 | `node_parser.py` | 统一分块（语义分块、父子节点） |
 
 ### 知识库模块 (`kb/`)
 

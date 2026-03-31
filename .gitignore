@@ -32,8 +32,11 @@ env/
 *.swp
 *.swo
 
-# Poetry
-# poetry.lock 已被 git 跟踪，确保依赖一致性
+# Poetry (已迁移到 UV)
+poetry.lock
+
+# UV
+uv.lock
 
 # Environment
 .env

@@ -18,6 +18,7 @@ from llama_index.core.schema import Document as LlamaDocument
 
 class VectorStoreType(str, Enum):
     """向量数据库类型"""
+
     LANCEDB = "lancedb"
     CHROMA = "chroma"
     QDRANT = "qdrant"
@@ -107,7 +108,9 @@ class LanceDBVectorStore(BaseVectorStore):
         from llama_index.embeddings.ollama import OllamaEmbedding
 
         # 创建 Ollama embedding
-        settings = __import__("llamaindex_study.config", fromlist=["get_settings"]).get_settings()
+        settings = __import__(
+            "llamaindex_study.config", fromlist=["get_settings"]
+        ).get_settings()
         return OllamaEmbedding(
             model_name=settings.ollama_embed_model,
             base_url=settings.ollama_base_url,
@@ -117,12 +120,15 @@ class LanceDBVectorStore(BaseVectorStore):
         """获取 LanceDB URI"""
         if self.persist_dir:
             return str(self.persist_dir)
-        settings = __import__("llamaindex_study.config", fromlist=["get_settings"]).get_settings()
+        settings = __import__(
+            "llamaindex_study.config", fromlist=["get_settings"]
+        ).get_settings()
         return settings.persist_dir
 
     def _get_lance_vector_store(self):
         """获取底层的 LlamaIndex LanceDBVectorStore"""
         from llama_index.vector_stores.lancedb import LanceDBVectorStore as LlamaLanceDB
+
         return LlamaLanceDB(
             uri=self._get_uri(),
             table_name=self.table_name,
@@ -136,10 +142,11 @@ class LanceDBVectorStore(BaseVectorStore):
 
         try:
             import lancedb
+
             db = lancedb.connect(uri)
             result = db.list_tables()
             # list_tables 返回 ListTablesResponse 对象
-            table_names = result.tables if hasattr(result, 'tables') else []
+            table_names = result.tables if hasattr(result, "tables") else []
             return self.table_name in table_names
         except Exception:
             return False
@@ -151,17 +158,14 @@ class LanceDBVectorStore(BaseVectorStore):
     ) -> Any:
         """从文档构建索引"""
         from llama_index.core import VectorStoreIndex, Settings as LlamaSettings
-        from llama_index.core.node_parser import SentenceSplitter
+        from llamaindex_study.node_parser import get_node_parser
 
-        # 配置 embedding 模型
         embed_model = self._get_embed_model()
         LlamaSettings.embed_model = embed_model
 
-        # 创建底层的 LanceDB 向量存储
         vector_store = self._get_lance_vector_store()
 
-        # 解析文档为节点
-        node_parser = SentenceSplitter(chunk_size=1024, chunk_overlap=50)
+        node_parser = get_node_parser(chunk_size=1024, chunk_overlap=50)
         nodes = node_parser.get_nodes_from_documents(documents)
 
         # 为每个节点生成 embedding
@@ -217,6 +221,7 @@ class LanceDBVectorStore(BaseVectorStore):
         """删除表"""
         if self.exists():
             import lancedb
+
             db = lancedb.connect(self._get_uri())
             db.drop_table(self.table_name)
             print(f"✅ 表已删除: {self.table_name}")
@@ -229,20 +234,21 @@ class LanceDBVectorStore(BaseVectorStore):
 
         try:
             import lancedb
+
             db = lancedb.connect(uri)
-            
+
             # 获取表列表
             result = db.list_tables()
-            table_names = result.tables if hasattr(result, 'tables') else []
-            
+            table_names = result.tables if hasattr(result, "tables") else []
+
             # 尝试使用配置的表名，或者使用第一个可用的表
             table_name = self.table_name
             if table_name not in table_names and table_names:
                 table_name = table_names[0]  # 使用第一个表
-            
+
             if table_name not in table_names:
                 return {"exists": False, "reason": f"表 {table_name} 不存在"}
-            
+
             table = db.open_table(table_name)
             return {
                 "exists": True,
@@ -280,10 +286,12 @@ class ChromaVectorStore(BaseVectorStore):
         from llama_index.core import Settings as LlamaSettings
         from llama_index.embeddings.ollama import OllamaEmbedding
 
-        if hasattr(LlamaSettings, 'embed_model') and LlamaSettings.embed_model:
+        if hasattr(LlamaSettings, "embed_model") and LlamaSettings.embed_model:
             return LlamaSettings.embed_model
 
-        settings = __import__("llamaindex_study.config", fromlist=["get_settings"]).get_settings()
+        settings = __import__(
+            "llamaindex_study.config", fromlist=["get_settings"]
+        ).get_settings()
         return OllamaEmbedding(
             model_name=settings.ollama_embed_model,
             base_url=settings.ollama_base_url,
@@ -294,6 +302,7 @@ class ChromaVectorStore(BaseVectorStore):
         if not self.persist_dir.exists():
             return False
         import chromadb
+
         client = chromadb.PersistentClient(path=str(self.persist_dir))
         return self.collection_name in [c.name for c in client.list_collections()]
 
@@ -409,10 +418,12 @@ class QdrantVectorStore(BaseVectorStore):
         from llama_index.core import Settings as LlamaSettings
         from llama_index.embeddings.ollama import OllamaEmbedding
 
-        if hasattr(LlamaSettings, 'embed_model') and LlamaSettings.embed_model:
+        if hasattr(LlamaSettings, "embed_model") and LlamaSettings.embed_model:
             return LlamaSettings.embed_model
 
-        settings = __import__("llamaindex_study.config", fromlist=["get_settings"]).get_settings()
+        settings = __import__(
+            "llamaindex_study.config", fromlist=["get_settings"]
+        ).get_settings()
         return OllamaEmbedding(
             model_name=settings.ollama_embed_model,
             base_url=settings.ollama_base_url,
@@ -422,6 +433,7 @@ class QdrantVectorStore(BaseVectorStore):
         """检查集合是否存在"""
         try:
             from qdrant_client import QdrantClient
+
             client = QdrantClient(url=self.url, api_key=self.api_key)
             collections = client.get_collections()
             return self.collection_name in [c.name for c in collections.collections]
@@ -502,6 +514,7 @@ class QdrantVectorStore(BaseVectorStore):
             return {"exists": False}
 
         from qdrant_client import QdrantClient
+
         client = QdrantClient(url=self.url, api_key=self.api_key)
         info = client.get_collection(self.collection_name)
 

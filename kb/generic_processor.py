@@ -14,18 +14,25 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, List, Optional
 
-from llama_index.core.node_parser import SentenceSplitter
 from llama_index.core.schema import Document as LlamaDocument
+from llamaindex_study.node_parser import get_node_parser
 
-from kb.document_processor import DocumentProcessor, DocumentProcessorConfig, ProcessingProgress
+from kb.document_processor import (
+    DocumentProcessor,
+    DocumentProcessorConfig,
+    ProcessingProgress,
+)
 
 
 @dataclass
 class FileImportConfig:
     """文件导入配置"""
+
     source_name: str = "generic"  # 数据源名称
     source_paths: List[Path] = field(default_factory=list)  # 数据源目录
-    exclude_patterns: List[str] = field(default_factory=lambda: ["*.xls", "*.xlsx", ".DS_Store"])
+    exclude_patterns: List[str] = field(
+        default_factory=lambda: ["*.xls", "*.xlsx", ".DS_Store"]
+    )
     chunk_size: int = 512
     chunk_overlap: int = 50
     batch_size: int = 50
@@ -52,11 +59,14 @@ class GenericImporter:
         初始化通用导入器
         """
         self.config = config or FileImportConfig()
-        self.processor = DocumentProcessor(config=processor_config or DocumentProcessorConfig(
-            chunk_size=self.config.chunk_size,
-            chunk_overlap=self.config.chunk_overlap,
-            batch_size=self.config.batch_size,
-        ))
+        self.processor = DocumentProcessor(
+            config=processor_config
+            or DocumentProcessorConfig(
+                chunk_size=self.config.chunk_size,
+                chunk_overlap=self.config.chunk_overlap,
+                batch_size=self.config.batch_size,
+            )
+        )
 
     def collect_files(
         self,
@@ -97,7 +107,7 @@ class GenericImporter:
                     continue
 
                 # 排除隐藏文件
-                if file_path.name.startswith('.'):
+                if file_path.name.startswith("."):
                     continue
 
                 # 检查排除模式
@@ -143,7 +153,7 @@ class GenericImporter:
                 progress.started_at = time.time()
 
         self.processor.set_embed_model(embed_model)
-        node_parser = SentenceSplitter(
+        node_parser = get_node_parser(
             chunk_size=self.processor.config.chunk_size,
             chunk_overlap=self.processor.config.chunk_overlap,
         )
@@ -162,16 +172,22 @@ class GenericImporter:
                 if not self.processor.is_file_changed(path_str, progress):
                     stats["skipped"] += 1
                     continue
-                
+
                 # 更新文件哈希
                 file_hash = self.processor.compute_file_hash(path_str)
                 if progress:
                     progress.file_hashes[path_str] = file_hash
 
             if i % 10 == 0:
-                elapsed = time.time() - (progress.started_at if progress else time.time())
-                print(f"\n   进度: {i+1}/{len(file_paths)} ({100*(i+1)//len(file_paths)}%)")
-                print(f"   节点: {stats['nodes']}, 跳过: {stats['skipped']}, 耗时: {elapsed:.0f}s")
+                elapsed = time.time() - (
+                    progress.started_at if progress else time.time()
+                )
+                print(
+                    f"\n   进度: {i + 1}/{len(file_paths)} ({100 * (i + 1) // len(file_paths)}%)"
+                )
+                print(
+                    f"   节点: {stats['nodes']}, 跳过: {stats['skipped']}, 耗时: {elapsed:.0f}s"
+                )
 
             if on_progress:
                 on_progress(i + 1, len(file_paths), file_path.name)
@@ -236,9 +252,9 @@ class GenericImporter:
         Returns:
             导入统计
         """
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"📁 {self.config.source_name}: {directory}")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
 
         # 收集文件
         files = self.collect_files([directory], exclude_patterns, recursive)
@@ -247,7 +263,9 @@ class GenericImporter:
         if not files:
             return {"files": 0, "nodes": 0, "failed": 0}
 
-        return self.import_files(files, vector_store, embed_model, progress, on_progress)
+        return self.import_files(
+            files, vector_store, embed_model, progress, on_progress
+        )
 
     def process_file(
         self,
@@ -291,9 +309,9 @@ class GenericImporter:
         Returns:
             导入统计
         """
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"📦 {self.config.source_name}: 批量导入")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
 
         # 分离文件和目录
         all_files = []
@@ -318,4 +336,6 @@ class GenericImporter:
         if not all_files:
             return {"files": 0, "nodes": 0, "failed": 0}
 
-        return self.import_files(all_files, vector_store, embed_model, progress, on_progress)
+        return self.import_files(
+            all_files, vector_store, embed_model, progress, on_progress
+        )

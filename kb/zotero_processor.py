@@ -18,15 +18,20 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from llama_index.core import SimpleDirectoryReader
-from llama_index.core.node_parser import SentenceSplitter
 from llama_index.core.schema import Document as LlamaDocument
+from llamaindex_study.node_parser import get_node_parser
 
-from kb.document_processor import DocumentProcessor, DocumentProcessorConfig, ProcessingProgress
+from kb.document_processor import (
+    DocumentProcessor,
+    DocumentProcessorConfig,
+    ProcessingProgress,
+)
 
 
 @dataclass
 class ZoteroItem:
     """Zotero 文献项"""
+
     item_id: int
     title: str
     creators: List[str] = field(default_factory=list)
@@ -89,12 +94,15 @@ class ZoteroImporter:
         conn = self.connect()
         cursor = conn.cursor()
 
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT path, storageHash, contentType
             FROM itemAttachments
             WHERE parentItemID = ?
             LIMIT 1
-        """, (item_id,))
+        """,
+            (item_id,),
+        )
         row = cursor.fetchone()
 
         if not row or not row["path"]:
@@ -105,7 +113,10 @@ class ZoteroImporter:
 
         # 检查是否是 PDF 或其他可读格式
         content_type = row["contentType"] or ""
-        supported = any(ext in content_type for ext in ['pdf', 'document', 'presentation', 'spreadsheet'])
+        supported = any(
+            ext in content_type
+            for ext in ["pdf", "document", "presentation", "spreadsheet"]
+        )
 
         if not supported:
             return None
@@ -165,32 +176,48 @@ class ZoteroImporter:
         cursor = conn.cursor()
 
         # 精确匹配
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT collectionID, collectionName, parentCollectionID
             FROM collections
             WHERE libraryID = 1 AND collectionName = ?
-        """, (name,))
+        """,
+            (name,),
+        )
         row = cursor.fetchone()
         if row:
-            return {"collectionID": row[0], "collectionName": row[1], "parentCollectionID": row[2]}
+            return {
+                "collectionID": row[0],
+                "collectionName": row[1],
+                "parentCollectionID": row[2],
+            }
 
         # 模糊匹配（包含）
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT collectionID, collectionName, parentCollectionID
             FROM collections
             WHERE libraryID = 1 AND collectionName LIKE ?
             LIMIT 5
-        """, (f"%{name}%",))
+        """,
+            (f"%{name}%",),
+        )
 
         results = cursor.fetchall()
         if len(results) == 1:
             row = results[0]
-            return {"collectionID": row[0], "collectionName": row[1], "parentCollectionID": row[2]}
+            return {
+                "collectionID": row[0],
+                "collectionName": row[1],
+                "parentCollectionID": row[2],
+            }
         elif len(results) > 1:
             # 返回多个匹配结果
             return {
                 "multiple": True,
-                "matches": [{"collectionID": r[0], "collectionName": r[1]} for r in results]
+                "matches": [
+                    {"collectionID": r[0], "collectionName": r[1]} for r in results
+                ],
             }
 
         return None
@@ -216,7 +243,8 @@ class ZoteroImporter:
         # 获取所有子收藏夹
         collection_ids = [collection_id]
         if recursive:
-            cursor.execute("""
+            cursor.execute(
+                """
                 WITH RECURSIVE sub_collections AS (
                     SELECT collectionID FROM collections WHERE parentCollectionID = ?
                     UNION ALL
@@ -224,15 +252,20 @@ class ZoteroImporter:
                     JOIN sub_collections sc ON c.parentCollectionID = sc.collectionID
                 )
                 SELECT collectionID FROM sub_collections
-            """, (collection_id,))
+            """,
+                (collection_id,),
+            )
             collection_ids.extend([row[0] for row in cursor.fetchall()])
 
         # 获取收藏夹中的文献
         placeholders = ",".join(["?"] * len(collection_ids))
-        cursor.execute(f"""
+        cursor.execute(
+            f"""
             SELECT itemID FROM collectionItems
             WHERE collectionID IN ({placeholders})
-        """, collection_ids)
+        """,
+            collection_ids,
+        )
 
         return [row[0] for row in cursor.fetchall()]
 
@@ -250,23 +283,29 @@ class ZoteroImporter:
         cursor = conn.cursor()
 
         # 获取基本信息
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT i.itemID, t.typeName as item_type
             FROM items i
             JOIN itemTypes t ON i.itemTypeID = t.itemTypeID
             WHERE i.itemID = ? AND i.libraryID = 1
-        """, (item_id,))
+        """,
+            (item_id,),
+        )
         row = cursor.fetchone()
         if not row:
             return None
 
         # 获取标题 (fieldID = 1)
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT v.value
             FROM itemData d
             JOIN itemDataValues v ON d.valueID = v.valueID
             WHERE d.itemID = ? AND d.fieldID = 1
-        """, (item_id,))
+        """,
+            (item_id,),
+        )
         title_row = cursor.fetchone()
         title = title_row["value"] if title_row else "Untitled"
 
@@ -276,49 +315,63 @@ class ZoteroImporter:
         )
 
         # 获取作者
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT c.firstName, c.lastName
             FROM itemCreators ic
             JOIN creators c ON ic.creatorID = c.creatorID
             WHERE ic.itemID = ?
             ORDER BY ic.orderIndex
-        """, (item_id,))
+        """,
+            (item_id,),
+        )
         for creator_row in cursor.fetchall():
             if creator_row["firstName"] or creator_row["lastName"]:
                 name = f"{creator_row['firstName'] or ''} {creator_row['lastName'] or ''}".strip()
                 item.creators.append(name)
 
         # 获取标签
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT name FROM tags
             JOIN itemTags ON tags.tagID = itemTags.tagID
             WHERE itemTags.itemID = ?
-        """, (item_id,))
+        """,
+            (item_id,),
+        )
         item.tags = [row[0] for row in cursor.fetchall()]
 
         # 获取附件路径
         item.file_path = self._get_attachment_path(item_id)
 
         # 获取标注
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT text, comment, color
             FROM itemAnnotations
             WHERE parentItemID = ?
             ORDER BY sortIndex ASC
-        """, (item_id,))
+        """,
+            (item_id,),
+        )
         for ann_row in cursor.fetchall():
-            item.annotations.append({
-                "text": ann_row["text"] or "",
-                "comment": ann_row["comment"] or "",
-                "color": ann_row["color"] or "",
-            })
+            item.annotations.append(
+                {
+                    "text": ann_row["text"] or "",
+                    "comment": ann_row["comment"] or "",
+                    "color": ann_row["color"] or "",
+                }
+            )
 
         # 获取笔记
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT note, title
             FROM itemNotes
             WHERE parentItemID = ?
-        """, (item_id,))
+        """,
+            (item_id,),
+        )
         for note_row in cursor.fetchall():
             if note_row["note"]:
                 item.notes.append(note_row["note"])
@@ -347,7 +400,7 @@ class ZoteroImporter:
         from kb.zotero_reader import create_zotero_reader
 
         self.processor.set_embed_model(embed_model)
-        node_parser = SentenceSplitter(
+        node_parser = get_node_parser(
             chunk_size=self.processor.config.chunk_size,
             chunk_overlap=self.processor.config.chunk_overlap,
         )
@@ -371,7 +424,7 @@ class ZoteroImporter:
                 text_parts.append("\n## 标注:")
                 for ann in item.annotations:
                     text_parts.append(f"- {ann['text']}")
-                    if ann['comment']:
+                    if ann["comment"]:
                         text_parts.append(f"  注: {ann['comment']}")
 
             if item.notes:
@@ -397,14 +450,16 @@ class ZoteroImporter:
             file_path = Path(item.file_path)
             ext = file_path.suffix.lower()
 
-            print(f"   📄 {item.title[:40]}... ({file_path.stat().st_size / 1024 / 1024:.1f}MB)")
+            print(
+                f"   📄 {item.title[:40]}... ({file_path.stat().st_size / 1024 / 1024:.1f}MB)"
+            )
 
-            if ext == '.pdf':
+            if ext == ".pdf":
                 docs = self.processor.process_pdf(
                     str(file_path),
                     metadata=base_metadata,
                 )
-            elif ext in ['.docx', '.doc', '.xlsx', '.xls', '.pptx', '.md', '.txt']:
+            elif ext in [".docx", ".doc", ".xlsx", ".xls", ".pptx", ".md", ".txt"]:
                 docs = self.processor.process_document(
                     str(file_path),
                     metadata=base_metadata,
@@ -415,7 +470,9 @@ class ZoteroImporter:
             if docs:
                 for doc in docs:
                     nodes = node_parser.get_nodes_from_documents([doc])
-                    total_nodes += self.processor.save_nodes(vector_store, nodes, progress)
+                    total_nodes += self.processor.save_nodes(
+                        vector_store, nodes, progress
+                    )
 
         return total_nodes
 
@@ -442,9 +499,9 @@ class ZoteroImporter:
         Returns:
             导入统计
         """
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"📚 Zotero: {collection_name}")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
 
         # 获取文献列表
         item_ids = self.get_items_in_collection(collection_id)
@@ -467,8 +524,12 @@ class ZoteroImporter:
                 continue
 
             if i % 5 == 0:
-                elapsed = time.time() - (progress.started_at if progress else time.time())
-                print(f"\n   进度: {i+1}/{len(item_ids)} ({100*(i+1)//len(item_ids)}%)")
+                elapsed = time.time() - (
+                    progress.started_at if progress else time.time()
+                )
+                print(
+                    f"\n   进度: {i + 1}/{len(item_ids)} ({100 * (i + 1) // len(item_ids)}%)"
+                )
                 print(f"   节点: {stats['nodes']}, 耗时: {elapsed:.0f}s")
 
             item = self.get_item(item_id)
