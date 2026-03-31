@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import asyncio
 import json
 import os
 import sys
@@ -235,16 +236,20 @@ def run_interactive() -> int:
 
 
 def submit_task_and_handle(
-    task_type: str, kb_id: str, params: dict[str, Any], source: str, wait: bool
+    task_type: str, kb_id: str, params: dict[str, Any], source: str
 ) -> int:
+    from kb.task_executor import SchedulerStarter, is_scheduler_running
+
+    # 检查并自动启动 scheduler
+    if not is_scheduler_running():
+        print("⚙️  调度器未运行，正在启动...", file=sys.stderr)
+        SchedulerStarter.ensure_scheduler_running()
+
     result = TaskService.submit(
         task_type=task_type, kb_id=kb_id, params=params, source=source
     )
-    if wait:
-        task = TaskService.run_task(result["task_id"])
-        print_json(task)
-    else:
-        print_json(result)
+    print_json(result)
+
     return 0
 
 
@@ -279,9 +284,7 @@ def handle_kb_delete(args: argparse.Namespace) -> int:
 
 
 def handle_kb_rebuild(args: argparse.Namespace) -> int:
-    return submit_task_and_handle(
-        "rebuild", args.kb_id, {}, source="cli:kb:rebuild", wait=args.wait
-    )
+    return submit_task_and_handle("rebuild", args.kb_id, {}, source="cli:kb:rebuild")
 
 
 def handle_kb_topics(args: argparse.Namespace) -> int:
@@ -757,7 +760,6 @@ def handle_ingest_obsidian(args: argparse.Namespace) -> int:
         args.kb_id,
         params,
         source=args.folder_path or args.vault_path,
-        wait=args.wait,
     )
 
 
@@ -768,30 +770,109 @@ def handle_ingest_zotero(args: argparse.Namespace) -> int:
         "rebuild": args.rebuild,
     }
     source = args.collection_name or args.collection_id or "zotero"
-    return submit_task_and_handle(
-        "zotero", args.kb_id, params, source=source, wait=args.wait
-    )
+    return submit_task_and_handle("zotero", args.kb_id, params, source=source)
+
+
+def _collect_files_for_validation(
+    paths: List[str],
+    include_exts: List[str] = None,
+    exclude_exts: List[str] = None,
+) -> tuple[int, List[str]]:
+    from kb.generic_processor import GenericImporter
+
+    importer = GenericImporter()
+    all_files: List[Path] = []
+    warnings: List[str] = []
+
+    for path_str in paths:
+        p = Path(path_str)
+        if not p.exists():
+            warnings.append(f"路径不存在: {path_str}")
+            continue
+
+        if p.is_file():
+            all_files.append(p)
+        elif p.is_dir():
+            files = importer.collect_files(
+                [p],
+                recursive=True,
+                include_exts=include_exts,
+                exclude_exts=exclude_exts,
+            )
+            all_files.extend(files)
+
+    return len(all_files), warnings
 
 
 def handle_ingest_file(args: argparse.Namespace) -> int:
+    path = Path(args.path)
+    if not path.exists():
+        print(f"❌ 路径不存在: {args.path}", file=sys.stderr)
+        return 1
+
+    file_count, warnings = _collect_files_for_validation([args.path])
+    for w in warnings:
+        print(f"⚠️  {w}", file=sys.stderr)
+
+    if file_count == 0:
+        print(f"❌ 没有找到可处理的文件: {args.path}", file=sys.stderr)
+        return 1
+
+    print(f"📁 将导入 {file_count} 个文件")
     return submit_task_and_handle(
-        "generic", args.kb_id, {"paths": [args.path]}, source=args.path, wait=args.wait
+        "generic", args.kb_id, {"paths": [args.path]}, source=args.path
     )
 
 
 def handle_ingest_batch(args: argparse.Namespace) -> int:
+    paths = args.paths
+    include_exts = None
+    exclude_exts = None
+
+    if hasattr(args, "include") and args.include:
+        include_exts = [
+            ext.strip().lower().lstrip(".") for ext in args.include.split(",")
+        ]
+
+    if hasattr(args, "exclude") and args.exclude:
+        exclude_exts = [
+            ext.strip().lower().lstrip(".") for ext in args.exclude.split(",")
+        ]
+
+    for path_str in paths:
+        p = Path(path_str)
+        if not p.exists():
+            print(f"❌ 路径不存在: {path_str}", file=sys.stderr)
+            return 1
+
+    file_count, warnings = _collect_files_for_validation(
+        paths, include_exts, exclude_exts
+    )
+    for w in warnings:
+        print(f"⚠️  {w}", file=sys.stderr)
+
+    if file_count == 0:
+        print(f"❌ 没有找到可处理的文件", file=sys.stderr)
+        return 1
+
+    print(f"📁 将导入 {file_count} 个文件")
+    params = {"paths": paths}
+    if include_exts:
+        params["include_exts"] = include_exts
+    if exclude_exts:
+        params["exclude_exts"] = exclude_exts
+
     return submit_task_and_handle(
         "generic",
         args.kb_id,
-        {"paths": args.paths},
-        source=args.paths[0],
-        wait=args.wait,
+        params,
+        source=paths[0],
     )
 
 
 def handle_ingest_rebuild(args: argparse.Namespace) -> int:
     return submit_task_and_handle(
-        "rebuild", args.kb_id, {}, source="cli:ingest:rebuild", wait=args.wait
+        "rebuild", args.kb_id, {}, source="cli:ingest:rebuild"
     )
 
 
@@ -842,8 +923,6 @@ def handle_obsidian_import_all(args: argparse.Namespace) -> int:
                 },
                 source=folder_path or mapping.kb_id,
             )
-            if args.wait:
-                submission = TaskService.run_task(submission["task_id"])
             results.append(submission)
     print_json({"tasks": results, "count": len(results)})
     return 0
@@ -866,7 +945,7 @@ def handle_zotero_search(args: argparse.Namespace) -> int:
 def handle_task_submit(args: argparse.Namespace) -> int:
     params = parse_key_values(args.param or [])
     return submit_task_and_handle(
-        args.task_type, args.kb_id, params, source=args.source or "", wait=args.wait
+        args.task_type, args.kb_id, params, source=args.source or ""
     )
 
 
@@ -893,8 +972,42 @@ def handle_task_cancel(args: argparse.Namespace) -> int:
     return 0
 
 
+def handle_task_pause(args: argparse.Namespace) -> int:
+    print_json(TaskService.pause(args.task_id))
+    return 0
+
+
+def handle_task_pause_all(args: argparse.Namespace) -> int:
+    results = TaskService.pause_all(args.status)
+    print_json(results)
+    return 0
+
+
+def handle_task_resume(args: argparse.Namespace) -> int:
+    print_json(TaskService.resume(args.task_id))
+    return 0
+
+
+def handle_task_resume_all(args: argparse.Namespace) -> int:
+    results = TaskService.resume_all()
+    print_json(results)
+    return 0
+
+
 def handle_task_delete(args: argparse.Namespace) -> int:
     print_json(TaskService.delete(args.task_id, cleanup=args.cleanup))
+    return 0
+
+
+def handle_task_delete_all(args: argparse.Namespace) -> int:
+    results = TaskService.delete_all(args.status, cleanup=args.cleanup)
+    print_json(results)
+    return 0
+
+
+def handle_task_cleanup(args: argparse.Namespace) -> int:
+    results = TaskService.cleanup_orphan_tasks(cleanup=not args.no_cleanup)
+    print_json(results)
     return 0
 
 
@@ -1234,7 +1347,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     kb_rebuild = kb_sub.add_parser("rebuild", help="重建知识库")
     kb_rebuild.add_argument("kb_id")
-    kb_rebuild.add_argument("--wait", action="store_true")
     kb_rebuild.set_defaults(handler=handle_kb_rebuild)
 
     kb_topics = kb_sub.add_parser("topics", help="分析知识库主题词（使用远程LLM）")
@@ -1323,7 +1435,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--force-delete", action=argparse.BooleanOptionalAction, default=True
     )
     ingest_obsidian.add_argument("--persist-dir")
-    ingest_obsidian.add_argument("--wait", action="store_true")
     ingest_obsidian.set_defaults(handler=handle_ingest_obsidian)
 
     ingest_zotero = ingest_sub.add_parser("zotero", help="导入 Zotero 收藏夹")
@@ -1331,24 +1442,28 @@ def build_parser() -> argparse.ArgumentParser:
     ingest_zotero.add_argument("--collection-id")
     ingest_zotero.add_argument("--collection-name")
     ingest_zotero.add_argument("--rebuild", action="store_true")
-    ingest_zotero.add_argument("--wait", action="store_true")
     ingest_zotero.set_defaults(handler=handle_ingest_zotero)
 
     ingest_file = ingest_sub.add_parser("file", help="导入单个文件或目录")
     ingest_file.add_argument("kb_id")
     ingest_file.add_argument("path")
-    ingest_file.add_argument("--wait", action="store_true")
     ingest_file.set_defaults(handler=handle_ingest_file)
 
     ingest_batch = ingest_sub.add_parser("batch", help="批量导入多个路径")
     ingest_batch.add_argument("kb_id")
     ingest_batch.add_argument("paths", nargs="+")
-    ingest_batch.add_argument("--wait", action="store_true")
+    ingest_batch.add_argument(
+        "--include",
+        help="只处理指定的文件格式 (如: pdf,md,docx)，逗号分隔。不指定则使用默认格式",
+    )
+    ingest_batch.add_argument(
+        "--exclude",
+        help="从默认格式中排除指定的文件格式 (如: xlsx,png)，逗号分隔",
+    )
     ingest_batch.set_defaults(handler=handle_ingest_batch)
 
     ingest_rebuild = ingest_sub.add_parser("rebuild", help="提交重建任务")
     ingest_rebuild.add_argument("kb_id")
-    ingest_rebuild.add_argument("--wait", action="store_true")
     ingest_rebuild.set_defaults(handler=handle_ingest_rebuild)
 
     obsidian_parser = subparsers.add_parser("obsidian", help="Obsidian 辅助命令")
@@ -1376,7 +1491,6 @@ def build_parser() -> argparse.ArgumentParser:
     obsidian_import_all.add_argument(
         "--force-delete", action=argparse.BooleanOptionalAction, default=True
     )
-    obsidian_import_all.add_argument("--wait", action="store_true")
     obsidian_import_all.set_defaults(handler=handle_obsidian_import_all)
 
     zotero_parser = subparsers.add_parser("zotero", help="Zotero 辅助命令")
@@ -1390,44 +1504,184 @@ def build_parser() -> argparse.ArgumentParser:
     zotero_search.add_argument("keyword")
     zotero_search.set_defaults(handler=handle_zotero_search)
 
-    task_parser = subparsers.add_parser("task", help="任务管理")
+    task_parser = subparsers.add_parser(
+        "task",
+        help="任务管理：查看、暂停、恢复、取消、删除任务等",
+    )
     task_sub = task_parser.add_subparsers(dest="task_command", required=True)
 
-    task_submit = task_sub.add_parser("submit", help="提交自定义任务")
-    task_submit.add_argument("task_type")
-    task_submit.add_argument("kb_id")
-    task_submit.add_argument("--param", action="append")
-    task_submit.add_argument("--source", default="")
-    task_submit.add_argument("--wait", action="store_true")
+    task_submit = task_sub.add_parser(
+        "submit",
+        help="提交自定义任务（通常不需要手动使用，导入命令会自动提交任务）",
+        description="提交自定义任务到任务队列",
+    )
+    task_submit.add_argument(
+        "task_type",
+        help="任务类型，如: obsidian, generic, zotero, rebuild",
+    )
+    task_submit.add_argument("kb_id", help="知识库ID")
+    task_submit.add_argument(
+        "--param",
+        action="append",
+        help="任务参数，格式: key=value，可多次使用",
+    )
+    task_submit.add_argument(
+        "--source",
+        default="",
+        help="任务来源标识",
+    )
     task_submit.set_defaults(handler=handle_task_submit)
 
-    task_list = task_sub.add_parser("list", help="列出任务")
-    task_list.add_argument("--kb-id")
-    task_list.add_argument("--status")
-    task_list.add_argument("--limit", type=int, default=20)
+    task_list = task_sub.add_parser(
+        "list",
+        help="列出任务",
+        description="列出任务，支持按知识库ID、状态过滤。注意：此命令会自动清理孤儿任务（状态为running但实际无后台进程的任务）。",
+    )
+    task_list.add_argument(
+        "--kb-id",
+        help="按知识库ID过滤，如: tech_tools, research",
+    )
+    task_list.add_argument(
+        "--status",
+        help="按状态过滤，可选值: pending(等待中), running(运行中), paused(已暂停), completed(已完成), failed(失败), cancelled(已取消)",
+    )
+    task_list.add_argument(
+        "--limit",
+        type=int,
+        default=20,
+        help="返回任务数量上限，默认20",
+    )
     task_list.set_defaults(handler=handle_task_list)
 
-    task_show = task_sub.add_parser("show", help="查看任务详情")
-    task_show.add_argument("task_id")
+    task_show = task_sub.add_parser(
+        "show",
+        help="查看任务详情",
+        description="查看单个任务的详细信息，包括进度、消息、结果等",
+    )
+    task_show.add_argument(
+        "task_id",
+        help="任务ID，从 task list 获取",
+    )
     task_show.set_defaults(handler=handle_task_show)
 
-    task_cancel = task_sub.add_parser("cancel", help="取消任务")
-    task_cancel.add_argument("task_id")
+    task_cancel = task_sub.add_parser(
+        "cancel",
+        help="取消运行中的任务",
+        description="取消正在运行的任务。任务会在当前文件处理完成后进入已取消状态。只能取消 pending 或 running 状态的任务。",
+    )
+    task_cancel.add_argument(
+        "task_id",
+        help="要取消的任务ID",
+    )
     task_cancel.set_defaults(handler=handle_task_cancel)
 
-    task_delete = task_sub.add_parser("delete", help="删除任务")
-    task_delete.add_argument("task_id")
+    task_pause = task_sub.add_parser(
+        "pause",
+        help="暂停运行中的任务",
+        description="暂停正在运行的任务。任务会在当前文件处理完成后进入暂停状态。可以使用 task resume 恢复执行。",
+    )
+    task_pause.add_argument(
+        "task_id",
+        help="要暂停的任务ID",
+    )
+    task_pause.set_defaults(handler=handle_task_pause)
+
+    task_pause_all = task_sub.add_parser(
+        "pause-all",
+        help="暂停所有运行中的任务",
+        description="批量暂停所有运行中的任务。默认暂停所有 running 状态的任务。",
+    )
+    task_pause_all.add_argument(
+        "--status",
+        default="running",
+        help="要暂停的任务状态，默认 running",
+    )
+    task_pause_all.set_defaults(handler=handle_task_pause_all)
+
+    task_resume = task_sub.add_parser(
+        "resume",
+        help="恢复已暂停的任务",
+        description="恢复已暂停的任务，继续执行。只能恢复 paused 状态的任务。",
+    )
+    task_resume.add_argument(
+        "task_id",
+        help="要恢复的任务ID",
+    )
+    task_resume.set_defaults(handler=handle_task_resume)
+
+    task_resume_all = task_sub.add_parser(
+        "resume-all",
+        help="恢复所有已暂停的任务",
+        description="批量恢复所有已暂停的任务，继续执行。",
+    )
+    task_resume_all.set_defaults(handler=handle_task_resume_all)
+
+    task_delete = task_sub.add_parser(
+        "delete",
+        help="删除任务记录",
+        description="删除任务记录（物理删除）。只能删除 completed、failed、cancelled 状态的任务。running 状态的任务需要先取消。",
+    )
+    task_delete.add_argument(
+        "task_id",
+        help="要删除的任务ID",
+    )
     task_delete.add_argument(
         "--cleanup",
         action="store_true",
-        help="同时清理关联的知识库数据（仅对 failed/cancelled 任务有效）",
+        help="同时清理关联的知识库数据（去重记录 + 向量数据）。仅清理该任务产生的源文件数据，不影响其他数据。",
     )
     task_delete.set_defaults(handler=handle_task_delete)
 
-    task_watch = task_sub.add_parser("watch", help="持续观察任务状态")
-    task_watch.add_argument("task_id")
-    task_watch.add_argument("--interval", type=float, default=1.0)
-    task_watch.add_argument("--timeout", type=float, default=0)
+    task_delete_all = task_sub.add_parser(
+        "delete-all",
+        help="删除所有任务",
+        description="批量删除任务记录。默认删除所有 completed 状态的任务。",
+    )
+    task_delete_all.add_argument(
+        "--status",
+        default="completed",
+        help="要删除的任务状态，默认 completed。可选: pending, running, paused, completed, failed, cancelled",
+    )
+    task_delete_all.add_argument(
+        "--cleanup",
+        action="store_true",
+        help="同时清理关联的知识库数据（去重记录 + 向量数据）。",
+    )
+    task_delete_all.set_defaults(handler=handle_task_delete_all)
+
+    task_cleanup = task_sub.add_parser(
+        "cleanup",
+        help="清理孤儿任务",
+        description="清理孤儿任务。孤儿任务是指状态为 running 但实际没有后台进程执行的任务（通常是因为执行进程被终止）。",
+    )
+    task_cleanup.add_argument(
+        "--no-cleanup",
+        action="store_true",
+        help="仅标记孤儿任务为 failed，不清理关联的向量数据（去重记录 + 向量数据）",
+    )
+    task_cleanup.set_defaults(handler=handle_task_cleanup)
+
+    task_watch = task_sub.add_parser(
+        "watch",
+        help="持续观察任务状态",
+        description="持续监控任务状态变化，有变化时打印最新状态。适用于观察长时间运行的任务。",
+    )
+    task_watch.add_argument(
+        "task_id",
+        help="要观察的任务ID",
+    )
+    task_watch.add_argument(
+        "--interval",
+        type=float,
+        default=1.0,
+        help="检查间隔时间（秒），默认1秒",
+    )
+    task_watch.add_argument(
+        "--timeout",
+        type=float,
+        default=0,
+        help="超时时间（秒），默认0表示不限时。超时后退出观察。",
+    )
     task_watch.set_defaults(handler=handle_task_watch)
 
     category_parser = subparsers.add_parser("category", help="分类规则与分类辅助")
