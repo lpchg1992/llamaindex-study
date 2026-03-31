@@ -3,7 +3,7 @@
 
 提供统一的文档处理能力：
 - PDF 扫描件检测
-- PDF 转 Markdown (MinerU / doc2x)
+- PDF 转 Markdown (本地 OCR + 云端 doc2x 回退)
 - Office 文档处理 (Word, Excel, PPTX)
 - 批量处理和增量保存
 - 断点续传
@@ -17,6 +17,7 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 import time
 import uuid
 from dataclasses import dataclass, asdict, field
@@ -270,11 +271,12 @@ class DocumentProcessor:
         self, pdf_path: str, timeout: int = None
     ) -> Optional[str]:
         """
-        将 PDF 转换为 Markdown
+        将 PDF 转换为 Markdown (OCR 优先级策略)
 
-        方法：
-        1. MinerU MCP
-        2. doc2x MCP
+        策略：
+        1. 本地 Ollama OCR - PDF 转图片后调用 deepseek-ocr
+        2. MinerU - 直接上传 PDF (需配置 MINERU_API_KEY 和 MINERU_PIPELINE_ID)
+        3. doc2x - 直接上传 PDF (需配置 DOC2X_API_KEY)
 
         Returns:
             转换后的 Markdown 内容，失败返回 None
@@ -282,76 +284,300 @@ class DocumentProcessor:
         timeout = timeout or self.config.pdf_convert_timeout
         print(f"   🔄 正在转换 PDF 为 Markdown...")
 
-        markdown_content = None
+        from llamaindex_study.config import get_settings
 
-        # 方法 1: MinerU MCP
-        try:
-            result = subprocess.run(
-                [
-                    "node",
-                    "/Users/luopingcheng/.nvm/versions/node/v24.13.1/lib/node_modules/mineru-mcp/dist/index.js",
-                ],
-                input=json.dumps(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": 1,
-                        "method": "tools/call",
-                        "params": {
-                            "name": "mineru_convert",
-                            "arguments": {"file_path": pdf_path},
-                        },
-                    }
-                ),
-                capture_output=True,
-                text=True,
-                timeout=timeout,
+        settings = get_settings()
+
+        # ========== 策略 1: 本地 Ollama OCR ==========
+        print(f"   📡 策略1: 本地 Ollama OCR...")
+        image_paths = self._convert_pdf_to_images(pdf_path)
+        if image_paths:
+            all_text = []
+            for i, img_path in enumerate(image_paths):
+                print(f"   📄 识别第 {i + 1}/{len(image_paths)} 页...")
+                text = self._call_ollama_ocr(img_path)
+                if text and len(text.strip()) > 10:
+                    all_text.append(text)
+                else:
+                    all_text.append(f"[Page {i + 1}: OCR failed]")
+
+            if all_text:
+                combined = "\n\n---\n\n".join(all_text)
+                if len(combined.strip()) > 100:
+                    print(f"   ✅ 本地 OCR 成功")
+                    return combined
+
+        # ========== 策略 2: MinerU ==========
+        mineru_api_key = getattr(settings, "mineru_api_key", None) or os.getenv(
+            "MINERU_API_KEY"
+        )
+        mineru_pipeline_id = getattr(settings, "mineru_pipeline_id", None) or os.getenv(
+            "MINERU_PIPELINE_ID"
+        )
+
+        if mineru_api_key and mineru_pipeline_id:
+            print(f"   ☁️  策略2: MinerU...")
+            md = self._convert_pdf_mineru(
+                pdf_path, mineru_api_key, mineru_pipeline_id, timeout
             )
+            if md:
+                return md
+        else:
+            print(f"   ⏭️  策略2: MinerU 未配置 (MINERU_API_KEY 或 MINERU_PIPELINE_ID)")
 
-            if result.returncode == 0 and result.stdout:
-                data = json.loads(result.stdout)
-                if "result" in data and "content" in data["result"]:
-                    content = data["result"]["content"]
-                    if isinstance(content, str) and len(content.strip()) > 100:
-                        markdown_content = content
-                        print(f"   ✅ MinerU 转换成功")
+        # ========== 策略 3: doc2x ==========
+        doc2x_api_key = getattr(settings, "doc2x_api_key", None) or os.getenv(
+            "DOC2X_API_KEY"
+        )
 
+        if doc2x_api_key:
+            print(f"   ☁️  策略3: doc2x...")
+            md = self._convert_pdf_doc2x(pdf_path, doc2x_api_key, timeout)
+            if md:
+                return md
+        else:
+            print(f"   ⏭️  策略3: doc2x 未配置 (DOC2X_API_KEY)")
+
+        print(f"   ❌ 所有 OCR 策略均失败")
+        return None
+
+    def _convert_pdf_mineru(
+        self, pdf_path: str, api_key: str, pipeline_id: str, timeout: int = None
+    ) -> Optional[str]:
+        """使用 MinerU API 转换 PDF
+
+        Args:
+            pdf_path: PDF 文件路径
+            api_key: MinerU API Key
+            pipeline_id: MinerU Pipeline ID
+            timeout: 超时时间
+
+        Returns:
+            Markdown 内容，失败返回 None
+        """
+        try:
+            import requests
+
+            base_url = "https://mineru.net/api/kie"
+            headers = {"Authorization": f"Bearer {api_key}"}
+
+            with open(pdf_path, "rb") as f:
+                files = {"file": (Path(pdf_path).name, f, "application/pdf")}
+                data = {"pipeline_id": pipeline_id}
+                resp = requests.post(
+                    f"{base_url}/upload",
+                    headers=headers,
+                    files=files,
+                    data=data,
+                    timeout=timeout or 60,
+                )
+
+            if resp.status_code != 200:
+                print(f"   ⚠️  MinerU 上传失败: {resp.status_code}")
+                return None
+
+            file_ids = resp.json().get("file_ids", [])
+            if not file_ids:
+                print(f"   ⚠️  MinerU 无返回 file_ids")
+                return None
+
+            poll_interval = 5
+            max_polls = (timeout or 600) // poll_interval
+            for _ in range(max_polls):
+                result_resp = requests.get(
+                    f"{base_url}/result/{file_ids[0]}",
+                    headers=headers,
+                    timeout=30,
+                )
+                if result_resp.status_code == 200:
+                    result = result_resp.json()
+                    status = result.get("status", "")
+                    if status == "completed":
+                        content = result.get("content", "")
+                        if content and len(content.strip()) > 100:
+                            print(f"   ✅ MinerU 转换成功")
+                            return content
+                        elif status == "failed":
+                            print(f"   ⚠️  MinerU 处理失败")
+                            return None
+                time.sleep(poll_interval)
+
+            print(f"   ⚠️  MinerU 轮询超时")
+            return None
+
+        except ImportError:
+            print(f"   ⚠️  MinerU 需要 requests 库")
         except Exception as e:
             print(f"   ⚠️  MinerU 失败: {e}")
 
-        # 方法 2: doc2x MCP
-        if not markdown_content:
-            try:
-                result = subprocess.run(
-                    [
-                        "npx",
-                        "-y",
-                        "@noedgeai-org/doc2x-mcp@latest",
-                        "convert",
-                        pdf_path,
-                        "--format",
-                        "markdown",
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout,
-                )
+        return None
 
-                if (
-                    result.returncode == 0
-                    and result.stdout
-                    and len(result.stdout.strip()) > 100
-                ):
-                    markdown_content = result.stdout
-                    print(f"   ✅ doc2x 转换成功")
+    def _convert_pdf_doc2x(
+        self, pdf_path: str, api_key: str, timeout: int = None
+    ) -> Optional[str]:
+        """使用 doc2x MCP 转换 PDF
 
-            except Exception as e:
-                print(f"   ⚠️  doc2x 失败: {e}")
+        Args:
+            pdf_path: PDF 文件路径
+            api_key: doc2x API Key
+            timeout: 超时时间
 
-        if not markdown_content:
-            print(f"   ❌ PDF 转换失败")
-            return None
+        Returns:
+            Markdown 内容，失败返回 None
+        """
+        timeout = timeout or self.config.pdf_convert_timeout
 
-        return markdown_content
+        try:
+            proc = subprocess.Popen(
+                ["npx", "-y", "@noedgeai-org/doc2x-mcp@latest"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env={**os.environ, "DOC2X_API_KEY": api_key},
+            )
+
+            init_msg = json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 0,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {},
+                        "clientInfo": {"name": "llamaindex-study", "version": "0.1"},
+                    },
+                }
+            )
+
+            tool_msg = json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "doc2x_parse_pdf_wait_text",
+                        "arguments": {"pdf_path": pdf_path},
+                    },
+                }
+            )
+
+            input_data = init_msg + "\n" + tool_msg + "\n"
+            stdout, stderr = proc.communicate(input=input_data, timeout=timeout)
+
+            for line in stdout.strip().split("\n"):
+                if not line:
+                    continue
+                try:
+                    resp = json.loads(line)
+                    if resp.get("id") == 1 and "result" in resp:
+                        content = resp["result"].get("content", [])
+                        if isinstance(content, list) and len(content) > 0:
+                            text = content[0].get("text", "")
+                            if text and len(text.strip()) > 100:
+                                print(f"   ✅ doc2x 转换成功")
+                                return text
+                except json.JSONDecodeError:
+                    continue
+
+        except subprocess.TimeoutExpired:
+            print(f"   ❌ doc2x 转换超时")
+            proc.kill()
+        except Exception as e:
+            print(f"   ⚠️  doc2x 失败: {e}")
+
+        return None
+
+    def _convert_pdf_to_images(
+        self, pdf_path: str, output_dir: Path = None
+    ) -> List[Path]:
+        """将 PDF 页面转换为图片
+
+        Args:
+            pdf_path: PDF 文件路径
+            output_dir: 输出目录，默认为临时目录
+
+        Returns:
+            图片路径列表
+        """
+        import fitz
+
+        if output_dir is None:
+            output_dir = Path(tempfile.gettempdir()) / "llamaindex_ocr"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        image_paths = []
+        pdf_name = Path(pdf_path).stem
+
+        try:
+            doc = fitz.open(pdf_path)
+            for page_num in range(len(doc)):
+                page = doc[page_num]
+                pix = page.get_pixmap(dpi=300)
+                img_path = output_dir / f"{pdf_name}_page_{page_num + 1}.png"
+                pix.save(str(img_path))
+                image_paths.append(img_path)
+            doc.close()
+        except Exception as e:
+            print(f"   ⚠️  PDF 转图片失败: {e}")
+
+        return image_paths
+
+    def _call_ollama_ocr(
+        self,
+        image_path: Path,
+        prompt: str = "<|grounding|>Convert the document to markdown.",
+    ) -> Optional[str]:
+        """调用本地 Ollama OCR 模型
+
+        Args:
+            image_path: 图片路径
+            prompt: OCR 提示词
+
+        Returns:
+            识别出的文本，失败返回 None
+        """
+        import httpx
+
+        url = f"http://192.168.31.169:11434/api/generate"
+        model = "deepseek-ocr"
+
+        full_prompt = f'"{image_path}\n{prompt}"'
+
+        try:
+            response = httpx.post(
+                url,
+                json={"model": model, "prompt": full_prompt, "stream": False},
+                timeout=120,
+            )
+            if response.status_code == 200:
+                return response.json().get("response", "")
+        except Exception as e:
+            print(f"   ⚠️  Ollama OCR 调用失败: {e}")
+
+        return None
+
+    def _check_network_connectivity(
+        self, host: str = "8.8.8.8", port: int = 53, timeout: float = 3.0
+    ) -> bool:
+        """检查网络连接
+
+        Args:
+            host: 主机地址
+            port: 端口
+            timeout: 超时时间
+
+        Returns:
+            是否可以连接
+        """
+        import socket
+
+        try:
+            socket.setdefaulttimeout(timeout)
+            socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect((host, port))
+            return True
+        except socket.error:
+            return False
 
     def process_pdf(self, pdf_path: str, metadata: dict = None) -> List[LlamaDocument]:
         """

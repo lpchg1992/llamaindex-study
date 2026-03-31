@@ -73,6 +73,8 @@ class GenericImporter:
         directories: List[Path] = None,
         exclude_patterns: List[str] = None,
         recursive: bool = True,
+        include_exts: List[str] = None,
+        exclude_exts: List[str] = None,
     ) -> List[Path]:
         """
         收集所有支持的文件
@@ -81,6 +83,8 @@ class GenericImporter:
             directories: 目录列表（默认使用配置中的目录）
             exclude_patterns: 排除模式
             recursive: 是否递归
+            include_exts: 只包含指定的扩展名列表 (如 ["pdf", "md"])，覆盖默认
+            exclude_exts: 从默认列表中排除的扩展名列表 (如 ["xlsx", "png"])
 
         Returns:
             文件路径列表
@@ -89,7 +93,48 @@ class GenericImporter:
         exclude_patterns = exclude_patterns or self.config.exclude_patterns
 
         files = []
-        exclude_exts = {".xls", ".xlsx"}
+        image_exts = {
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".gif",
+            ".bmp",
+            ".svg",
+            ".webp",
+            ".ico",
+            ".tiff",
+            ".tif",
+            ".heic",
+            ".avif",
+        }
+
+        # 默认支持的扩展名 (包含表格格式 xlsx, xls)
+        default_supported_exts = {
+            ".pdf",
+            ".docx",
+            ".doc",
+            ".xlsx",
+            ".xls",
+            ".pptx",
+            ".md",
+            ".txt",
+            ".html",
+            ".htm",
+        }
+
+        # 确定最终使用的支持扩展名
+        if include_exts:
+            # include 覆盖默认：只处理指定的扩展名
+            supported_exts = {f".{ext.lstrip('.')}" for ext in include_exts}
+        else:
+            # 默认使用全部支持的扩展名
+            supported_exts = default_supported_exts.copy()
+
+        # exclude 从支持列表中排除
+        if exclude_exts:
+            for ext in exclude_exts:
+                clean_ext = f".{ext.lstrip('.')}"
+                supported_exts.discard(clean_ext)
 
         for directory in directories:
             if not directory.exists():
@@ -102,12 +147,18 @@ class GenericImporter:
                 if not file_path.is_file():
                     continue
 
-                # 排除特定扩展名
-                if file_path.suffix.lower() in exclude_exts:
+                ext = file_path.suffix.lower()
+
+                # 排除图片文件 (始终排除，不受 include/exclude 影响)
+                if ext in image_exts:
                     continue
 
                 # 排除隐藏文件
                 if file_path.name.startswith("."):
+                    continue
+
+                # 排除无扩展名或不在支持列表的文件
+                if not ext or ext not in supported_exts:
                     continue
 
                 # 检查排除模式
