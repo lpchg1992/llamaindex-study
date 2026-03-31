@@ -146,9 +146,22 @@ class SearchResult(BaseModel):
 
 class QueryRequest(BaseModel):
     query: str = Field(..., description="查询")
-    mode: str = Field("hybrid", description="检索模式: hybrid, vector, keyword")
+    mode: str = Field("vector", description="检索模式: vector, hybrid")
     top_k: int = Field(5, ge=1, le=100)
     exclude: Optional[List[str]] = Field(None, description="排除的知识库 ID 列表")
+    use_hyde: Optional[bool] = Field(
+        None, description="启用 HyDE 查询转换（None=使用配置默认值）"
+    )
+    use_multi_query: Optional[bool] = Field(
+        None, description="启用多查询转换（None=使用配置默认值）"
+    )
+    use_auto_merging: Optional[bool] = Field(
+        None, description="启用 Auto-Merging（None=使用配置默认值）"
+    )
+    response_mode: Optional[str] = Field(
+        None,
+        description="答案生成模式: compact, refine, tree_summarize, simple, no_text, accumulate（None=使用配置默认值）",
+    )
 
 
 class QueryResponse(BaseModel):
@@ -524,7 +537,16 @@ def search(kb_id: str, req: SearchRequest):
 @app.post("/kbs/{kb_id}/query", response_model=QueryResponse)
 def query(kb_id: str, req: QueryRequest):
     """RAG 问答"""
-    result = SearchService.query(kb_id, req.query, req.mode, req.top_k)
+    result = SearchService.query(
+        kb_id,
+        req.query,
+        mode=req.mode,
+        top_k=req.top_k,
+        use_hyde=req.use_hyde,
+        use_multi_query=req.use_multi_query,
+        use_auto_merging=req.use_auto_merging,
+        response_mode=req.response_mode,
+    )
     return QueryResponse(**result)
 
 
@@ -542,7 +564,15 @@ def query_auto(req: QueryRequest):
     """自动路由 RAG 问答"""
     from kb.services import QueryRouter
 
-    result = QueryRouter.query(req.query, req.top_k, exclude=req.exclude)
+    result = QueryRouter.query(
+        req.query,
+        top_k=req.top_k,
+        exclude=req.exclude,
+        use_hyde=req.use_hyde,
+        use_multi_query=req.use_multi_query,
+        use_auto_merging=req.use_auto_merging,
+        response_mode=req.response_mode,
+    )
     return QueryResponse(**result)
 
 

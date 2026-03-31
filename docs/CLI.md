@@ -236,7 +236,7 @@ uv run llamaindex-study search "赖氨酸配比" --auto --exclude tech_tools,aca
 ### RAG 问答
 
 ```bash
-uv run llamaindex-study query [<kb_id>] "<问题>" [-k <top_k>] [--auto] [--exclude <kb1,kb2>]
+uv run llamaindex-study query [<kb_id>] "<问题>" [-k <top_k>] [--auto] [--exclude <kb1,kb2>] [--hyde] [--multi-query] [--auto-merging] [--response-mode <mode>]
 ```
 
 参数说明：
@@ -246,6 +246,12 @@ uv run llamaindex-study query [<kb_id>] "<问题>" [-k <top_k>] [--auto] [--excl
 | `kb_id` | 知识库 ID | 省略时自动选择 |
 | `--auto` | 自动选择知识库 | False |
 | `--exclude` | 排除的知识库 ID（逗号分隔） | 无 |
+| `--hyde` | 启用 HyDE 查询转换 | False |
+| `--multi-query` | 启用多查询转换 | False |
+| `--auto-merging` | 启用 Auto-Merging Retriever | False |
+| `--response-mode` | 答案生成模式 | 使用配置默认值 |
+
+**答案生成模式选项**：`compact`、`refine`、`tree_summarize`、`simple_summarize`、`no_text`、`accumulate`、`generation`、`compact_accumulate`
 
 示例：
 
@@ -255,6 +261,18 @@ uv run llamaindex-study query tech_tools "如何优化 Python 异步代码？"
 
 # 自动选择知识库问答
 uv run llamaindex-study query "如何优化异步代码？" --auto
+
+# 启用 HyDE 查询转换
+uv run llamaindex-study query tech_tools "Python 异步编程最佳实践" --hyde
+
+# 启用多查询转换
+uv run llamaindex-study query tech_tools "如何优化 Python 性能" --multi-query
+
+# 启用 Auto-Merging Retriever
+uv run llamaindex-study query tech_tools "Python 异步编程" --auto-merging
+
+# 指定答案生成模式
+uv run llamaindex-study query tech_tools "Python 性能优化" --response-mode tree_summarize
 
 # 自动选择并排除指定知识库
 uv run llamaindex-study query "猪饲料中氨基酸平衡的关键点是什么？" --auto --exclude zotero_nutrition

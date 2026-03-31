@@ -661,9 +661,25 @@ def handle_query(args: argparse.Namespace) -> int:
         exclude = getattr(args, "exclude", None)
         if exclude:
             exclude = [e.strip() for e in exclude.split(",") if e.strip()]
-        result = QueryRouter.query(query, top_k=args.top_k, exclude=exclude)
+        result = QueryRouter.query(
+            query,
+            top_k=args.top_k,
+            exclude=exclude,
+            use_hyde=getattr(args, "use_hyde", None),
+            use_multi_query=getattr(args, "use_multi_query", None),
+            use_auto_merging=getattr(args, "use_auto_merging", None),
+            response_mode=getattr(args, "response_mode", None),
+        )
     else:
-        result = SearchService.query(args.kb_id, query, top_k=args.top_k)
+        result = SearchService.query(
+            args.kb_id,
+            query,
+            top_k=args.top_k,
+            use_hyde=getattr(args, "use_hyde", None),
+            use_multi_query=getattr(args, "use_multi_query", None),
+            use_auto_merging=getattr(args, "use_auto_merging", None),
+            response_mode=getattr(args, "response_mode", None),
+        )
     print_json(result)
     return 0
 
@@ -1197,6 +1213,26 @@ def build_parser() -> argparse.ArgumentParser:
     query_parser.add_argument("--auto", action="store_true", help="自动选择知识库")
     query_parser.add_argument(
         "--exclude", help="排除的知识库 ID（逗号分隔，如: tech_tools,academic）"
+    )
+    query_parser.add_argument("--hyde", action="store_true", help="启用 HyDE 查询转换")
+    query_parser.add_argument(
+        "--multi-query", action="store_true", help="启用多查询转换"
+    )
+    query_parser.add_argument(
+        "--auto-merging", action="store_true", help="启用 Auto-Merging Retriever"
+    )
+    query_parser.add_argument(
+        "--response-mode",
+        choices=[
+            "compact",
+            "refine",
+            "tree_summarize",
+            "simple",
+            "no_text",
+            "accumulate",
+        ],
+        default=None,
+        help="答案生成模式（默认使用配置值）",
     )
     query_parser.set_defaults(handler=handle_query)
 

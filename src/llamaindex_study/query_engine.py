@@ -131,8 +131,6 @@ class QueryEngineWrapper:
         retriever = self._create_retriever()
 
         kwargs: dict[str, Any] = {
-            "retriever": retriever,
-            "top_k": self.top_k,
             "response_mode": self.response_mode,
         }
 
@@ -148,7 +146,12 @@ class QueryEngineWrapper:
             kwargs["node_postprocessors"] = [reranker]
             logger.info(f"启用 SiliconFlow Reranker: {self.settings.rerank_model}")
 
-        base_engine = self.index.as_query_engine(**kwargs)
+        from llama_index.core.query_engine import RetrieverQueryEngine
+
+        base_engine = RetrieverQueryEngine.from_args(
+            retriever,
+            **kwargs,
+        )
 
         if self.use_hyde:
             from llama_index.core.indices.query.query_transform import (

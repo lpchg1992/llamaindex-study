@@ -607,8 +607,23 @@ class SearchService:
         query: str,
         mode: str = "vector",
         top_k: int = 5,
+        use_hyde: Optional[bool] = None,
+        use_multi_query: Optional[bool] = None,
+        use_auto_merging: Optional[bool] = None,
+        response_mode: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """RAG 问答"""
+        """RAG 问答
+
+        Args:
+            kb_id: 知识库 ID
+            query: 查询内容
+            mode: 检索模式 (vector, hybrid)
+            top_k: 返回结果数量
+            use_hyde: 启用 HyDE（None=使用配置默认值）
+            use_multi_query: 启用多查询转换（None=使用配置默认值）
+            use_auto_merging: 启用 Auto-Merging（None=使用配置默认值）
+            response_mode: 答案生成模式（None=使用配置默认值）
+        """
         from llamaindex_study.query_engine import create_query_engine
         from llamaindex_study.config import get_settings
 
@@ -619,7 +634,14 @@ class SearchService:
             kb_id,
             mode=mode,
             top_k=top_k,
-            use_auto_merging=settings.use_auto_merging,
+            use_auto_merging=use_auto_merging
+            if use_auto_merging is not None
+            else settings.use_auto_merging,
+            use_hyde=use_hyde if use_hyde is not None else settings.use_hyde,
+            use_multi_query=use_multi_query
+            if use_multi_query is not None
+            else settings.use_multi_query,
+            response_mode=response_mode or settings.response_mode,
         )
         response = query_engine.query(query)
 
@@ -818,6 +840,10 @@ class QueryRouter:
         top_k: int = 5,
         mode: str = "auto",
         exclude: Optional[List[str]] = None,
+        use_hyde: Optional[bool] = None,
+        use_multi_query: Optional[bool] = None,
+        use_auto_merging: Optional[bool] = None,
+        response_mode: Optional[str] = None,
     ) -> Dict[str, Any]:
         """自动路由 RAG 问答
 
@@ -826,6 +852,10 @@ class QueryRouter:
             top_k: 每个知识库检索的数量
             mode: 检索模式 (auto=自动路由, all=所有知识库)
             exclude: 排除的知识库 ID 列表
+            use_hyde: 启用 HyDE（None=使用配置默认值）
+            use_multi_query: 启用多查询转换（None=使用配置默认值）
+            use_auto_merging: 启用 Auto-Merging（None=使用配置默认值）
+            response_mode: 答案生成模式（None=使用配置默认值）
 
         Returns:
             RAG 问答结果
@@ -845,7 +875,15 @@ class QueryRouter:
             }
 
         if len(kb_ids) == 1:
-            return SearchService.query(kb_ids[0], query, top_k=top_k)
+            return SearchService.query(
+                kb_ids[0],
+                query,
+                top_k=top_k,
+                use_hyde=use_hyde,
+                use_multi_query=use_multi_query,
+                use_auto_merging=use_auto_merging,
+                response_mode=response_mode,
+            )
 
         contexts = []
         sources = []

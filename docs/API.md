@@ -319,9 +319,20 @@ curl -X POST "http://localhost:37241/kbs/tech_tools/query" \
   -d '{"query": "如何优化 Python 性能？", "mode": "vector", "top_k": 5}'
 ```
 
-> **检索模式**：`mode` 参数支持 `vector`（默认）和 `hybrid`（向量+BM25融合）。混合搜索需设置环境变量 `USE_HYBRID_SEARCH=true`。
->
-> **查询转换**：支持 HyDE（假设文档嵌入）、多查询转换、Query Rewriting，通过环境变量启用。
+> **检索模式**：`mode` 参数支持 `vector`（默认）和 `hybrid`（向量+BM25融合）。
+
+**请求参数说明：**
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `query` | string | 必填 | 查询内容 |
+| `mode` | string | `vector` | 检索模式：`vector` 或 `hybrid` |
+| `top_k` | int | `5` | 返回结果数量 |
+| `exclude` | string[] | null | 排除的知识库 ID 列表 |
+| `use_hyde` | bool | null | 启用 HyDE 查询转换（null=使用配置默认值） |
+| `use_multi_query` | bool | null | 启用多查询转换（null=使用配置默认值） |
+| `use_auto_merging` | bool | null | 启用 Auto-Merging（null=使用配置默认值） |
+| `response_mode` | string | null | 答案生成模式（null=使用配置默认值） |
 
 ### 检索查询扩展功能
 
@@ -330,10 +341,10 @@ curl -X POST "http://localhost:37241/kbs/tech_tools/query" \
 HyDE (Hypothetical Document Embeddings) 使用 LLM 生成假设性文档，然后用假设性文档的 embedding 来检索真实文档：
 
 ```bash
-# 启用 HyDE（需设置 USE_HYDE=true）
+# 通过 API 参数启用 HyDE
 curl -X POST "http://localhost:37241/kbs/tech_tools/query" \
   -H "Content-Type: application/json" \
-  -d '{"query": "Python 异步编程最佳实践", "top_k": 5}'
+  -d '{"query": "Python 异步编程最佳实践", "top_k": 5, "use_hyde": true}'
 ```
 
 #### 多查询转换
@@ -341,24 +352,46 @@ curl -X POST "http://localhost:37241/kbs/tech_tools/query" \
 生成多个查询变体，减少检索遗漏：
 
 ```bash
-# 启用多查询（需设置 USE_MULTI_QUERY=true）
+# 通过 API 参数启用多查询
 curl -X POST "http://localhost:37241/kbs/tech_tools/query" \
   -H "Content-Type: application/json" \
-  -d '{"query": "如何优化 Python 性能", "top_k": 5}'
+  -d '{"query": "如何优化 Python 性能", "top_k": 5, "use_multi_query": true}'
 ```
+
+#### Auto-Merging Retriever
+
+自动合并相关子节点为父节点，提供更完整的上下文：
+
+```bash
+# 通过 API 参数启用 Auto-Merging
+curl -X POST "http://localhost:37241/kbs/tech_tools/query" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "Python 异步编程", "top_k": 5, "use_auto_merging": true}'
+```
+
+> **注意**：Auto-Merging 需要知识库使用 HierarchicalNodeParser 构建（父子节点分块）。
 
 #### Response Synthesizer
 
-答案生成模式，通过 `RESPONSE_MODE` 环境变量配置：
+答案生成模式，可通过 `response_mode` 参数动态指定：
+
+```bash
+# 使用 tree_summarize 模式
+curl -X POST "http://localhost:37241/kbs/tech_tools/query" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "Python 性能优化", "top_k": 5, "response_mode": "tree_summarize"}'
+```
 
 | 模式 | 说明 |
 |------|------|
 | `compact` | 压缩检索结果后生成答案（默认） |
 | `refine` | 迭代优化答案 |
 | `tree_summarize` | 构建答案树结构 |
-| `simple` | 简单拼接检索结果 |
+| `simple_summarize` | 简单拼接检索结果 |
 | `no_text` | 仅返回检索结果，不生成答案 |
 | `accumulate` | 累积式生成 |
+| `generation` | 仅生成答案（不使用检索结果） |
+| `compact_accumulate` | 压缩后累积式生成 |
 
 ```json
 {
