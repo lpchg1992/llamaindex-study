@@ -34,6 +34,7 @@ class QueryEngineWrapper:
         use_hyde: bool = False,
         use_multi_query: bool = False,
         response_mode: str = "compact",
+        vector_store: Optional[Any] = None,
     ):
         """
         初始化查询引擎
@@ -48,8 +49,10 @@ class QueryEngineWrapper:
             use_hyde: 是否使用 HyDE（假设文档嵌入）
             use_multi_query: 是否使用多查询转换
             response_mode: Response Synthesizer 模式
+            vector_store: 向量存储实例（用于检测 chunk_strategy）
         """
         self.index = index
+        self.vector_store = vector_store
         self.settings = get_settings()
         self.top_k = top_k or self.settings.top_k
         if use_reranker is None:
@@ -70,19 +73,29 @@ class QueryEngineWrapper:
         base_retriever = self.index.as_retriever(similarity_top_k=self.top_k * 3)
 
         if self.use_auto_merging:
-            try:
-                from llama_index.core.retrievers import AutoMergingRetriever
+            chunk_strategy = None
+            if self.vector_store and hasattr(self.vector_store, "get_chunk_strategy"):
+                chunk_strategy = self.vector_store.get_chunk_strategy()
 
-                storage_context = self.index.storage_context
-                merger = AutoMergingRetriever(
-                    base_retriever,
-                    storage_context,
-                    verbose=True,
+            if chunk_strategy and chunk_strategy != "hierarchical":
+                logger.warning(
+                    f"Auto-Merging 需要 hierarchical 策略，"
+                    f"当前 KB 使用 {chunk_strategy}，将使用普通 retriever"
                 )
-                logger.info("启用 Auto-Merging Retriever")
-                base_retriever = merger
-            except Exception as e:
-                logger.warning(f"Auto-Merging Retriever 初始化失败: {e}")
+            else:
+                try:
+                    from llama_index.core.retrievers import AutoMergingRetriever
+
+                    storage_context = self.index.storage_context
+                    merger = AutoMergingRetriever(
+                        base_retriever,
+                        storage_context,
+                        verbose=True,
+                    )
+                    logger.info("启用 Auto-Merging Retriever")
+                    base_retriever = merger
+                except Exception as e:
+                    logger.warning(f"Auto-Merging Retriever 初始化失败: {e}")
 
         if self.mode == "hybrid" or self.settings.use_hybrid_search:
             return self._create_hybrid_retriever(base_retriever)
@@ -326,6 +339,7 @@ def create_query_engine(
         use_hyde=use_hyde,
         use_multi_query=use_multi_query,
         response_mode=response_mode,
+        vector_store=vector_store,
     )
 
     return wrapper._query_engine

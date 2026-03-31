@@ -15,6 +15,10 @@ from typing import Any, List, Optional, Union
 
 from llama_index.core.schema import Document as LlamaDocument
 
+from llamaindex_study.logger import get_logger
+
+logger = get_logger(__name__)
+
 
 class VectorStoreType(str, Enum):
     """向量数据库类型"""
@@ -134,6 +138,51 @@ class LanceDBVectorStore(BaseVectorStore):
             table_name=self.table_name,
         )
 
+    def _get_metadata_path(self) -> Optional[Path]:
+        """获取元数据文件路径"""
+        uri = self._get_uri()
+        if not uri:
+            return None
+        return Path(uri) / "kb_metadata.json"
+
+    def _load_metadata(self) -> dict:
+        """加载知识库元数据"""
+        meta_path = self._get_metadata_path()
+        if not meta_path or not meta_path.exists():
+            return {}
+        try:
+            import json
+
+            with open(meta_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
+    def _save_metadata(self, metadata: dict) -> None:
+        """保存知识库元数据"""
+        meta_path = self._get_metadata_path()
+        if not meta_path:
+            return
+        try:
+            import json
+
+            meta_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(meta_path, "w", encoding="utf-8") as f:
+                json.dump(metadata, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.warning(f"保存 KB 元数据失败: {e}")
+
+    def get_chunk_strategy(self) -> str:
+        """获取知识库的分块策略"""
+        metadata = self._load_metadata()
+        return metadata.get("chunk_strategy", "sentence")
+
+    def set_chunk_strategy(self, strategy: str) -> None:
+        """设置知识库的分块策略"""
+        metadata = self._load_metadata()
+        metadata["chunk_strategy"] = strategy
+        self._save_metadata(metadata)
+
     def exists(self) -> bool:
         """检查索引是否存在"""
         uri = self._get_uri()
@@ -226,6 +275,40 @@ class LanceDBVectorStore(BaseVectorStore):
             db.drop_table(self.table_name)
             print(f"✅ 表已删除: {self.table_name}")
 
+    def delete_by_source(self, sources: List[str]) -> int:
+        """按源文件路径删除节点
+
+        Args:
+            sources: 要删除的源文件路径列表
+
+        Returns:
+            删除的节点数量
+        """
+        if not sources:
+            return 0
+
+        if not self.exists():
+            return 0
+
+        import lancedb
+
+        db = lancedb.connect(self._get_uri())
+        table = db.open_table(self.table_name)
+
+        deleted = 0
+        for source in sources:
+            try:
+                escaped_source = source.replace("'", "''")
+                result = table.delete(f"source = '{escaped_source}'")
+                if hasattr(result, "num_deleted"):
+                    deleted += result.num_deleted
+                elif hasattr(result, "count"):
+                    deleted += result.count
+            except Exception as e:
+                logger.warning(f"删除 source {source} 失败: {e}")
+
+        return deleted
+
     def get_stats(self) -> dict:
         """获取统计信息"""
         uri = self._get_uri()
@@ -284,18 +367,12 @@ class ChromaVectorStore(BaseVectorStore):
     def _get_embed_model(self):
         """获取 Embedding 模型"""
         from llama_index.core import Settings as LlamaSettings
-        from llama_index.embeddings.ollama import OllamaEmbedding
+        from llamaindex_study.ollama_utils import create_ollama_embedding
 
         if hasattr(LlamaSettings, "embed_model") and LlamaSettings.embed_model:
             return LlamaSettings.embed_model
 
-        settings = __import__(
-            "llamaindex_study.config", fromlist=["get_settings"]
-        ).get_settings()
-        return OllamaEmbedding(
-            model_name=settings.ollama_embed_model,
-            base_url=settings.ollama_base_url,
-        )
+        return create_ollama_embedding()
 
     def exists(self) -> bool:
         """检查索引是否存在"""
@@ -416,18 +493,12 @@ class QdrantVectorStore(BaseVectorStore):
     def _get_embed_model(self):
         """获取 Embedding 模型"""
         from llama_index.core import Settings as LlamaSettings
-        from llama_index.embeddings.ollama import OllamaEmbedding
+        from llamaindex_study.ollama_utils import create_ollama_embedding
 
         if hasattr(LlamaSettings, "embed_model") and LlamaSettings.embed_model:
             return LlamaSettings.embed_model
 
-        settings = __import__(
-            "llamaindex_study.config", fromlist=["get_settings"]
-        ).get_settings()
-        return OllamaEmbedding(
-            model_name=settings.ollama_embed_model,
-            base_url=settings.ollama_base_url,
-        )
+        return create_ollama_embedding()
 
     def exists(self) -> bool:
         """检查集合是否存在"""
