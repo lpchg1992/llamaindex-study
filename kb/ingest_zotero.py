@@ -202,7 +202,7 @@ def convert_pdf_to_markdown(
     pdf_path: str, item_id: int, timeout: int = 300, title: str = ""
 ) -> Optional[str]:
     """
-    使用 MinerU 或 doc2x 将 PDF 转换为 Markdown
+    使用 doc2x MCP 将 PDF 转换为 Markdown
 
     Args:
         pdf_path: PDF 文件路径
@@ -212,72 +212,80 @@ def convert_pdf_to_markdown(
     Returns:
         转换后的 Markdown 文件路径，失败返回 None
     """
+    from llamaindex_study.config import get_settings
+
     print(f"   🔄 正在转换 PDF 为 Markdown...")
+
+    settings = get_settings()
+    doc2x_api_key = getattr(settings, "doc2x_api_key", None) or os.getenv(
+        "DOC2X_API_KEY"
+    )
+
+    if not doc2x_api_key:
+        print(f"   ⚠️  doc2x API key 未配置")
+        return None
 
     markdown_content = None
 
-    # 方法 1: 尝试 MinerU MCP
     try:
-        result = subprocess.run(
-            [
-                "node",
-                "/Users/luopingcheng/.nvm/versions/node/v24.13.1/lib/node_modules/mineru-mcp/dist/index.js",
-            ],
-            input=json.dumps(
-                {
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": "tools/call",
-                    "params": {
-                        "name": "mineru_convert",
-                        "arguments": {"file_path": pdf_path},
-                    },
-                }
-            ),
-            capture_output=True,
+        proc = subprocess.Popen(
+            ["npx", "-y", "@noedgeai-org/doc2x-mcp@latest"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout,
+            env={**os.environ, "DOC2X_API_KEY": doc2x_api_key},
         )
 
-        if result.returncode == 0 and result.stdout:
-            data = json.loads(result.stdout)
-            if "result" in data and "content" in data["result"]:
-                content = data["result"]["content"]
-                if isinstance(content, str) and len(content.strip()) > 100:
-                    markdown_content = content
-                    print(f"   ✅ MinerU 转换成功")
+        init_msg = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 0,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {"name": "llamaindex-study", "version": "0.1"},
+                },
+            }
+        )
 
+        tool_msg = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "doc2x_parse_pdf_wait_text",
+                    "arguments": {"pdf_path": pdf_path},
+                },
+            }
+        )
+
+        input_data = init_msg + "\n" + tool_msg + "\n"
+        stdout, stderr = proc.communicate(input=input_data, timeout=timeout)
+
+        for line in stdout.strip().split("\n"):
+            if not line:
+                continue
+            try:
+                resp = json.loads(line)
+                if resp.get("id") == 1 and "result" in resp:
+                    content = resp["result"].get("content", [])
+                    if isinstance(content, list) and len(content) > 0:
+                        text = content[0].get("text", "")
+                        if text and len(text.strip()) > 100:
+                            markdown_content = text
+                            print(f"   ✅ doc2x 转换成功")
+                            break
+            except json.JSONDecodeError:
+                continue
+
+    except subprocess.TimeoutExpired:
+        print(f"   ❌ doc2x 转换超时")
+        proc.kill()
     except Exception as e:
-        print(f"   ⚠️  MinerU 失败: {e}")
-
-    # 方法 2: 尝试 doc2x MCP
-    if not markdown_content:
-        try:
-            result = subprocess.run(
-                [
-                    "npx",
-                    "-y",
-                    "@noedgeai-org/doc2x-mcp@latest",
-                    "convert",
-                    pdf_path,
-                    "--format",
-                    "markdown",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
-
-            if (
-                result.returncode == 0
-                and result.stdout
-                and len(result.stdout.strip()) > 100
-            ):
-                markdown_content = result.stdout
-                print(f"   ✅ doc2x 转换成功")
-
-        except Exception as e:
-            print(f"   ⚠️  doc2x 失败: {e}")
+        print(f"   ⚠️  doc2x 失败: {e}")
 
     if not markdown_content:
         print(f"   ❌ PDF 转换失败")

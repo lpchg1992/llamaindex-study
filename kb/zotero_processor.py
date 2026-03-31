@@ -457,12 +457,12 @@ class ZoteroImporter:
             if ext == ".pdf":
                 docs = self.processor.process_pdf(
                     str(file_path),
-                    metadata=base_metadata,
+                    metadata={**base_metadata, "source": str(file_path)},
                 )
             elif ext in [".docx", ".doc", ".xlsx", ".xls", ".pptx", ".md", ".txt"]:
                 docs = self.processor.process_document(
                     str(file_path),
-                    metadata=base_metadata,
+                    metadata={**base_metadata, "source": str(file_path)},
                 )
             else:
                 docs = []
@@ -517,7 +517,7 @@ class ZoteroImporter:
 
         processed_set = set(progress.processed_items) if progress else set()
 
-        stats = {"items": 0, "nodes": 0, "failed": 0}
+        stats = {"items": 0, "nodes": 0, "failed": 0, "processed_sources": []}
 
         for i, item_id in enumerate(item_ids):
             if str(item_id) in processed_set:
@@ -543,6 +543,8 @@ class ZoteroImporter:
                 nodes = self.import_item(item, vector_store, embed_model, progress)
                 stats["nodes"] += nodes
                 stats["items"] += 1
+                if item.file_path:
+                    stats["processed_sources"].append(item.file_path)
             except Exception as e:
                 print(f"   ⚠️  导入失败: {item.title[:40]} - {e}")
                 stats["failed"] += 1

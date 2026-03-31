@@ -121,6 +121,33 @@ def get_embed_model():
 def collect_files(directories: List[Path]) -> List[Path]:
     """收集所有支持的文件"""
     files = []
+    image_exts = {
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".gif",
+        ".bmp",
+        ".svg",
+        ".webp",
+        ".ico",
+        ".tiff",
+        ".tif",
+        ".heic",
+        ".avif",
+    }
+    supported_exts = {
+        ".pdf",
+        ".docx",
+        ".doc",
+        ".xlsx",
+        ".xls",
+        ".pptx",
+        ".md",
+        ".txt",
+        ".html",
+        ".htm",
+    }
+
     for directory in directories:
         if not directory.exists():
             print(f"⚠️  目录不存在: {directory}")
@@ -135,8 +162,16 @@ def collect_files(directories: List[Path]) -> List[Path]:
                 if ext in EXCLUDE_EXTENSIONS:
                     continue
 
+                # 排除图片文件
+                if ext in image_exts:
+                    continue
+
                 # 排除隐藏文件
                 if filename.startswith("."):
+                    continue
+
+                # 排除无扩展名或不在支持列表的文件
+                if not ext or ext not in supported_exts:
                     continue
 
                 files.append(file_path)
