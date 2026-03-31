@@ -52,7 +52,7 @@ docs = SimpleDirectoryReader(
 
 ```bash
 # 运行基础导入测试
-poetry run python .test_llamaindex/test_upgrade.py
+uv run python .test_llamaindex/test_upgrade.py
 
 # 完整功能测试（需要有效的 SiliconFlow API Key）
 # 编辑 .test_llamaindex/.env.test 设置有效的 API Key
@@ -62,12 +62,12 @@ poetry run python .test_llamaindex/test_upgrade.py
 
 1. 更新依赖：
 ```bash
-poetry update llama-index-core llama-index-llms-openai llama-index-embeddings-ollama
+uv update llama-index-core llama-index-llms-openai llama-index-embeddings-ollama
 ```
 
 2. 运行测试：
 ```bash
-poetry run python .test_llamaindex/test_upgrade.py
+uv run python .test_llamaindex/test_upgrade.py
 ```
 
 3. 验证核心功能（向量检索、RAG）

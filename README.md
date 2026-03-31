@@ -44,6 +44,10 @@
 | **父子节点** | HierarchicalNodeParser 支持 Auto-Merging Retriever（需启用） |
 | **混合搜索** | 向量检索 + BM25 关键词融合（需启用） |
 | **Auto-Merging Retriever** | 检索时自动合并相关子节点为父节点（需启用） |
+| **HyDE 查询转换** | 假设文档嵌入，提升检索质量（需启用） |
+| **多查询转换** | 生成多个查询变体，减少遗漏（需启用） |
+| **Response Synthesizer** | 多样化答案生成模式（compact/refine/tree_summarize） |
+| **RAG 评估** | 基于 Ragas 框架的评估指标 |
 
 ## 环境要求
 
@@ -84,7 +88,7 @@ ollama pull bge-m3
 cd ~/文档/GitHub/llamaindex-study
 
 # 安装依赖
-poetry install
+uv sync
 
 # 复制并编辑环境变量
 cp .env.example .env
@@ -113,10 +117,10 @@ ZOTERO_STORAGE_DIR=~/.llamaindex/storage/zotero
 
 ```bash
 # 启动 API 服务
-poetry run python api.py
+uv run python api.py
 
 # 启动交互式查询
-poetry run llamaindex-study
+uv run llamaindex-study
 ```
 
 ## 项目结构
@@ -218,10 +222,10 @@ curl "http://localhost:8000/tasks/abc12345"
 
 ```bash
 # 查看变更
-poetry run python -m kb.ingest_vdb --show-changes
+uv run python -m kb.ingest_vdb --show-changes
 
 # 增量同步（默认提交全部知识库）
-poetry run python -m kb.ingest_vdb
+uv run python -m kb.ingest_vdb
 ```
 
 ### 5. 知识库主题系统
@@ -236,10 +240,10 @@ poetry run python -m kb.ingest_vdb
 
 ```bash
 # 分析知识库主题
-poetry run python -m kb.scripts.analyze_kb_topics swine_nutrition
+uv run python -m kb.scripts.analyze_kb_topics swine_nutrition
 
 # 分析所有知识库并更新
-poetry run python -m kb.scripts.analyze_kb_topics --all --update
+uv run python -m kb.scripts.analyze_kb_topics --all --update
 ```
 
 ### 6. 自动路由
@@ -248,10 +252,10 @@ poetry run python -m kb.scripts.analyze_kb_topics --all --update
 
 ```bash
 # 自动选择知识库
-poetry run llamaindex-study search "猪饲料配方" --auto
+uv run llamaindex-study search "猪饲料配方" --auto
 
 # 排除指定知识库
-poetry run llamaindex-study query "如何配置 Docker" --auto --exclude tech_tools
+uv run llamaindex-study query "如何配置 Docker" --auto --exclude tech_tools
 ```
 
 ## 使用方式
@@ -260,7 +264,7 @@ poetry run llamaindex-study query "如何配置 Docker" --auto --exclude tech_to
 
 ```bash
 # 启动服务
-poetry run python api.py
+uv run python api.py
 
 # 提交 Obsidian 导入任务
 curl -X POST "http://localhost:8000/kbs/tech_tools/ingest/obsidian" \
@@ -280,38 +284,38 @@ curl -X POST "http://localhost:8000/kbs/tech_tools/search" \
 
 ```bash
 # 交互式查询
-poetry run llamaindex-study
+uv run llamaindex-study
 
 # 查看统一 CLI 帮助
-poetry run llamaindex-study --help
+uv run llamaindex-study --help
 
 # 列出知识库
-poetry run llamaindex-study kb list
+uv run llamaindex-study kb list
 
 # 查看知识库详情
-poetry run llamaindex-study kb show tech_tools
+uv run llamaindex-study kb show tech_tools
 
 # 向量检索 / RAG 问答
-poetry run llamaindex-study search tech_tools "Python 异步编程" -k 5
-poetry run llamaindex-study query tech_tools "总结当前知识库重点"
+uv run llamaindex-study search tech_tools "Python 异步编程" -k 5
+uv run llamaindex-study query tech_tools "总结当前知识库重点"
 
 # 提交导入任务
-poetry run llamaindex-study ingest obsidian tech_tools --folder-path IT
-poetry run llamaindex-study ingest file tech_tools README.md
-poetry run llamaindex-study ingest zotero zotero_nutrition --collection-name "营养"
+uv run llamaindex-study ingest obsidian tech_tools --folder-path IT
+uv run llamaindex-study ingest file tech_tools README.md
+uv run llamaindex-study ingest zotero zotero_nutrition --collection-name "营养"
 
 # 任务管理
-poetry run llamaindex-study task list
-poetry run llamaindex-study task show <task_id>
-poetry run llamaindex-study task watch <task_id>
+uv run llamaindex-study task list
+uv run llamaindex-study task show <task_id>
+uv run llamaindex-study task watch <task_id>
 
 # Obsidian / Zotero 辅助
-poetry run llamaindex-study obsidian mappings
-poetry run llamaindex-study zotero collections --limit 10
+uv run llamaindex-study obsidian mappings
+uv run llamaindex-study zotero collections --limit 10
 
 # 分类规则与管理命令
-poetry run llamaindex-study category rules list
-poetry run llamaindex-study admin tables
+uv run llamaindex-study category rules list
+uv run llamaindex-study admin tables
 ```
 
 ### Python 代码方式
@@ -392,6 +396,10 @@ print(f"结果: {task.result}")
 | `USE_HYBRID_SEARCH` | `false` | 启用混合搜索（向量 + BM25） |
 | `HYBRID_SEARCH_MODE` | `relative_score` | 混合搜索融合模式 |
 | `HYBRID_SEARCH_ALPHA` | `0.5` | 混合搜索权重 |
+| `USE_HYDE` | `false` | 启用 HyDE 查询转换 |
+| `USE_QUERY_REWRITE` | `false` | 启用 Query Rewriting |
+| `USE_MULTI_QUERY` | `false` | 启用多查询转换 |
+| `RESPONSE_MODE` | `compact` | 答案生成模式 |
 
 ### 并行 Embedding 配置
 

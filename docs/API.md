@@ -18,13 +18,13 @@
 
 ```bash
 cd ~/文档/GitHub/llamaindex-study
-poetry run python api.py
+uv run python api.py
 ```
 
  - 服务地址: `http://localhost:37241`
-- API 文档: `http://localhost:37241/docs`
-- Markdown API 文档: `http://localhost:37241/api-docs`
-- WebSocket: `ws://localhost:37241/ws/tasks`
+ - API 文档: `http://localhost:37241/docs`
+ - Markdown API 文档: `http://localhost:37241/api-docs`
+ - WebSocket: `ws://localhost:37241/ws/tasks`
 
 ---
 
@@ -320,6 +320,45 @@ curl -X POST "http://localhost:37241/kbs/tech_tools/query" \
 ```
 
 > **检索模式**：`mode` 参数支持 `vector`（默认）和 `hybrid`（向量+BM25融合）。混合搜索需设置环境变量 `USE_HYBRID_SEARCH=true`。
+>
+> **查询转换**：支持 HyDE（假设文档嵌入）、多查询转换、Query Rewriting，通过环境变量启用。
+
+### 检索查询扩展功能
+
+#### HyDE 查询转换
+
+HyDE (Hypothetical Document Embeddings) 使用 LLM 生成假设性文档，然后用假设性文档的 embedding 来检索真实文档：
+
+```bash
+# 启用 HyDE（需设置 USE_HYDE=true）
+curl -X POST "http://localhost:37241/kbs/tech_tools/query" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "Python 异步编程最佳实践", "top_k": 5}'
+```
+
+#### 多查询转换
+
+生成多个查询变体，减少检索遗漏：
+
+```bash
+# 启用多查询（需设置 USE_MULTI_QUERY=true）
+curl -X POST "http://localhost:37241/kbs/tech_tools/query" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "如何优化 Python 性能", "top_k": 5}'
+```
+
+#### Response Synthesizer
+
+答案生成模式，通过 `RESPONSE_MODE` 环境变量配置：
+
+| 模式 | 说明 |
+|------|------|
+| `compact` | 压缩检索结果后生成答案（默认） |
+| `refine` | 迭代优化答案 |
+| `tree_summarize` | 构建答案树结构 |
+| `simple` | 简单拼接检索结果 |
+| `no_text` | 仅返回检索结果，不生成答案 |
+| `accumulate` | 累积式生成 |
 
 ```json
 {
@@ -586,6 +625,39 @@ curl -X POST "http://localhost:37241/kbs/tech_tools/search" \
 | `MAX_RETRIES` | `3` | 每个端点最大重试次数 |
 | `RETRY_DELAY` | `1.0` | 重试延迟（秒） |
 | `OLLAMA_SHORT_TEXT_THRESHOLD` | `600` | 短文本优先单端点阈值（已废弃，仅保留兼容性） |
+| `EMBED_BATCH_SIZE` | `32` | Embedding 批处理大小 |
+
+### 检索配置
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `TOP_K` | `5` | 每个知识库返回的结果数量 |
+| `USE_SEMANTIC_CHUNKING` | `false` | 启用语义分块（需重建知识库） |
+| `USE_AUTO_MERGING` | `false` | 启用 Auto-Merging Retriever（需重建知识库） |
+| `USE_HYBRID_SEARCH` | `false` | 启用混合搜索（向量 + BM25） |
+| `HYBRID_SEARCH_ALPHA` | `0.5` | 混合搜索向量权重（0-1，1=仅向量） |
+| `HYBRID_SEARCH_MODE` | `relative_score` | 混合搜索融合模式 |
+| `USE_HYDE` | `false` | 启用 HyDE 查询转换 |
+| `USE_QUERY_REWRITE` | `false` | 启用 Query Rewriting |
+| `USE_MULTI_QUERY` | `false` | 启用多查询转换 |
+| `RESPONSE_MODE` | `compact` | 答案生成模式 |
+
+### Reranker 配置
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `RERANK_MODEL` | `Pro/BAAI/bge-reranker-v2-m3` | 重排序模型名称 |
+| `USE_RERANKER` | `true` | 是否启用重排序 |
+
+### 向量数据库配置
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `VECTOR_STORE_TYPE` | `lancedb` | 向量存储类型（lancedb/qdrant） |
+| `VECTOR_DB_URI` | 空 | 向量数据库 URI |
+| `VECTOR_TABLE_NAME` | `llamaindex` | 向量表名称 |
+| `QDRANT_URL` | `http://localhost:6333` | Qdrant 服务器地址 |
+| `QDRANT_API_KEY` | 空 | Qdrant API 密钥 |
 
 ---
 
@@ -613,17 +685,22 @@ curl -X POST "http://localhost:37241/kbs/tech_tools/search" \
 
 ```bash
 # 列出知识库
-poetry run llamaindex-study kb list
+uv run llamaindex-study kb list
 
 # 检索 / 问答
-poetry run llamaindex-study search tech_tools "Python 异步编程" -k 5
-poetry run llamaindex-study query tech_tools "总结当前知识库重点"
+uv run llamaindex-study search tech_tools "Python 异步编程" -k 5
+uv run llamaindex-study query tech_tools "总结当前知识库重点"
 
 # 提交导入任务
-poetry run llamaindex-study ingest obsidian tech_tools --folder-path IT
-poetry run llamaindex-study ingest file tech_tools README.md
+uv run llamaindex-study ingest obsidian tech_tools --folder-path IT
+uv run llamaindex-study ingest file tech_tools README.md
 
 # 查看任务状态
-poetry run llamaindex-study task list
-poetry run llamaindex-study task show <task_id>
+uv run llamaindex-study task list
+uv run llamaindex-study task show <task_id>
+
+# 配置管理
+uv run llamaindex-study config list
+uv run llamaindex-study config get OLLAMA_EMBED_MODEL
+uv run llamaindex-study config set USE_HYBRID_SEARCH true
 ```

@@ -118,6 +118,18 @@ class Settings:
         self.chunk_overlap: int = int(os.getenv("CHUNK_OVERLAP", "50"))
         self.embed_batch_size: int = int(os.getenv("EMBED_BATCH_SIZE", "32"))
 
+        # ========== Query Transform 配置 ==========
+        self.use_hyde: bool = os.getenv("USE_HYDE", "false").lower() == "true"
+        self.use_query_rewrite: bool = (
+            os.getenv("USE_QUERY_REWRITE", "false").lower() == "true"
+        )
+        self.use_multi_query: bool = (
+            os.getenv("USE_MULTI_QUERY", "false").lower() == "true"
+        )
+
+        # ========== Response Synthesizer 配置 ==========
+        self.response_mode: str = os.getenv("RESPONSE_MODE", "compact")
+
         # ========== Reranker 配置 ==========
         self.rerank_model: str = os.getenv("RERANK_MODEL", self._DEFAULT_RERANK_MODEL)
         self.use_reranker: bool = os.getenv("USE_RERANKER", "true").lower() == "true"

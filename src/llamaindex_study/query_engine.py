@@ -31,6 +31,9 @@ class QueryEngineWrapper:
         use_auto_merging: bool = False,
         auto_merging_threshold: float = 0.5,
         mode: str = "vector",
+        use_hyde: bool = False,
+        use_multi_query: bool = False,
+        response_mode: str = "compact",
     ):
         """
         初始化查询引擎
@@ -42,6 +45,9 @@ class QueryEngineWrapper:
             use_auto_merging: 是否使用 Auto-Merging Retriever（需要知识库使用 HierarchicalNodeParser 构建）
             auto_merging_threshold: 自动合并阈值（0-1），默认 0.5
             mode: 检索模式 ("vector", "hybrid")，默认 "vector"
+            use_hyde: 是否使用 HyDE（假设文档嵌入）
+            use_multi_query: 是否使用多查询转换
+            response_mode: Response Synthesizer 模式
         """
         self.index = index
         self.settings = get_settings()
@@ -53,6 +59,9 @@ class QueryEngineWrapper:
         self.use_auto_merging = use_auto_merging
         self.auto_merging_threshold = auto_merging_threshold
         self.mode = mode
+        self.use_hyde = use_hyde or self.settings.use_hyde
+        self.use_multi_query = use_multi_query or self.settings.use_multi_query
+        self.response_mode = response_mode or self.settings.response_mode
 
         self._query_engine = self._create_query_engine()
 
@@ -124,6 +133,7 @@ class QueryEngineWrapper:
         kwargs: dict[str, Any] = {
             "retriever": retriever,
             "top_k": self.top_k,
+            "response_mode": self.response_mode,
         }
 
         if self.use_reranker:
@@ -138,7 +148,32 @@ class QueryEngineWrapper:
             kwargs["node_postprocessors"] = [reranker]
             logger.info(f"启用 SiliconFlow Reranker: {self.settings.rerank_model}")
 
-        return self.index.as_query_engine(**kwargs)
+        base_engine = self.index.as_query_engine(**kwargs)
+
+        if self.use_hyde:
+            from llama_index.core.indices.query.query_transform import (
+                HyDEQueryTransform,
+            )
+            from llama_index.core.query_engine import TransformQueryEngine
+
+            hyde = HyDEQueryTransform(include_original=True)
+            base_engine = TransformQueryEngine(base_engine, query_transform=hyde)
+            logger.info("启用 HyDE 查询转换")
+
+        if self.use_multi_query:
+            from llama_index.core.indices.query.query_transform import (
+                MultiStepQueryTransform,
+            )
+            from llama_index.core.query_engine import MultiStepQueryEngine
+
+            step_decompose = MultiStepQueryTransform(num_steps=3)
+            base_engine = MultiStepQueryEngine(
+                query_engine=base_engine,
+                query_transform=step_decompose,
+            )
+            logger.info("启用 Multi-Query 查询转换")
+
+        return base_engine
 
     def query(self, query_str: str, stream: bool = False) -> str:
         """
@@ -250,6 +285,9 @@ def create_query_engine(
     mode: str = "vector",
     top_k: int = 5,
     use_auto_merging: bool = False,
+    use_hyde: bool = False,
+    use_multi_query: bool = False,
+    response_mode: str = "compact",
 ) -> Any:
     """
     根据知识库 ID 创建查询引擎
@@ -259,6 +297,9 @@ def create_query_engine(
         mode: 检索模式 ("vector", "hybrid")
         top_k: 返回结果数量
         use_auto_merging: 是否使用 Auto-Merging Retriever（需要知识库使用 HierarchicalNodeParser 构建）
+        use_hyde: 是否使用 HyDE（假设文档嵌入）
+        use_multi_query: 是否使用多查询转换
+        response_mode: Response Synthesizer 模式
 
     Returns:
         BaseQueryEngine: 查询引擎实例
@@ -279,6 +320,9 @@ def create_query_engine(
         use_reranker=settings.use_reranker,
         use_auto_merging=use_auto_merging,
         mode=mode,
+        use_hyde=use_hyde,
+        use_multi_query=use_multi_query,
+        response_mode=response_mode,
     )
 
     return wrapper._query_engine

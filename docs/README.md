@@ -81,6 +81,9 @@
 | 查询引擎 | `query_engine.py` | RAG 查询 |
 | 重排序 | `reranker.py` | SiliconFlow Reranker |
 | 节点解析器 | `node_parser.py` | 统一分块（语义分块、父子节点） |
+| 查询转换 | `query_transform.py` | HyDE、多查询转换 |
+| Response Synthesizer | `response_synthesizer.py` | 答案生成模式配置 |
+| RAG 评估 | `rag_evaluator.py` | Ragas 评估框架 |
 
 ### 知识库模块 (`kb/`)
 
@@ -114,29 +117,29 @@
 
 ```bash
 # 查看完整帮助
-poetry run llamaindex-study --help
+uv run llamaindex-study --help
 
 # 交互式问答
-poetry run llamaindex-study
+uv run llamaindex-study
 
 # 知识库管理
-poetry run llamaindex-study kb list
-poetry run llamaindex-study kb show <kb_id>
+uv run llamaindex-study kb list
+uv run llamaindex-study kb show <kb_id>
 
 # 导入文档
-poetry run llamaindex-study ingest obsidian <kb_id> --folder-path <folder>
-poetry run llamaindex-study ingest zotero <kb_id> --collection-name <name>
+uv run llamaindex-study ingest obsidian <kb_id> --folder-path <folder>
+uv run llamaindex-study ingest zotero <kb_id> --collection-name <name>
 
 # 检索问答
-poetry run llamaindex-study search <kb_id> "<query>"
-poetry run llamaindex-study query <kb_id> "<question>"
-poetry run llamaindex-study search "<query>" --auto  # 自动选择知识库
-poetry run llamaindex-study query "<question>" --auto  # 自动选择知识库
+uv run llamaindex-study search <kb_id> "<query>"
+uv run llamaindex-study query <kb_id> "<question>"
+uv run llamaindex-study search "<query>" --auto  # 自动选择知识库
+uv run llamaindex-study query "<question>" --auto  # 自动选择知识库
 
 # 任务管理
-poetry run llamaindex-study task list
-poetry run llamaindex-study task watch <task_id>
-poetry run llamaindex-study task delete <task_id> --cleanup  # 删除任务并清理数据
+uv run llamaindex-study task list
+uv run llamaindex-study task watch <task_id>
+uv run llamaindex-study task delete <task_id> --cleanup  # 删除任务并清理数据
 ```
 
 ## 使用示例
@@ -216,7 +219,7 @@ curl -X POST "http://localhost:8000/kbs/my_kb/query" \
 
 ### Q: API 服务如何启动？
 ```bash
-poetry run python api.py
+uv run python api.py
 ```
 - 服务地址：`http://localhost:8000`
 - API 文档：`http://localhost:8000/docs`
@@ -226,5 +229,5 @@ poetry run python api.py
 配置 Python logging 级别：
 ```bash
 export LOG_LEVEL=DEBUG
-poetry run python api.py
+uv run python api.py
 ```

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -904,6 +905,228 @@ def handle_admin_delete(args: argparse.Namespace) -> int:
     return 0
 
 
+CONFIG_OPTION_DESCRIPTIONS: dict[str, tuple[str, str]] = {
+    "SILICONFLOW_API_KEY": ("LLM", "硅基流动 API 密钥"),
+    "SILICONFLOW_BASE_URL": ("LLM", "硅基流动 API 地址"),
+    "SILICONFLOW_MODEL": ("LLM", "LLM 模型名称"),
+    "OLLAMA_EMBED_MODEL": ("Embedding", "Embedding 模型名称"),
+    "OLLAMA_BASE_URL": ("Embedding", "默认 Ollama 地址"),
+    "OLLAMA_LOCAL_URL": ("Embedding", "本地 Ollama 地址"),
+    "OLLAMA_REMOTE_URL": ("Embedding", "远程 Ollama 地址"),
+    "OLLAMA_SHORT_TEXT_THRESHOLD": ("Embedding", "短文本优先单端点阈值"),
+    "OLLAMA_FANOUT_TEXT_THRESHOLD": ("Embedding", "长文本阈值（已废弃）"),
+    "MAX_RETRIES": ("Embedding", "每个端点最大重试次数"),
+    "RETRY_DELAY": ("Embedding", "重试延迟（秒）"),
+    "OBSIDIAN_VAULT_ROOT": ("存储", "Obsidian Vault 根目录"),
+    "PERSIST_DIR": ("存储", "向量存储目录"),
+    "ZOTERO_PERSIST_DIR": ("存储", "Zotero 向量存储目录"),
+    "DATA_DIR": ("存储", "任务队列与项目数据库目录"),
+    "TOP_K": ("检索", "每个知识库返回的结果数量"),
+    "USE_SEMANTIC_CHUNKING": ("检索", "启用语义分块（需重建知识库）"),
+    "USE_AUTO_MERGING": ("检索", "启用 Auto-Merging Retriever（需重建知识库）"),
+    "USE_HYBRID_SEARCH": ("检索", "启用混合搜索（向量 + BM25）"),
+    "HYBRID_SEARCH_ALPHA": ("检索", "混合搜索向量权重（0-1）"),
+    "HYBRID_SEARCH_MODE": ("检索", "混合搜索融合模式"),
+    "USE_HYDE": ("检索", "启用 HyDE 查询转换"),
+    "USE_QUERY_REWRITE": ("检索", "启用 Query Rewriting"),
+    "USE_MULTI_QUERY": ("检索", "启用多查询转换"),
+    "RESPONSE_MODE": ("检索", "答案生成模式"),
+    "RERANK_MODEL": ("Reranker", "重排序模型名称"),
+    "USE_RERANKER": ("Reranker", "是否启用重排序"),
+    "VECTOR_STORE_TYPE": ("向量数据库", "向量存储类型（lancedb/qdrant）"),
+    "VECTOR_DB_URI": ("向量数据库", "向量数据库 URI"),
+    "VECTOR_TABLE_NAME": ("向量数据库", "向量表名称"),
+    "QDRANT_URL": ("向量数据库", "Qdrant 服务器地址"),
+    "QDRANT_API_KEY": ("向量数据库", "Qdrant API 密钥"),
+    "CHUNK_SIZE": ("任务处理", "文本分块大小"),
+    "CHUNK_OVERLAP": ("任务处理", "文本分块重叠"),
+    "EMBED_BATCH_SIZE": ("任务处理", "Embedding 批处理大小"),
+    "PROGRESS_UPDATE_INTERVAL": ("任务处理", "进度更新间隔"),
+    "MAX_CONCURRENT_TASKS": ("任务处理", "最大并发任务数"),
+}
+
+
+def handle_config_list(_: argparse.Namespace) -> int:
+    settings = get_settings()
+    categories: dict[str, list[dict[str, str]]] = {}
+    for key, (category, description) in CONFIG_OPTION_DESCRIPTIONS.items():
+        if category not in categories:
+            categories[category] = []
+        current_value = getattr(settings, key.lower(), None)
+        if current_value is None:
+            current_value = os.getenv(key, "")
+        categories[category].append(
+            {
+                "key": key,
+                "value": str(current_value) if current_value else "",
+                "description": description,
+            }
+        )
+
+    for category, items in sorted(categories.items()):
+        print(f"\n{'=' * 60}")
+        print(f"📁 {category}")
+        print(f"{'=' * 60}")
+        print(f"  {'配置项':<30} {'值':<20} {'说明'}")
+        print(f"  {'-' * 30} {'-' * 20} {'-' * 30}")
+        for item in items:
+            value = item["value"]
+            if len(value) > 18:
+                value = value[:15] + "..."
+            print(f"  {item['key']:<30} {value:<20} {item['description']}")
+    print()
+    return 0
+
+
+def handle_config_get(args: argparse.Namespace) -> int:
+    settings = get_settings()
+    key = args.key.upper()
+
+    if key in CONFIG_OPTION_DESCRIPTIONS:
+        category, description = CONFIG_OPTION_DESCRIPTIONS[key]
+        value = getattr(settings, key.lower(), None) or os.getenv(key, "")
+        print(f"配置项: {key}")
+        print(f"类别: {category}")
+        print(f"说明: {description}")
+        print(f"当前值: {value if value else '(未设置)'}")
+    else:
+        value = os.getenv(key, "")
+        if value:
+            print(f"配置项: {key}")
+            print(f"当前值: {value}")
+        else:
+            print(f"错误: 未知配置项 '{key}'")
+            return 1
+    return 0
+
+
+def handle_config_set(args: argparse.Namespace) -> int:
+    key = args.key.upper()
+    value = args.value
+
+    if key not in CONFIG_OPTION_DESCRIPTIONS:
+        print(f"警告: '{key}' 不是已知配置项，但仍会写入 .env")
+
+    env_path = PROJECT_ROOT / ".env"
+    if not env_path.exists():
+        print(f"错误: .env 文件不存在: {env_path}")
+        return 1
+
+    lines = []
+    found = False
+    if env_path.exists():
+        with open(env_path, encoding="utf-8") as f:
+            lines = f.readlines()
+
+    new_lines = []
+    key_pattern = f"{key}="
+    for line in lines:
+        if line.startswith(key_pattern):
+            stripped = line.lstrip()
+            if stripped.startswith(key_pattern):
+                new_lines.append(f"{key}={value}\n")
+                found = True
+            else:
+                new_lines.append(line)
+        else:
+            new_lines.append(line)
+
+    if not found:
+        new_lines.append(f"{key}={value}\n")
+
+    with open(env_path, "w", encoding="utf-8") as f:
+        f.writelines(new_lines)
+
+    print(f"✅ 已设置 {key}={value}")
+    print(f"   (已写入 .env 文件)")
+    print(f"\n⚠️  部分配置需要重启服务才能生效")
+    return 0
+
+
+def _env_to_attr(env_key: str) -> str:
+    """将环境变量名转换为 Settings 属性名"""
+    # 简单转换：直接尝试 lower() 开头的属性
+    attr = env_key.lower()
+    return attr
+
+
+def handle_config_get(args: argparse.Namespace) -> int:
+    """获取指定配置项的值"""
+    settings = get_settings()
+    key = args.key.upper()
+
+    # 检查是否是已知配置项
+    if key in CONFIG_OPTION_DESCRIPTIONS:
+        category, description = CONFIG_OPTION_DESCRIPTIONS[key]
+        attr = _env_to_attr(key)
+        value = getattr(settings, attr, None) or os.getenv(key, "")
+        print(f"配置项: {key}")
+        print(f"类别: {category}")
+        print(f"说明: {description}")
+        print(f"当前值: {value if value else '(未设置)'}")
+    else:
+        # 尝试直接获取
+        value = os.getenv(key, "")
+        if value:
+            print(f"配置项: {key}")
+            print(f"当前值: {value}")
+        else:
+            print(f"错误: 未知配置项 '{key}'")
+            return 1
+    return 0
+
+
+def handle_config_set(args: argparse.Namespace) -> int:
+    """设置配置项的值（写入 .env 文件）"""
+    key = args.key.upper()
+    value = args.value
+
+    # 检查是否是已知配置项
+    if key not in CONFIG_OPTION_DESCRIPTIONS:
+        print(f"警告: '{key}' 不是已知配置项，但仍会写入 .env")
+
+    # 确定 .env 文件路径
+    env_path = PROJECT_ROOT / ".env"
+    if not env_path.exists():
+        print(f"错误: .env 文件不存在: {env_path}")
+        return 1
+
+    # 读取现有内容
+    lines = []
+    found = False
+    if env_path.exists():
+        with open(env_path, encoding="utf-8") as f:
+            lines = f.readlines()
+
+    # 查找并更新或追加
+    new_lines = []
+    key_pattern = f"{key}="
+    for line in lines:
+        if line.startswith(key_pattern):
+            # 处理注释行（如 # KEY=...）
+            stripped = line.lstrip()
+            if stripped.startswith(key_pattern):
+                new_lines.append(f"{key}={value}\n")
+                found = True
+            else:
+                new_lines.append(line)
+        else:
+            new_lines.append(line)
+
+    if not found:
+        # 追加新配置
+        new_lines.append(f"{key}={value}\n")
+
+    # 写回文件
+    with open(env_path, "w", encoding="utf-8") as f:
+        f.writelines(new_lines)
+
+    print(f"✅ 已设置 {key}={value}")
+    print(f"   (已写入 .env 文件)")
+    print(f"\n⚠️  部分配置需要重启服务才能生效")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="llamaindex-study", description="LlamaIndex Study 统一 CLI"
@@ -1153,6 +1376,21 @@ def build_parser() -> argparse.ArgumentParser:
     admin_delete.add_argument("kb_id")
     admin_delete.add_argument("--yes", action="store_true")
     admin_delete.set_defaults(handler=handle_admin_delete)
+
+    config_parser = subparsers.add_parser("config", help="配置管理")
+    config_sub = config_parser.add_subparsers(dest="config_command", required=True)
+
+    config_list = config_sub.add_parser("list", help="列出所有配置选项")
+    config_list.set_defaults(handler=handle_config_list)
+
+    config_get = config_sub.add_parser("get", help="获取指定配置项的值")
+    config_get.add_argument("key", help="配置项名称（如 OLLAMA_EMBED_MODEL）")
+    config_get.set_defaults(handler=handle_config_get)
+
+    config_set = config_sub.add_parser("set", help="设置配置项的值")
+    config_set.add_argument("key", help="配置项名称（如 OLLAMA_EMBED_MODEL）")
+    config_set.add_argument("value", help="配置值")
+    config_set.set_defaults(handler=handle_config_set)
 
     return parser
 

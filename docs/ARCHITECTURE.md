@@ -121,51 +121,6 @@ def _get_embedding_with_retry(self, text: str, ep: EmbeddingEndpoint) -> Embeddi
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                        接口层 (Interface)                    │
-├─────────────────────────────────────────────────────────────┤
-│  api.py                     │  src/llamaindex_study/main.py  │
-│  - FastAPI HTTP 接口         │  - llamaindex-study CLI         │
-│  - WebSocket 推送           │                                 │
-├─────────────────────────────┼─────────────────────────────────┤
-│  kb/ingest.py               │  kb/ingest_zotero.py            │
-│  - Obsidian 批量导入        │  - Zotero 导入 (特定收藏)        │
-│                             │                                 │
-│  kb/ingest_hitech_history.py│  kb/ingest_vdb.py               │
-│  - 高新历史项目导入         │  - LanceDB 写入队列              │
-└─────────────────────────────┴─────────────────────────────────┘
-                               │
-┌──────────────────────────────▼──────────────────────────────┐
-│                     服务层 (Services)                        │
-├─────────────────────────────────────────────────────────────┤
-│  kb/services.py                                               │
-│  - KnowledgeBaseService   # 知识库管理                       │
-│  - VectorStoreService    # 向量存储                         │
-│  - ObsidianService       # Obsidian 导入                    │
-│  - ZoteroService         # Zotero 导入                      │
-│  - GenericService        # 通用文件导入                      │
-│  - SearchService         # 搜索和 RAG                       │
-└──────────────────────────────┬──────────────────────────────┘
-                               │
-┌──────────────────────────────▼──────────────────────────────┐
-│                     业务层 (Business)                       │
-├─────────────────────────────────────────────────────────────┤
-│  kb/                                                        │
-│  ├── registry.py             # 知识库注册表                   │
-│  ├── task_queue.py          # 任务队列（SQLite）             │
-│  ├── task_executor.py       # 任务执行器                     │
-│  ├── task_lock.py           # 去重锁（Semaphore）           │
-│  ├── parallel_embedding.py   # 并行 Embedding（自适应负载均衡）     │
-│  ├── ingest_vdb.py          # LanceDB 写入队列               │
-│  ├── deduplication.py        # 去重和增量同步                 │
-│  └── database.py            # SQLite 数据库管理              │
-├─────────────────────────────────────────────────────────────┤
-│  kb/ (独立脚本，非 TaskScheduler 管理)                       │
-│  ├── ingest.py              # Obsidian 批量导入脚本          │
-│  ├── ingest_zotero.py       # Zotero 导入脚本               │
-│  └── ingest_hitech_history.py # 高新历史项目导入脚本         │
-└──────────────────────────────┬──────────────────────────────┘
-                               │
-┌──────────────────────────────▼──────────────────────────────┐
 │                     核心库 (Core)                          │
 ├─────────────────────────────────────────────────────────────┤
 │  src/llamaindex_study/                                    │
@@ -177,7 +132,10 @@ def _get_embedding_with_retry(self, text: str, ep: EmbeddingEndpoint) -> Embeddi
 │  ├── vector_store.py        # 向量数据库（多后端）          │
 │  ├── query_engine.py        # 查询引擎                     │
 │  ├── reranker.py           # 重排序                       │
-│  └── node_parser.py        # 统一节点解析器               │
+│  ├── node_parser.py        # 统一节点解析器               │
+│  ├── query_transform.py    # HyDE、多查询转换、Query Rewrite│
+│  ├── response_synthesizer.py # 答案生成模式配置            │
+│  └── rag_evaluator.py      # RAG 评估（Ragas 框架）       │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -363,7 +321,7 @@ API 提交任务
 ### 文档导入流程
 
 ```
-1. CLI: poetry run llamaindex-study ingest obsidian tech_tools --folder-path IT
+1. CLI: uv run llamaindex-study ingest obsidian tech_tools --folder-path IT
    或
    API: POST /kbs/tech_tools/ingest/obsidian
 
@@ -397,19 +355,31 @@ API 提交任务
 1. API: POST /kbs/tech_tools/query
         Body: {"query": "猪营养配方设计"}
 
-2. 向量检索
+2. 查询转换（可选）
+   ├── HyDE: 生成假设性文档 → 用假设性文档检索
+   ├── Multi-Query: 生成多个查询变体 → 分别检索 → 融合结果
+   └── Query Rewrite: 改写查询 → 检索
+
+3. 向量检索
    └── index.as_retriever()
        └── similarity_top_k=15
 
-3. Rerank（可选）
+4. (可选) 混合搜索融合
+   └── BM25Retriever + QueryFusionRetriever
+
+5. (可选) Auto-Merging
+   └── 合并叶子节点到父节点
+
+6. Rerank（可选）
    └── SiliconFlowReranker
        └── top_n=5
 
-4. 生成回答
+7. 生成回答
    └── QueryEngine.query()
+       └── Response Synthesizer (compact/refine/tree_summarize/...)
        └── LLM (SiliconFlow)
 
-5. 返回结果
+8. 返回结果
    └── {"response": "...", "sources": [...]}
 ```
 
@@ -445,6 +415,16 @@ API 提交任务
 #### Auto-Merging Retriever（需启用 USE_AUTO_MERGING=true，需配合 HierarchicalNodeParser 构建的知识库）
 ```
 用户查询 → 叶子节点检索 → 合并到父节点 → 更完整的上下文
+```
+
+#### HyDE 查询转换（需启用 USE_HYDE=true）
+```
+用户查询 → LLM 生成假设性答案 → 用假设性答案的 embedding 检索真实文档
+```
+
+#### 多查询转换（需启用 USE_MULTI_QUERY=true）
+```
+用户查询 → LLM 生成 N 个查询变体 → 分别检索 → RRF 融合结果
 ```
 
 ## 数据库 Schema
@@ -628,7 +608,7 @@ def ingest_notion(kb_id: str, page_id: str):
 
 ```bash
 # 测试并行 Embedding（自适应负载均衡）
-poetry run python -c "
+uv run python -c "
 import asyncio
 from kb.parallel_embedding import get_parallel_processor
 
@@ -642,7 +622,7 @@ asyncio.run(test())
 "
 
 # 测试去重锁
-poetry run python -c "
+uv run python -c "
 import asyncio
 from kb.task_lock import DedupLock
 
@@ -655,7 +635,7 @@ asyncio.run(test())
 "
 
 # 测试任务执行器
-poetry run python -c "
+uv run python -c "
 from kb.task_executor import TaskExecutor
 executor = TaskExecutor()
 print(f'任务队列: {executor.queue}')
