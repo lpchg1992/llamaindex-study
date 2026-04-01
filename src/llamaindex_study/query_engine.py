@@ -167,14 +167,17 @@ class QueryEngineWrapper:
         )
 
         if self.use_hyde:
-            from llama_index.core.indices.query.query_transform import (
-                HyDEQueryTransform,
-            )
-            from llama_index.core.query_engine import TransformQueryEngine
+            try:
+                from llama_index.core.indices.query.query_transform import (
+                    HyDEQueryTransform,
+                )
+                from llama_index.core.query_engine import TransformQueryEngine
 
-            hyde = HyDEQueryTransform(llm=self._get_llm(), include_original=True)
-            base_engine = TransformQueryEngine(base_engine, query_transform=hyde)
-            logger.info("启用 HyDE 查询转换")
+                hyde = HyDEQueryTransform(llm=self._get_llm(), include_original=True)
+                base_engine = TransformQueryEngine(base_engine, query_transform=hyde)
+                logger.info("启用 HyDE 查询转换")
+            except Exception as e:
+                logger.warning(f"HyDE 查询转换初始化失败: {e}")
 
         if self.use_multi_query:
             try:
