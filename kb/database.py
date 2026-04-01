@@ -230,6 +230,78 @@ class DatabaseManager:
             CREATE INDEX IF NOT EXISTS idx_rules_type ON kb_category_rules(rule_type)
         """)
 
+        # 7. 模型供应商表
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS vendors (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                api_base TEXT,
+                api_key TEXT,
+                is_active INTEGER DEFAULT 1,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            )
+        """)
+
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_vendors_active ON vendors(is_active)
+        """)
+
+        cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='models'"
+        )
+        old_models_exists = cursor.fetchone() is not None
+
+        if old_models_exists:
+            cursor.execute("PRAGMA table_info(models)")
+            columns = [col[1] for col in cursor.fetchall()]
+            if "vendor" in columns and "vendor_id" not in columns:
+                logger.warning("检测到旧版 models 表，正在迁移数据...")
+                cursor.execute("ALTER TABLE models RENAME TO models_old")
+                cursor.execute("""
+                    CREATE TABLE models (
+                        id TEXT PRIMARY KEY,
+                        vendor_id TEXT NOT NULL,
+                        name TEXT NOT NULL,
+                        type TEXT NOT NULL,
+                        is_active INTEGER DEFAULT 1,
+                        is_default INTEGER DEFAULT 0,
+                        config TEXT DEFAULT '{}',
+                        created_at REAL NOT NULL,
+                        updated_at REAL NOT NULL,
+                        FOREIGN KEY (vendor_id) REFERENCES vendors(id)
+                    )
+                """)
+                cursor.execute("""
+                    INSERT INTO models (id, vendor_id, name, type, is_active, is_default, config, created_at, updated_at)
+                    SELECT id, vendor, name, type, is_active, is_default, config, created_at, updated_at FROM models_old
+                """)
+                cursor.execute("DROP TABLE models_old")
+                logger.warning("models 表迁移完成")
+
+        # 8. 模型配置表
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS models (
+                id TEXT PRIMARY KEY,
+                vendor_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                type TEXT NOT NULL,
+                is_active INTEGER DEFAULT 1,
+                is_default INTEGER DEFAULT 0,
+                config TEXT DEFAULT '{}',
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                FOREIGN KEY (vendor_id) REFERENCES vendors(id)
+            )
+        """)
+
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_models_vendor_id ON models(vendor_id)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_models_type ON models(type)
+        """)
+
         conn.commit()
 
     @contextmanager
@@ -276,6 +348,232 @@ def get_db() -> DatabaseManager:
     if _db_manager is None:
         _db_manager = DatabaseManager()
     return _db_manager
+
+
+# ==================== 模型供应商管理 ====================
+
+
+class VendorDB:
+    """模型供应商数据库操作"""
+
+    def __init__(self, db: DatabaseManager):
+        self.db = db
+
+    def upsert(
+        self,
+        vendor_id: str,
+        name: str,
+        api_base: str = None,
+        api_key: str = None,
+        is_active: bool = True,
+    ) -> bool:
+        now = time.time()
+        with self.db.get_connection() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO vendors 
+                (id, name, api_base, api_key, is_active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    name = excluded.name,
+                    api_base = excluded.api_base,
+                    api_key = excluded.api_key,
+                    is_active = excluded.is_active,
+                    updated_at = excluded.updated_at
+            """,
+                (
+                    vendor_id,
+                    name,
+                    api_base,
+                    api_key,
+                    1 if is_active else 0,
+                    now,
+                    now,
+                ),
+            )
+            return cursor.rowcount > 0
+
+    def get(self, vendor_id: str) -> Optional[Dict[str, Any]]:
+        with self.db.get_connection() as conn:
+            cursor = conn.execute("SELECT * FROM vendors WHERE id = ?", (vendor_id,))
+            row = cursor.fetchone()
+            if row:
+                return self._row_to_dict(row)
+            return None
+
+    def get_all(self, active_only: bool = True) -> List[Dict[str, Any]]:
+        with self.db.get_connection() as conn:
+            if active_only:
+                cursor = conn.execute(
+                    "SELECT * FROM vendors WHERE is_active = 1 ORDER BY name"
+                )
+            else:
+                cursor = conn.execute("SELECT * FROM vendors ORDER BY name")
+            return [self._row_to_dict(row) for row in cursor.fetchall()]
+
+    def delete(self, vendor_id: str) -> bool:
+        with self.db.get_connection() as conn:
+            cursor = conn.execute("DELETE FROM vendors WHERE id = ?", (vendor_id,))
+            return cursor.rowcount > 0
+
+    def set_active(self, vendor_id: str, is_active: bool) -> bool:
+        now = time.time()
+        with self.db.get_connection() as conn:
+            cursor = conn.execute(
+                "UPDATE vendors SET is_active = ?, updated_at = ? WHERE id = ?",
+                (1 if is_active else 0, now, vendor_id),
+            )
+            return cursor.rowcount > 0
+
+    def _row_to_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
+        return {
+            "id": row["id"],
+            "name": row["name"],
+            "api_base": row["api_base"],
+            "api_key": row["api_key"],
+            "is_active": bool(row["is_active"]),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+
+def init_vendor_db() -> VendorDB:
+    """获取供应商数据库实例"""
+    return VendorDB(get_db())
+
+
+# ==================== 模型配置管理 ====================
+
+
+class ModelDB:
+    """模型配置数据库操作"""
+
+    def __init__(self, db: DatabaseManager):
+        self.db = db
+
+    def upsert(
+        self,
+        model_id: str,
+        vendor_id: str,
+        name: str,
+        type: str,
+        is_active: bool = True,
+        is_default: bool = False,
+        config: dict = None,
+    ) -> bool:
+        now = time.time()
+        with self.db.get_connection() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO models 
+                (id, vendor_id, name, type, is_active, is_default, config, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    vendor_id = excluded.vendor_id,
+                    name = excluded.name,
+                    type = excluded.type,
+                    is_active = excluded.is_active,
+                    is_default = excluded.is_default,
+                    config = excluded.config,
+                    updated_at = excluded.updated_at
+            """,
+                (
+                    model_id,
+                    vendor_id,
+                    name,
+                    type,
+                    1 if is_active else 0,
+                    1 if is_default else 0,
+                    json.dumps(config or {}, ensure_ascii=False),
+                    now,
+                    now,
+                ),
+            )
+            return cursor.rowcount > 0
+
+    def get(self, model_id: str) -> Optional[Dict[str, Any]]:
+        with self.db.get_connection() as conn:
+            cursor = conn.execute("SELECT * FROM models WHERE id = ?", (model_id,))
+            row = cursor.fetchone()
+            if row:
+                return self._row_to_dict(row)
+            return None
+
+    def get_all(
+        self, active_only: bool = True, type: str = None
+    ) -> List[Dict[str, Any]]:
+        with self.db.get_connection() as conn:
+            if active_only and type:
+                cursor = conn.execute(
+                    "SELECT * FROM models WHERE is_active = 1 AND type = ? ORDER BY name",
+                    (type,),
+                )
+            elif active_only:
+                cursor = conn.execute(
+                    "SELECT * FROM models WHERE is_active = 1 ORDER BY type, name"
+                )
+            elif type:
+                cursor = conn.execute(
+                    "SELECT * FROM models WHERE type = ? ORDER BY name", (type,)
+                )
+            else:
+                cursor = conn.execute("SELECT * FROM models ORDER BY type, name")
+            return [self._row_to_dict(row) for row in cursor.fetchall()]
+
+    def get_by_type(self, type: str) -> List[Dict[str, Any]]:
+        return self.get_all(active_only=True, type=type)
+
+    def get_default(self, type: str = None) -> Optional[Dict[str, Any]]:
+        with self.db.get_connection() as conn:
+            if type:
+                cursor = conn.execute(
+                    "SELECT * FROM models WHERE is_default = 1 AND type = ? LIMIT 1",
+                    (type,),
+                )
+            else:
+                cursor = conn.execute(
+                    "SELECT * FROM models WHERE is_default = 1 LIMIT 1"
+                )
+            row = cursor.fetchone()
+            if row:
+                return self._row_to_dict(row)
+            return None
+
+    def delete(self, model_id: str) -> bool:
+        with self.db.get_connection() as conn:
+            cursor = conn.execute("DELETE FROM models WHERE id = ?", (model_id,))
+            return cursor.rowcount > 0
+
+    def set_default(self, model_id: str) -> bool:
+        with self.db.get_connection() as conn:
+            model = self.get(model_id)
+            if not model:
+                return False
+            conn.execute(
+                "UPDATE models SET is_default = 0 WHERE type = ?", (model["type"],)
+            )
+            cursor = conn.execute(
+                "UPDATE models SET is_default = 1 WHERE id = ?", (model_id,)
+            )
+            return cursor.rowcount > 0
+
+    def _row_to_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
+        return {
+            "id": row["id"],
+            "vendor_id": row["vendor_id"],
+            "name": row["name"],
+            "type": row["type"],
+            "is_active": bool(row["is_active"]),
+            "is_default": bool(row["is_default"]),
+            "config": json.loads(row["config"] or "{}"),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+
+def init_model_db() -> ModelDB:
+    """获取模型数据库实例"""
+    return ModelDB(get_db())
 
 
 @contextmanager

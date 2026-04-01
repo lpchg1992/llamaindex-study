@@ -8,10 +8,16 @@ __version__ = "0.1.0"
 __author__ = "lpchg1992"
 
 from llamaindex_study.config import Settings, get_settings
-from llamaindex_study.logger import get_logger, get_app_logger, get_kb_logger, get_api_logger
+from llamaindex_study.logger import (
+    get_logger,
+    get_app_logger,
+    get_kb_logger,
+    get_api_logger,
+)
 from llamaindex_study.ollama_utils import (
     create_ollama_embedding,
     configure_global_embed_model,
+    configure_embed_model_by_model_id,
     configure_llamaindex_for_siliconflow,
     BatchEmbeddingHelper,
 )
@@ -21,7 +27,11 @@ from llamaindex_study.embedding_service import (
     get_embedding_service,
     reset_embedding_service,
 )
-from llamaindex_study.reader import DocumentReader, SmartDocumentProcessor, load_and_split
+from llamaindex_study.reader import (
+    DocumentReader,
+    SmartDocumentProcessor,
+    load_and_split,
+)
 from llamaindex_study.index_builder import IndexBuilder
 from llamaindex_study.query_engine import QueryEngineWrapper, create_query_engine
 from llamaindex_study.vector_store import (
@@ -45,6 +55,7 @@ __all__ = [
     # Ollama 工具
     "create_ollama_embedding",
     "configure_global_embed_model",
+    "configure_embed_model_by_model_id",
     "configure_llamaindex_for_siliconflow",
     "BatchEmbeddingHelper",
     "OllamaEmbeddingService",

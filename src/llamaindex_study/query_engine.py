@@ -9,7 +9,6 @@ from typing import Any, Optional, List
 
 from llamaindex_study.config import get_settings
 from llamaindex_study.logger import get_logger
-from llamaindex_study.ollama_utils import configure_llamaindex_for_siliconflow
 
 logger = get_logger(__name__)
 
@@ -35,7 +34,7 @@ class QueryEngineWrapper:
         use_multi_query: bool = False,
         response_mode: str = "compact",
         vector_store: Optional[Any] = None,
-        llm_mode: Optional[str] = None,
+        model_id: Optional[str] = None,
     ):
         """
         初始化查询引擎
@@ -51,7 +50,7 @@ class QueryEngineWrapper:
             use_multi_query: 是否使用多查询转换
             response_mode: Response Synthesizer 模式
             vector_store: 向量存储实例（用于检测 chunk_strategy）
-            llm_mode: LLM 模式 ("siliconflow", "ollama")
+            model_id: 使用的模型ID (None=使用默认模型)
         """
         self.index = index
         self.vector_store = vector_store
@@ -67,7 +66,7 @@ class QueryEngineWrapper:
         self.use_hyde = use_hyde or self.settings.use_hyde
         self.use_multi_query = use_multi_query or self.settings.use_multi_query
         self.response_mode = response_mode or self.settings.response_mode
-        self.llm_mode = llm_mode
+        self.model_id = model_id
 
         self._query_engine = self._create_query_engine()
 
@@ -142,9 +141,10 @@ class QueryEngineWrapper:
         Returns:
             BaseQueryEngine: 查询引擎实例
         """
-        from llamaindex_study.ollama_utils import configure_llamaindex
+        from llamaindex_study.ollama_utils import configure_llm_by_model_id
 
-        configure_llamaindex(self.llm_mode)
+        if self.model_id:
+            configure_llm_by_model_id(self.model_id)
 
         retriever = self._create_retriever()
 
@@ -168,6 +168,7 @@ class QueryEngineWrapper:
 
         base_engine = RetrieverQueryEngine.from_args(
             retriever,
+            llm=self._get_llm(),
             **kwargs,
         )
 
@@ -294,7 +295,7 @@ class QueryEngineWrapper:
         """
         from llamaindex_study.ollama_utils import create_llm
 
-        return create_llm(mode=self.llm_mode)
+        return create_llm(model_id=self.model_id)
 
     def get_retriever(self) -> Any:
         """
@@ -327,7 +328,7 @@ def create_query_engine(
     use_hyde: bool = False,
     use_multi_query: bool = False,
     response_mode: str = "compact",
-    llm_mode: Optional[str] = None,
+    model_id: Optional[str] = None,
 ) -> Any:
     """
     根据知识库 ID 创建查询引擎
@@ -340,7 +341,7 @@ def create_query_engine(
         use_hyde: 是否使用 HyDE（假设文档嵌入）
         use_multi_query: 是否使用多查询转换
         response_mode: Response Synthesizer 模式
-        llm_mode: LLM 模式 ("siliconflow", "ollama")
+        model_id: 使用的模型ID (None=使用默认模型)
 
     Returns:
         BaseQueryEngine: 查询引擎实例
@@ -365,7 +366,7 @@ def create_query_engine(
         use_multi_query=use_multi_query,
         response_mode=response_mode,
         vector_store=vector_store,
-        llm_mode=llm_mode,
+        model_id=model_id,
     )
 
     return wrapper._query_engine

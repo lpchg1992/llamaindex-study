@@ -216,6 +216,152 @@ class Settings:
             return str(fallback)
 
 
+# ==================== 模型注册表 ====================
+
+
+class ModelRegistry:
+    """模型注册表 - 从数据库加载模型配置，支持配置回退"""
+
+    _instance: Optional["ModelRegistry"] = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+
+    def __init__(self):
+        if self._initialized:
+            return
+        self._initialized = True
+        self._models: dict[str, dict] = {}
+        self._loaded = False
+
+    def _ensure_loaded(self):
+        if self._loaded:
+            return
+        self._models.clear()
+        try:
+            from kb.database import init_model_db, init_vendor_db
+
+            vendor_db = init_vendor_db()
+            if not vendor_db.get_all(active_only=False):
+                self._seed_default_vendors(vendor_db)
+
+            model_db = init_model_db()
+            rows = model_db.get_all(active_only=False)
+            if rows:
+                for row in rows:
+                    self._models[row["id"]] = row
+                logger.debug(f"从数据库加载了 {len(self._models)} 个模型")
+            else:
+                logger.debug("数据库为空，使用配置默认值")
+                self._load_defaults_from_config()
+        except Exception as e:
+            logger.warning(f"模型数据库加载失败，使用配置默认值: {e}")
+            self._load_defaults_from_config()
+        self._loaded = True
+
+    def _seed_default_vendors(self, vendor_db):
+        settings = get_settings()
+        vendors = [
+            {
+                "vendor_id": "siliconflow",
+                "name": "SiliconFlow",
+                "api_base": settings.siliconflow_base_url,
+                "api_key": settings.siliconflow_api_key,
+            },
+            {
+                "vendor_id": "ollama",
+                "name": "Ollama",
+                "api_base": settings.ollama_base_url,
+                "api_key": None,
+            },
+        ]
+        for v in vendors:
+            vendor_db.upsert(**v)
+        logger.debug(f"已填充默认供应商: {[v['vendor_id'] for v in vendors]}")
+
+    def _load_defaults_from_config(self):
+        settings = get_settings()
+        defaults = [
+            {
+                "id": settings.siliconflow_model,
+                "vendor_id": "siliconflow",
+                "name": settings.siliconflow_model.split("/")[-1],
+                "type": "llm",
+                "is_active": True,
+                "is_default": settings.llm_mode == "siliconflow",
+                "config": {},
+            },
+            {
+                "id": settings.ollama_llm_model,
+                "vendor_id": "ollama",
+                "name": settings.ollama_llm_model,
+                "type": "llm",
+                "is_active": True,
+                "is_default": settings.llm_mode == "ollama",
+                "config": {},
+            },
+            {
+                "id": settings.ollama_embed_model,
+                "vendor_id": "ollama",
+                "name": settings.ollama_embed_model,
+                "type": "embedding",
+                "is_active": True,
+                "is_default": True,
+                "config": {},
+            },
+            {
+                "id": settings.rerank_model,
+                "vendor_id": "siliconflow",
+                "name": settings.rerank_model.split("/")[-1],
+                "type": "reranker",
+                "is_active": True,
+                "is_default": True,
+                "config": {},
+            },
+        ]
+        for model in defaults:
+            self._models[model["id"]] = model
+
+    def get_model(self, model_id: str) -> Optional[dict]:
+        self._ensure_loaded()
+        return self._models.get(model_id)
+
+    def get_by_type(self, type: str) -> list[dict]:
+        self._ensure_loaded()
+        return [
+            m
+            for m in self._models.values()
+            if m["type"] == type and m.get("is_active", True)
+        ]
+
+    def get_default(self, type: str) -> Optional[dict]:
+        self._ensure_loaded()
+        for m in self._models.values():
+            if m.get("is_default") and m["type"] == type and m.get("is_active", True):
+                return m
+        for m in self._models.values():
+            if m["type"] == type and m.get("is_active", True):
+                return m
+        return None
+
+    def list_models(self, type: str = None) -> list[dict]:
+        self._ensure_loaded()
+        if type:
+            return self.get_by_type(type)
+        return list(self._models.values())
+
+    def reload(self):
+        self._loaded = False
+        self._ensure_loaded()
+
+
+def get_model_registry() -> ModelRegistry:
+    return ModelRegistry()
+
+
 # 全局配置实例（延迟加载）
 _settings: Optional[Settings] = None
 

@@ -254,6 +254,134 @@ def submit_task_and_handle(
     return 0
 
 
+def handle_model_list(args: argparse.Namespace) -> int:
+    from llamaindex_study.config import get_model_registry
+
+    registry = get_model_registry()
+    if args.type:
+        models = registry.get_by_type(args.type)
+    else:
+        models = registry.list_models()
+    print_table(models, ["id", "vendor_id", "name", "type", "is_default", "is_active"])
+    return 0
+
+
+def handle_model_add(args: argparse.Namespace) -> int:
+    from kb.database import init_model_db, init_vendor_db
+    from llamaindex_study.config import get_model_registry
+
+    vendor_db = init_vendor_db()
+    if not vendor_db.get(args.vendor_id):
+        vendor_db.upsert(
+            vendor_id=args.vendor_id,
+            name=args.vendor_id.capitalize(),
+            is_active=True,
+        )
+
+    model_db = init_model_db()
+    name = args.name or args.model_id.split("/")[-1]
+    model_db.upsert(
+        model_id=args.model_id,
+        vendor_id=args.vendor_id,
+        name=name,
+        type=args.type,
+        is_active=True,
+        is_default=args.set_default,
+        config={},
+    )
+    if args.set_default:
+        model_db.set_default(args.model_id)
+    get_model_registry().reload()
+    model = model_db.get(args.model_id)
+    print_json(model)
+    return 0
+
+
+def handle_model_remove(args: argparse.Namespace) -> int:
+    from kb.database import init_model_db
+    from llamaindex_study.config import get_model_registry
+
+    db = init_model_db()
+    if not db.get(args.model_id):
+        raise ValueError(f"模型不存在: {args.model_id}")
+    db.delete(args.model_id)
+    get_model_registry().reload()
+    print_json({"status": "deleted", "model_id": args.model_id})
+    return 0
+
+
+def handle_model_set_default(args: argparse.Namespace) -> int:
+    from kb.database import init_model_db
+    from llamaindex_study.config import get_model_registry
+
+    db = init_model_db()
+    if not db.get(args.model_id):
+        raise ValueError(f"模型不存在: {args.model_id}")
+    db.set_default(args.model_id)
+    get_model_registry().reload()
+    print_json({"status": "success", "model_id": args.model_id})
+    return 0
+
+
+def handle_vendor_list(args: argparse.Namespace) -> int:
+    from kb.database import init_vendor_db
+
+    db = init_vendor_db()
+    vendors = db.get_all(active_only=False)
+    print_table(vendors, ["id", "name", "api_base", "is_active"])
+    return 0
+
+
+def handle_vendor_add(args: argparse.Namespace) -> int:
+    from kb.database import init_vendor_db
+
+    db = init_vendor_db()
+    db.upsert(
+        vendor_id=args.vendor_id,
+        name=args.name or args.vendor_id.capitalize(),
+        api_base=args.api_base,
+        api_key=args.api_key,
+        is_active=True,
+    )
+    vendor = db.get(args.vendor_id)
+    print_json(vendor)
+    return 0
+
+
+def handle_vendor_remove(args: argparse.Namespace) -> int:
+    from kb.database import init_vendor_db
+
+    db = init_vendor_db()
+    if not db.get(args.vendor_id):
+        raise ValueError(f"供应商不存在: {args.vendor_id}")
+    db.delete(args.vendor_id)
+    print_json({"status": "deleted", "vendor_id": args.vendor_id})
+    return 0
+
+
+def handle_vendor_set_active(args: argparse.Namespace) -> int:
+    from kb.database import init_vendor_db
+
+    db = init_vendor_db()
+    if not db.get(args.vendor_id):
+        raise ValueError(f"供应商不存在: {args.vendor_id}")
+    db.set_active(args.vendor_id, args.enable)
+    print_json(
+        {"status": "success", "vendor_id": args.vendor_id, "is_active": args.enable}
+    )
+    return 0
+    from kb.database import init_model_db
+    from llamaindex_study.config import get_model_registry
+
+    db = init_model_db()
+    if not db.get(args.model_id):
+        raise ValueError(f"模型不存在: {args.model_id}")
+    db.set_default(args.model_id)
+    get_model_registry().reload()
+    print_json({"status": "success", "model_id": args.model_id})
+    return 0
+
+
 def handle_kb_list(_: argparse.Namespace) -> int:
     print_table(
         KnowledgeBaseService.list_all(),
@@ -682,6 +810,9 @@ def handle_query(args: argparse.Namespace) -> int:
     use_multi_query = getattr(args, "use_multi_query", None)
     use_auto_merging = getattr(args, "use_auto_merging", None)
     response_mode = getattr(args, "response_mode", None)
+    model_id = getattr(args, "model_id", None)
+
+    retrieval_mode = getattr(args, "retrieval_mode", "vector")
 
     if getattr(args, "auto", False):
         from kb.services import QueryRouter
@@ -697,6 +828,8 @@ def handle_query(args: argparse.Namespace) -> int:
             use_multi_query=use_multi_query,
             use_auto_merging=use_auto_merging,
             response_mode=response_mode,
+            retrieval_mode=retrieval_mode,
+            model_id=model_id,
         )
     else:
         kb_ids = getattr(args, "kb_ids", None)
@@ -714,6 +847,8 @@ def handle_query(args: argparse.Namespace) -> int:
             use_multi_query=use_multi_query,
             use_auto_merging=use_auto_merging,
             response_mode=response_mode,
+            retrieval_mode=retrieval_mode,
+            model_id=model_id,
         )
     print_json(result)
     return 0
@@ -1438,6 +1573,63 @@ def build_parser() -> argparse.ArgumentParser:
     kb_topics_local.add_argument("--update", action="store_true", help="更新到数据库")
     kb_topics_local.set_defaults(handler=handle_kb_topics_local)
 
+    vendor_parser = subparsers.add_parser("vendor", help="供应商管理")
+    vendor_sub = vendor_parser.add_subparsers(dest="vendor_command", required=True)
+
+    vendor_list = vendor_sub.add_parser("list", help="列出所有供应商")
+    vendor_list.set_defaults(handler=handle_vendor_list)
+
+    vendor_add = vendor_sub.add_parser("add", help="添加供应商")
+    vendor_add.add_argument("vendor_id", help="供应商ID (如 siliconflow, ollama)")
+    vendor_add.add_argument("--name", help="显示名称")
+    vendor_add.add_argument("--api-base", help="API端点")
+    vendor_add.add_argument("--api-key", help="API密钥")
+    vendor_add.set_defaults(handler=handle_vendor_add)
+
+    vendor_remove = vendor_sub.add_parser("remove", help="删除供应商")
+    vendor_remove.add_argument("vendor_id", help="供应商ID")
+    vendor_remove.set_defaults(handler=handle_vendor_remove)
+
+    vendor_set_active = vendor_sub.add_parser("set-active", help="设置供应商激活状态")
+    vendor_set_active.add_argument("vendor_id", help="供应商ID")
+    vendor_set_active.add_argument("--enable", action="store_true", help="启用供应商")
+    vendor_set_active.add_argument(
+        "--disable", dest="enable", action="store_false", help="禁用供应商"
+    )
+    vendor_set_active.set_defaults(handler=handle_vendor_set_active)
+
+    model_parser = subparsers.add_parser("model", help="模型管理")
+    model_sub = model_parser.add_subparsers(dest="model_command", required=True)
+
+    model_list = model_sub.add_parser("list", help="列出所有模型")
+    model_list.add_argument(
+        "--type", choices=["llm", "embedding", "reranker"], help="按类型筛选"
+    )
+    model_list.set_defaults(handler=handle_model_list)
+
+    model_add = model_sub.add_parser("add", help="添加模型")
+    model_add.add_argument("model_id", help="模型ID (如 siliconflow/DeepSeek-V3.2)")
+    model_add.add_argument(
+        "--vendor-id", required=True, help="供应商ID (如 siliconflow, ollama)"
+    )
+    model_add.add_argument(
+        "--type",
+        required=True,
+        choices=["llm", "embedding", "reranker"],
+        help="模型类型",
+    )
+    model_add.add_argument("--name", help="显示名称")
+    model_add.add_argument("--set-default", action="store_true", help="设为默认模型")
+    model_add.set_defaults(handler=handle_model_add)
+
+    model_remove = model_sub.add_parser("remove", help="删除模型")
+    model_remove.add_argument("model_id", help="模型ID")
+    model_remove.set_defaults(handler=handle_model_remove)
+
+    model_set_default = model_sub.add_parser("set-default", help="设置默认模型")
+    model_set_default.add_argument("model_id", help="模型ID")
+    model_set_default.set_defaults(handler=handle_model_set_default)
+
     search_parser = subparsers.add_parser("search", help="检索知识库")
     search_parser.add_argument("query", nargs="*", default=None, help="查询内容")
     search_parser.add_argument("-k", "--top-k", type=int, default=5)
@@ -1504,6 +1696,17 @@ def build_parser() -> argparse.ArgumentParser:
         ],
         default=None,
         help="答案生成模式（compact=默认）",
+    )
+    query_parser.add_argument(
+        "--retrieval-mode",
+        choices=["vector", "hybrid"],
+        default="vector",
+        help="检索模式（vector=向量检索，hybrid=混合搜索）",
+    )
+    query_parser.add_argument(
+        "--model-id",
+        default=None,
+        help="使用的模型ID (如 siliconflow/DeepSeek-V3.2, ollama/lfm2.5-instruct)",
     )
     query_parser.set_defaults(handler=handle_query)
 

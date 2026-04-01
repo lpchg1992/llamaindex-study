@@ -603,10 +603,19 @@ class SearchService:
         with_metadata: bool = True,
         use_auto_merging: Optional[bool] = None,
         mode: str = "vector",
+        embed_model_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         from llamaindex_study.config import get_settings
 
-        configure_global_embed_model()
+        if embed_model_id:
+            from llamaindex_study.ollama_utils import configure_embed_model_by_model_id
+
+            configure_embed_model_by_model_id(embed_model_id)
+            from kb.parallel_embedding import get_parallel_processor
+
+            get_parallel_processor().set_model_by_model_id(embed_model_id)
+        else:
+            configure_global_embed_model()
         settings = get_settings()
 
         vs = VectorStoreService.get_vector_store(kb_id)
@@ -692,15 +701,23 @@ class SearchService:
             return vector_retriever
 
     @staticmethod
-    @staticmethod
     def search_multi(
         kb_ids: List[str],
         query: str,
         top_k: int = 5,
         use_auto_merging: Optional[bool] = None,
         mode: str = "vector",
+        embed_model_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        configure_global_embed_model()
+        if embed_model_id:
+            from llamaindex_study.ollama_utils import configure_embed_model_by_model_id
+
+            configure_embed_model_by_model_id(embed_model_id)
+            from kb.parallel_embedding import get_parallel_processor
+
+            get_parallel_processor().set_model_by_model_id(embed_model_id)
+        else:
+            configure_global_embed_model()
 
         all_results = []
         for kb_id in kb_ids:
@@ -711,6 +728,7 @@ class SearchService:
                     top_k=top_k,
                     use_auto_merging=use_auto_merging,
                     mode=mode,
+                    embed_model_id=embed_model_id,
                 )
                 for r in results:
                     r["kb_id"] = kb_id
@@ -731,11 +749,20 @@ class SearchService:
         use_multi_query: Optional[bool] = None,
         use_auto_merging: Optional[bool] = None,
         response_mode: Optional[str] = None,
-        llm_mode: Optional[str] = None,
+        model_id: Optional[str] = None,
+        embed_model_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         from llamaindex_study.query_engine import create_query_engine
 
-        configure_global_embed_model()
+        if embed_model_id:
+            from llamaindex_study.ollama_utils import configure_embed_model_by_model_id
+
+            configure_embed_model_by_model_id(embed_model_id)
+            from kb.parallel_embedding import get_parallel_processor
+
+            get_parallel_processor().set_model_by_model_id(embed_model_id)
+        else:
+            configure_global_embed_model()
         settings = get_settings()
 
         query_engine = create_query_engine(
@@ -750,7 +777,7 @@ class SearchService:
             if use_multi_query is not None
             else settings.use_multi_query,
             response_mode=response_mode or settings.response_mode,
-            llm_mode=llm_mode,
+            model_id=model_id,
         )
         logger.info(
             f"[SearchService.query] use_hyde={use_hyde}, use_multi_query={use_multi_query}, query_engine={type(query_engine).__name__}"
@@ -772,7 +799,7 @@ class SearchService:
                 use_hyde=use_hyde if use_hyde is not None else settings.use_hyde,
                 use_multi_query=False,
                 response_mode=response_mode or settings.response_mode,
-                llm_mode=llm_mode,
+                model_id=model_id,
             )
             response = query_engine.query(query)
             logger.info(
@@ -929,6 +956,7 @@ class QueryRouter:
         mode: str = "auto",
         exclude: Optional[List[str]] = None,
         use_auto_merging: Optional[bool] = None,
+        embed_model_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         if mode == "all":
             all_kbs = KnowledgeBaseService.list_all()
@@ -944,7 +972,11 @@ class QueryRouter:
         for kb_id in kb_ids:
             try:
                 results = SearchService.search(
-                    kb_id, query, top_k=top_k, use_auto_merging=use_auto_merging
+                    kb_id,
+                    query,
+                    top_k=top_k,
+                    use_auto_merging=use_auto_merging,
+                    embed_model_id=embed_model_id,
                 )
                 for r in results:
                     r["kb_id"] = kb_id
@@ -971,7 +1003,8 @@ class QueryRouter:
         use_auto_merging: Optional[bool] = None,
         response_mode: Optional[str] = None,
         retrieval_mode: str = "vector",
-        llm_mode: Optional[str] = None,
+        model_id: Optional[str] = None,
+        embed_model_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """自动路由 RAG 问答
 
@@ -985,15 +1018,24 @@ class QueryRouter:
             use_auto_merging: 启用 Auto-Merging（None=使用配置默认值）
             response_mode: 答案生成模式（None=使用配置默认值）
             retrieval_mode: 检索模式 (vector, hybrid)
-            llm_mode: LLM 模式 (siliconflow, ollama)
+            model_id: 使用的LLM模型ID (None=使用默认模型)
+            embed_model_id: 使用的Embedding模型ID (None=使用默认模型)
 
         Returns:
             RAG 问答结果
         """
-        if llm_mode:
-            from llamaindex_study.ollama_utils import configure_llamaindex
+        if model_id:
+            from llamaindex_study.ollama_utils import configure_llm_by_model_id
 
-            configure_llamaindex(llm_mode)
+            configure_llm_by_model_id(model_id)
+
+        if embed_model_id:
+            from llamaindex_study.ollama_utils import configure_embed_model_by_model_id
+
+            configure_embed_model_by_model_id(embed_model_id)
+            from kb.parallel_embedding import get_parallel_processor
+
+            get_parallel_processor().set_model_by_model_id(embed_model_id)
 
         if mode == "all":
             all_kbs = KnowledgeBaseService.list_all()
@@ -1019,6 +1061,8 @@ class QueryRouter:
                 use_multi_query=use_multi_query,
                 use_auto_merging=use_auto_merging,
                 response_mode=response_mode,
+                model_id=model_id,
+                embed_model_id=embed_model_id,
             )
 
         contexts = []
@@ -1032,111 +1076,7 @@ class QueryRouter:
                     top_k=top_k,
                     use_auto_merging=use_auto_merging,
                     mode=retrieval_mode,
-                )
-                for r in result:
-                    contexts.append(f"[{kb_id}] {r['text']}")
-                    sources.append(
-                        {
-                            "kb_id": kb_id,
-                            "text": r["text"][:200],
-                            "score": r.get("score", 0),
-                        }
-                    )
-            except Exception:
-                continue
-
-        if not contexts:
-            return {
-                "response": "在所有知识库中都没有找到相关内容",
-                "sources": [],
-                "kbs_queried": kb_ids,
-            }
-
-        context_text = "\n\n".join(contexts[:10])
-
-        prompt = f"""基于以下上下文信息回答用户问题。如果上下文中没有相关信息，请说明。
-
-上下文：
-{context_text}
-
-用户问题：{query}
-
-回答："""
-
-        try:
-            from llama_index.llms.openai import OpenAI
-
-            settings = get_settings()
-            configure_llamaindex_for_siliconflow()
-
-            client = OpenAI(
-                model=settings.siliconflow_model,
-                api_key=settings.siliconflow_api_key,
-                api_base=settings.siliconflow_base_url,
-            )
-
-            response = client.complete(prompt)
-            answer = response.text.strip()
-
-        except Exception as e:
-            logger = get_logger(__name__)
-            logger.warning(f"LLM 生成失败: {e}")
-            answer = f"（在 {', '.join(kb_ids)} 中找到 {len(contexts)} 条相关内容）"
-
-        return {
-            "response": answer,
-            "sources": sources[:top_k],
-            "kbs_queried": kb_ids,
-        }
-
-    @staticmethod
-    def query_multi(
-        kb_ids: List[str],
-        query: str,
-        top_k: int = 5,
-        use_hyde: Optional[bool] = None,
-        use_multi_query: Optional[bool] = None,
-        use_auto_merging: Optional[bool] = None,
-        response_mode: Optional[str] = None,
-        retrieval_mode: str = "vector",
-        llm_mode: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        if llm_mode:
-            from llamaindex_study.ollama_utils import configure_llamaindex
-
-            configure_llamaindex(llm_mode)
-
-        if not kb_ids:
-            return {
-                "response": "没有指定知识库",
-                "sources": [],
-                "kbs_queried": [],
-            }
-
-        if len(kb_ids) == 1:
-            return SearchService.query(
-                kb_ids[0],
-                query,
-                mode=retrieval_mode,
-                top_k=top_k,
-                use_hyde=use_hyde,
-                use_multi_query=use_multi_query,
-                use_auto_merging=use_auto_merging,
-                response_mode=response_mode,
-                llm_mode=llm_mode,
-            )
-
-        contexts = []
-        sources = []
-
-        for kb_id in kb_ids:
-            try:
-                result = SearchService.search(
-                    kb_id,
-                    query,
-                    top_k=top_k,
-                    use_auto_merging=use_auto_merging,
-                    mode=retrieval_mode,
+                    embed_model_id=embed_model_id,
                 )
                 for r in result:
                     contexts.append(f"[{kb_id}] {r['text']}")
@@ -1171,7 +1111,115 @@ class QueryRouter:
         try:
             from llamaindex_study.ollama_utils import create_llm
 
-            llm = create_llm(mode=llm_mode)
+            llm = create_llm(model_id=model_id)
+            response = llm.complete(prompt)
+            answer = response.text.strip()
+
+        except Exception as e:
+            logger = get_logger(__name__)
+            logger.warning(f"LLM 生成失败: {e}")
+            answer = f"（在 {', '.join(kb_ids)} 中找到 {len(contexts)} 条相关内容）"
+
+        return {
+            "response": answer,
+            "sources": sources[:top_k],
+            "kbs_queried": kb_ids,
+        }
+
+    @staticmethod
+    def query_multi(
+        kb_ids: List[str],
+        query: str,
+        top_k: int = 5,
+        use_hyde: Optional[bool] = None,
+        use_multi_query: Optional[bool] = None,
+        use_auto_merging: Optional[bool] = None,
+        response_mode: Optional[str] = None,
+        retrieval_mode: str = "vector",
+        model_id: Optional[str] = None,
+        embed_model_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        if model_id:
+            from llamaindex_study.ollama_utils import configure_llm_by_model_id
+
+            configure_llm_by_model_id(model_id)
+
+        if embed_model_id:
+            from llamaindex_study.ollama_utils import configure_embed_model_by_model_id
+
+            configure_embed_model_by_model_id(embed_model_id)
+            from kb.parallel_embedding import get_parallel_processor
+
+            get_parallel_processor().set_model_by_model_id(embed_model_id)
+
+        if not kb_ids:
+            return {
+                "response": "没有指定知识库",
+                "sources": [],
+                "kbs_queried": [],
+            }
+
+        if len(kb_ids) == 1:
+            return SearchService.query(
+                kb_ids[0],
+                query,
+                mode=retrieval_mode,
+                top_k=top_k,
+                use_hyde=use_hyde,
+                use_multi_query=use_multi_query,
+                use_auto_merging=use_auto_merging,
+                response_mode=response_mode,
+                model_id=model_id,
+                embed_model_id=embed_model_id,
+            )
+
+        contexts = []
+        sources = []
+
+        for kb_id in kb_ids:
+            try:
+                result = SearchService.search(
+                    kb_id,
+                    query,
+                    top_k=top_k,
+                    use_auto_merging=use_auto_merging,
+                    mode=retrieval_mode,
+                    embed_model_id=embed_model_id,
+                )
+                for r in result:
+                    contexts.append(f"[{kb_id}] {r['text']}")
+                    sources.append(
+                        {
+                            "kb_id": kb_id,
+                            "text": r["text"][:200],
+                            "score": r.get("score", 0),
+                        }
+                    )
+            except Exception:
+                continue
+
+        if not contexts:
+            return {
+                "response": "在所有知识库中都没有找到相关内容",
+                "sources": [],
+                "kbs_queried": kb_ids,
+            }
+
+        context_text = "\n\n".join(contexts[:10])
+
+        prompt = f"""基于以下上下文信息回答用户问题。如果上下文中没有相关信息，请说明。
+
+上下文：
+{context_text}
+
+用户问题：{query}
+
+回答："""
+
+        try:
+            from llamaindex_study.ollama_utils import create_llm
+
+            llm = create_llm(model_id=model_id)
             response = llm.complete(prompt)
             answer = response.text.strip()
 

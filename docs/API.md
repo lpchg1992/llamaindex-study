@@ -141,6 +141,92 @@ curl "http://localhost:37241/tasks/abc12345"
 | POST | `/search` | 向量检索（统一入口） |
 | POST | `/query` | RAG 问答（统一入口） |
 
+### 供应商管理
+
+| 方法 | 端点 | 功能 |
+|------|------|------|
+| GET | `/vendors` | 列出所有供应商 |
+| POST | `/vendors` | 创建/更新供应商 |
+| GET | `/vendors/{vendor_id}` | 获取指定供应商 |
+| DELETE | `/vendors/{vendor_id}` | 删除供应商 |
+
+**供应商示例**:
+```bash
+# 创建供应商
+curl -X POST http://localhost:37241/vendors \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": "siliconflow",
+    "name": "SiliconFlow",
+    "api_base": "https://api.siliconflow.cn/v1",
+    "api_key": "your-api-key"
+  }'
+
+# 创建供应商（Ollama不需要API Key）
+curl -X POST http://localhost:37241/vendors \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": "ollama",
+    "name": "Ollama",
+    "api_base": "http://localhost:11434"
+  }'
+```
+
+### 模型管理
+
+| 方法 | 端点 | 功能 |
+|------|------|------|
+| GET | `/models` | 列出所有模型（支持 `?type=` 筛选） |
+| POST | `/models` | 创建/更新模型（供应商不存在时自动创建） |
+| GET | `/models/{model_id}` | 获取指定模型 |
+| DELETE | `/models/{model_id}` | 删除模型 |
+| PUT | `/models/{model_id}/default` | 设置默认模型 |
+
+**模型ID格式**: `{vendor_id}/{model-name}`，如 `siliconflow/DeepSeek-V3.2`、`ollama/lfm2.5-instruct`
+
+**类型筛选**: `?type=llm`、`?type=embedding`、`?type=reranker`
+
+**示例**:
+```bash
+# 列出所有模型
+curl http://localhost:37241/models
+
+# 按类型筛选（llm/embedding/reranker）
+curl http://localhost:37241/models?type=llm
+curl http://localhost:37241/models?type=embedding
+
+# 创建 LLM 模型
+curl -X POST http://localhost:37241/models \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": "ollama/lfm2.5-thinking:latest",
+    "vendor_id": "ollama",
+    "name": "lfm2.5-thinking:latest",
+    "type": "llm",
+    "is_default": false
+  }'
+
+# 创建 Embedding 模型
+curl -X POST http://localhost:37241/models \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": "ollama/bge-m3:latest",
+    "vendor_id": "ollama",
+    "name": "bge-m3:latest",
+    "type": "embedding",
+    "is_default": true
+  }'
+
+# 使用模型查询
+curl -X POST http://localhost:37241/query \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "测试问题",
+    "kb_ids": "my_kb",
+    "model_id": "ollama/lfm2.5-thinking:latest"
+  }'
+```
+
 ### Obsidian
 
 | 方法 | 端点 | 功能 |
@@ -413,6 +499,11 @@ curl -X POST "http://localhost:37241/query" \
 curl -X POST "http://localhost:37241/query" \
   -H "Content-Type: application/json" \
   -d '{"query": "如何优化 Python 性能？", "route_mode": "auto"}'
+
+# 使用指定模型问答
+curl -X POST "http://localhost:37241/query" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "如何优化 Python 性能？", "kb_ids": "tech_tools", "model_id": "ollama/lfm2.5-thinking:latest"}'
 ```
 
 **请求参数说明：**
@@ -423,6 +514,7 @@ curl -X POST "http://localhost:37241/query" \
 | `route_mode` | string | `"general"` | 路由模式：`general`(用户选择知识库), `auto`(自动路由) |
 | `top_k` | int | `5` | 返回结果数量 |
 | `retrieval_mode` | string | `"vector"` | 检索模式：`vector` 或 `hybrid` |
+| `model_id` | string | null | 使用的模型ID（如 `siliconflow/DeepSeek-V3.2`, `ollama/lfm2.5-instruct`），不填则使用默认模型 |
 | `kb_ids` | string | null | 指定知识库 ID（逗号分隔，`route_mode=general` 时必填） |
 | `exclude` | string[] | null | 排除的知识库 ID 列表（仅 `route_mode=auto` 时有效） |
 | `use_hyde` | bool | null | 启用 HyDE 查询转换（null=使用配置默认值） |

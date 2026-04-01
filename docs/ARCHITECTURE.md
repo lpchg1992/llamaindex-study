@@ -405,6 +405,115 @@ parser = get_hierarchical_node_parser()
 | `SemanticChunker` | 基于语义的分块 | 需要启用 USE_SEMANTIC_CHUNKING |
 | `HierarchicalNodeParser` | 父子节点分块 | 启用 Auto-Merging Retriever |
 
+### 6. 模型管理系统
+
+模型管理系统提供统一的 LLM/Embedding/Reranker 模型管理，支持多供应商（siliconflow、ollama、ollama_homepc 等）。
+
+采用**供应商 + 模型**两级管理架构：
+
+- **供应商 (Vendor)**：存储供应商配置（API端点、API密钥）
+- **模型 (Model)**：存储模型配置，关联到供应商，支持三种类型：
+  - `llm`: 大语言模型（如 DeepSeek-V3.2、LFM 2.5）
+  - `embedding`: Embedding 模型（如 bge-m3）
+  - `reranker`: 重排序模型
+
+#### 核心组件
+
+| 组件 | 文件 | 说明 |
+|------|------|------|
+| `VendorDB` | `kb/database.py` | 供应商数据库操作 |
+| `ModelDB` | `kb/database.py` | 模型数据库操作 |
+| `ModelRegistry` | `src/llamaindex_study/config.py` | 模型注册表（单例） |
+| `ollama_utils` | `src/llamaindex_study/ollama_utils.py` | LLM 和 Embedding 创建配置 |
+
+#### ID规范
+
+- **供应商ID**：如 `siliconflow`, `ollama`, `ollama_homepc`
+- **模型ID**：格式 `{vendor_id}/{model-name}`，如 `siliconflow/DeepSeek-V3.2`, `ollama/bge-m3:latest`
+
+#### 核心方法
+
+**VendorDB** (`kb/database.py`):
+- `upsert()`: 创建或更新供应商
+- `get()`: 获取指定供应商
+- `get_all()`: 获取所有供应商
+- `delete()`: 删除供应商
+- `set_active()`: 设置供应商激活状态
+
+**ModelDB** (`kb/database.py`):
+- `upsert()`: 创建或更新模型
+- `get()`: 获取指定模型
+- `get_all()`: 获取所有模型
+- `get_by_type()`: 按类型获取模型
+- `get_default()`: 获取默认模型
+- `delete()`: 删除模型
+- `set_default()`: 设置默认模型
+
+**ModelRegistry** (`src/llamaindex_study/config.py`):
+- `get_model()`: 获取指定模型
+- `list_models()`: 列出所有模型
+- `get_by_type()`: 按类型获取
+- `get_default()`: 获取默认模型
+- `reload()`: 重新从数据库加载
+
+**ollama_utils** (`src/llamaindex_study/ollama_utils.py`):
+- `create_llm()`: 创建 LLM 实例（支持 model_id 参数，自动从供应商获取配置）
+- `configure_llm_by_model_id()`: 根据 model_id 配置全局 LLM
+- `configure_global_embed_model()`: 配置全局 Embedding 模型
+
+#### API 端点
+
+**供应商管理**：
+
+| 方法 | 端点 | 功能 |
+|------|------|------|
+| GET | `/vendors` | 列出所有供应商 |
+| POST | `/vendors` | 创建/更新供应商 |
+| GET | `/vendors/{vendor_id}` | 获取指定供应商 |
+| DELETE | `/vendors/{vendor_id}` | 删除供应商 |
+
+**模型管理**：
+
+| 方法 | 端点 | 功能 |
+|------|------|------|
+| GET | `/models` | 列出所有模型（支持 `?type=` 筛选） |
+| POST | `/models` | 创建/更新模型（供应商不存在时自动创建） |
+| GET | `/models/{model_id}` | 获取指定模型 |
+| DELETE | `/models/{model_id}` | 删除模型 |
+| PUT | `/models/{model_id}/default` | 设置默认模型 |
+
+**类型筛选**: `GET /models?type=llm`、`GET /models?type=embedding`、`GET /models?type=reranker`
+
+#### CLI 命令
+
+```bash
+# 供应商管理
+llamaindex-study vendor list
+llamaindex-study vendor add ollama_homepc --name "Ollama HomePC" --api-base "http://192.168.31.169:11434"
+llamaindex-study vendor remove ollama_homepc
+
+# 模型管理
+llamaindex-study model list
+llamaindex-study model list --type embedding
+llamaindex-study model add ollama/bge-m3:latest --vendor-id ollama --name "BGE-M3" --type embedding
+llamaindex-study model add ollama_homepc/bge-m3:latest --vendor-id ollama_homepc --name "BGE-M3 (HomePC)" --type embedding
+llamaindex-study model set-default ollama/bge-m3:latest
+```
+
+#### 使用示例
+
+```python
+from llamaindex_study.ollama_utils import create_llm, configure_llm_by_model_id
+
+# 方式1: 创建时指定模型（自动使用供应商配置）
+llm = create_llm(model_id="ollama/lfm2.5-thinking:latest")
+
+# 方式2: 全局配置后使用
+configure_llm_by_model_id("ollama/lfm2.5-thinking:latest")
+# 之后 create_llm() 会自动使用该模型
+```
+```
+
 ## 任务队列系统
 
 ```
@@ -748,6 +857,31 @@ CREATE TABLE kb_category_rules (
     description TEXT,
     priority INTEGER DEFAULT 0,
     PRIMARY KEY (kb_id, rule_type, pattern)
+);
+
+-- 模型供应商
+CREATE TABLE vendors (
+    id TEXT PRIMARY KEY,              -- 供应商ID: siliconflow, ollama
+    name TEXT NOT NULL,               -- 显示名称: SiliconFlow, Ollama
+    api_base TEXT,                    -- API端点
+    api_key TEXT,                     -- API密钥（Ollama不需要）
+    is_active INTEGER DEFAULT 1,      -- 是否激活
+    created_at REAL,                  -- 创建时间戳
+    updated_at REAL                   -- 更新时间戳
+);
+
+-- 模型管理
+CREATE TABLE models (
+    id TEXT PRIMARY KEY,              -- 模型ID，格式: vendor_id/model-name
+    vendor_id TEXT NOT NULL,          -- 供应商ID (FK to vendors.id)
+    name TEXT NOT NULL,               -- 显示名称或实际模型名
+    type TEXT NOT NULL,               -- 类型: llm, embedding, reranker
+    is_active INTEGER DEFAULT 1,      -- 是否激活
+    is_default INTEGER DEFAULT 0,     -- 是否默认
+    config TEXT DEFAULT '{}',         -- 其他配置(JSON)
+    created_at REAL,                  -- 创建时间戳
+    updated_at REAL,                  -- 更新时间戳
+    FOREIGN KEY (vendor_id) REFERENCES vendors(id)
 );
 ```
 

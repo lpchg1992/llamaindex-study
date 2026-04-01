@@ -89,15 +89,62 @@ class ParallelEmbeddingProcessor:
         self._chunk_queue: deque = deque()
         self._results: Dict[int, EmbeddingResult] = {}
         self._pending_count = 0
+        self._model_name: str = EMBEDDING_MODEL
 
         endpoint_info = ", ".join(f"{ep.name}:{ep.url}" for ep in self.endpoints)
         logger.info(f"并行 Embedding 处理器初始化完成，端点: {endpoint_info}")
+
+    def set_model_by_model_id(self, model_id: str) -> None:
+        """根据模型ID设置当前使用的 embedding 模型
+
+        Args:
+            model_id: 模型ID (如 ollama/bge-m3:latest, ollama_homepc/bge-m3:latest)
+        """
+        from llamaindex_study.config import get_model_registry
+        from kb.database import init_vendor_db
+
+        registry = get_model_registry()
+        model_info = registry.get_model(model_id)
+        if not model_info:
+            raise ValueError(f"模型不存在: {model_id}")
+
+        vendor_id = model_info.get("vendor_id", "")
+        vendor_db = init_vendor_db()
+        vendor_info = vendor_db.get(vendor_id) if vendor_id else None
+
+        base_url = (
+            vendor_info.get("api_base") if vendor_info else None
+        ) or settings.ollama_base_url
+
+        model_name = model_info["name"]
+        if not model_name.endswith(":latest"):
+            model_name = f"{model_name}:latest"
+
+        self._model_name = model_name
+
+        new_endpoints = []
+        for ep in self.endpoints:
+            if ep.url.rstrip("/") != base_url.rstrip("/"):
+                new_endpoints.append(
+                    EmbeddingEndpoint(f"{ep.name}({model_id})", base_url)
+                )
+            else:
+                new_endpoints.append(ep)
+
+        self.endpoints = (
+            new_endpoints
+            if len(new_endpoints) > len(self.endpoints)
+            else self.endpoints
+        )
+
+        self._models.clear()
+        logger.info(f"Embedding 模型已切换为: {model_id} ({self._model_name})")
 
     def _get_model(self, ep_url: str) -> OllamaEmbedding:
         """获取或创建 embed 模型"""
         if ep_url not in self._models:
             self._models[ep_url] = OllamaEmbedding(
-                model_name=EMBEDDING_MODEL, base_url=ep_url
+                model_name=self._model_name, base_url=ep_url
             )
         return self._models[ep_url]
 
@@ -151,9 +198,7 @@ class ParallelEmbeddingProcessor:
         """直接调用 Ollama /api/embed 端点"""
         import httpx
 
-        model_name = EMBEDDING_MODEL
-        if not model_name.endswith(":latest"):
-            model_name = f"{model_name}:latest"
+        model_name = self._model_name
 
         payload = {
             "model": model_name,

@@ -46,8 +46,14 @@ RAG 查询有两种路由方式：
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `use_hyde` | bool | null | 启用 HyDE 查询转换 |
-| `use_multi_query` | bool | null | ~~启用多查询转换~~（暂不可用） |
+| `use_multi_query` | bool | null | 启用多查询转换 |
 | `use_auto_merging` | bool | null | 启用 Auto-Merging 检索 |
+
+### 模型参数
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `model_id` | string | null | 使用的模型ID（如 `siliconflow/DeepSeek-V3.2`, `ollama/lfm2.5-instruct`），不填则使用默认模型 |
 
 ### 答案生成参数
 
@@ -124,14 +130,12 @@ POST /query
 
 ### 2. use_multi_query（多查询转换）
 
-> ⚠️ **暂不可用**：该功能因 LlamaIndex API 变更暂时无法使用。
-
 **作用**：使用 LLM 生成 N 个查询变体，分别检索后融合结果。
 
 **适用场景**：
-- ~~查询可能涉及多个方面~~
-- ~~需要减少检索遗漏~~
-- ~~复杂问题~~
+- 查询可能涉及多个方面
+- 需要减少检索遗漏
+- 复杂问题
 
 **副作用**：启用后会进行多次检索，延迟增加。
 
@@ -174,6 +178,23 @@ POST /query
 
 ---
 
+### 6. model_id（模型选择）
+
+**作用**：指定用于答案生成的 LLM 模型。
+
+**模型ID格式**：`{vendor}/{model-name}`
+
+| vendor | 示例 |
+|--------|------|
+| `siliconflow` | `siliconflow/DeepSeek-V3.2` |
+| `ollama` | `ollama/lfm2.5-thinking:latest` |
+
+**管理模型**：
+- API: `GET/POST/DELETE /models`
+- CLI: `llamaindex-study model list/add/remove/set-default`
+
+---
+
 ## UI 设计建议
 
 ### 1. 路由模式选择
@@ -211,6 +232,7 @@ POST /query
 │  ☐ Auto-Merging（需层级分块知识库）               │
 ├─────────────────────────────────────────────────────┤
 │  答案生成                                           │
+│  模型: [DeepSeek V3.2 (SiliconFlow) ▼]           │
 │  模式: [Compact ▼]                               │
 └─────────────────────────────────────────────────────┘
 ```
@@ -226,7 +248,92 @@ POST /query
 | **全面检索** | retrieval_mode=hybrid | 可能涉及多方面 |
 | **仅检索** | response_mode=no_text | 不生成答案 |
 
-### 4. 提示信息
+### 4. 模型选择
+
+模型选择下拉列表应显示所有可用的 LLM 模型，供用户选择：
+
+**获取模型列表**：
+```bash
+GET /models
+```
+
+**返回示例**：
+```json
+[
+  {
+    "id": "siliconflow/DeepSeek-V3.2",
+    "vendor": "siliconflow",
+    "name": "DeepSeek V3.2",
+    "type": "llm",
+    "is_default": true,
+    "is_active": true
+  },
+  {
+    "id": "ollama/lfm2.5-thinking:latest",
+    "vendor": "ollama",
+    "name": "LFM 2.5 Thinking",
+    "type": "llm",
+    "is_default": false,
+    "is_active": true
+  }
+]
+```
+
+**下拉列表设计建议**：
+
+```
+┌────────────────────────────────────────────────────────┐
+│  模型                                                │
+│                                                        │
+│  [DeepSeek V3.2 (SiliconFlow) ▼]                    │
+│                                                        │
+│  ├─ SiliconFlow                                      │
+│  │   └─ DeepSeek V3.2 (默认)                       │
+│  │                                              │
+│  └─ Ollama                                           │
+│      └─ LFM 2.5 Thinking                            │
+│      └─ LFM 2.5 Instruct                           │
+└────────────────────────────────────────────────────────┘
+```
+
+**分组显示**：按 vendor 分组显示模型列表，提升用户体验。
+
+**默认值**：以下拉列表应默认选中 `is_default=true` 的模型。
+
+**实现示例（JavaScript）**：
+
+```javascript
+// 获取模型列表
+const response = await fetch('/models');
+const models = await response.json();
+
+// 过滤 LLM 类型且激活的模型
+const llmModels = models.filter(m => m.type === 'llm' && m.is_active);
+
+// 按 vendor 分组
+const grouped = llmModels.reduce((acc, model) => {
+  const vendor = model.vendor;
+  if (!acc[vendor]) acc[vendor] = [];
+  acc[vendor].push(model);
+  return acc;
+}, {});
+
+// 渲染下拉列表
+const select = document.getElementById('model-select');
+Object.entries(grouped).forEach(([vendor, models]) => {
+  const group = document.createElement('optgroup');
+  group.label = vendor === 'siliconflow' ? 'SiliconFlow' : 'Ollama';
+  models.forEach(model => {
+    const option = document.createElement('option');
+    option.value = model.id;
+    option.textContent = `${model.name}${model.is_default ? ' (默认)' : ''}`;
+    group.appendChild(option);
+  });
+  select.appendChild(group);
+});
+```
+
+### 5. 提示信息
 
 ```
 💡 自动路由：系统根据问题内容自动选择相关知识库
@@ -293,6 +400,17 @@ POST /query
 }
 ```
 
+### 指定模型查询
+
+```json
+POST /query
+{
+  "query": "如何优化 Python 性能",
+  "kb_ids": "tech_tools",
+  "model_id": "ollama/lfm2.5-thinking:latest"
+}
+```
+
 ---
 
 ## 响应格式
@@ -339,9 +457,10 @@ A: 关闭 `use_hyde`、`use_auto_merging`，使用默认 `compact` 模式。
 | `--kb-ids` | `kb_ids` | 指定知识库（逗号分隔） |
 | `--exclude` | `exclude` | 排除的知识库 |
 | `--hyde` | `use_hyde=true` | HyDE 查询转换 |
-| `--multi-query` | `use_multi_query=true` | ~~多查询转换~~（暂不可用） |
+| `--multi-query` | `use_multi_query=true` | 多查询转换 |
 | `--auto-merging` | `use_auto_merging=true` | Auto-Merging |
 | `--response-mode` | `response_mode` | 答案生成模式 |
+| `--model-id` | `model_id` | 指定使用的模型ID |
 
 ---
 

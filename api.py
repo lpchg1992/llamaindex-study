@@ -158,6 +158,10 @@ class SearchRequest(BaseModel):
         "general",
         description="路由模式: general(用户选择知识库), auto(自动路由)",
     )
+    embed_model_id: Optional[str] = Field(
+        None,
+        description="使用的 Embedding 模型ID (如 ollama/bge-m3:latest)，不填则使用默认",
+    )
     kb_ids: Optional[str] = Field(
         None, description="指定知识库 ID（逗号分隔，route_mode=general 时必填）"
     )
@@ -186,9 +190,17 @@ class QueryRequest(BaseModel):
     retrieval_mode: str = Field(
         "vector", description="检索模式: vector(向量检索), hybrid(混合搜索)"
     )
+    model_id: Optional[str] = Field(
+        None,
+        description="使用的LLM模型ID (如 siliconflow/DeepSeek-V3.2, ollama/lfm2.5-instruct)，不填则使用默认模型",
+    )
+    embed_model_id: Optional[str] = Field(
+        None,
+        description="使用的Embedding模型ID (如 ollama/bge-m3:latest)，不填则使用默认模型",
+    )
     llm_mode: Optional[str] = Field(
         None,
-        description="LLM 模式: siliconflow(DeepSeek), ollama(本地模型)",
+        description="LLM 模式 (已废弃，使用 model_id): siliconflow, ollama",
     )
     kb_ids: Optional[str] = Field(
         None, description="指定知识库 ID（逗号分隔，route_mode=general 时必填）"
@@ -762,6 +774,189 @@ def delete_kb(kb_id: str):
     raise HTTPException(status_code=404, detail=f"知识库 {kb_id} 不存在")
 
 
+# ============== 模型管理接口 ==============
+
+
+class VendorInfo(BaseModel):
+    id: str
+    name: str
+    api_base: Optional[str] = None
+    api_key: Optional[str] = None
+    is_active: bool = True
+
+
+class VendorCreateRequest(BaseModel):
+    id: str = Field(..., description="供应商ID，如 siliconflow, ollama")
+    name: str = Field(..., description="供应商显示名称，如 SiliconFlow, Ollama")
+    api_base: Optional[str] = Field(None, description="API端点")
+    api_key: Optional[str] = Field(None, description="API密钥（Ollama不需要）")
+    is_active: bool = Field(True, description="是否激活")
+
+
+class ModelInfo(BaseModel):
+    id: str
+    vendor_id: str
+    name: str
+    type: str
+    is_active: bool = True
+    is_default: bool = False
+    config: dict = {}
+
+
+class ModelCreateRequest(BaseModel):
+    id: str = Field(
+        ...,
+        description="模型ID，格式: vendor/model-name (如 siliconflow/DeepSeek-V3.2)",
+    )
+    vendor_id: str = Field(..., description="供应商ID: siliconflow, ollama")
+    name: Optional[str] = Field(None, description="显示名称，不填则从ID提取")
+    type: str = Field(..., description="类型: llm, embedding, reranker")
+    is_active: bool = Field(True, description="是否激活")
+    is_default: bool = Field(False, description="是否设为默认模型")
+    config: dict = Field({}, description="其他配置")
+
+
+# ============== 供应商管理 ==============
+
+
+@app.get("/vendors", response_model=List[VendorInfo])
+def list_vendors():
+    """获取所有供应商"""
+    from kb.database import init_vendor_db
+
+    db = init_vendor_db()
+    vendors = db.get_all(active_only=False)
+    return [VendorInfo(**v) for v in vendors]
+
+
+@app.post("/vendors", response_model=VendorInfo)
+def create_vendor(req: VendorCreateRequest):
+    """创建或更新供应商"""
+    from kb.database import init_vendor_db
+
+    db = init_vendor_db()
+    db.upsert(
+        vendor_id=req.id,
+        name=req.name,
+        api_base=req.api_base,
+        api_key=req.api_key,
+        is_active=req.is_active,
+    )
+    return VendorInfo(**db.get(req.id))
+
+
+@app.get("/vendors/{vendor_id}", response_model=VendorInfo)
+def get_vendor(vendor_id: str):
+    """获取指定供应商"""
+    from kb.database import init_vendor_db
+
+    db = init_vendor_db()
+    vendor = db.get(vendor_id)
+    if not vendor:
+        raise HTTPException(status_code=404, detail=f"供应商 {vendor_id} 不存在")
+    return VendorInfo(**vendor)
+
+
+@app.delete("/vendors/{vendor_id}")
+def delete_vendor(vendor_id: str):
+    """删除供应商"""
+    from kb.database import init_vendor_db
+
+    db = init_vendor_db()
+    if not db.get(vendor_id):
+        raise HTTPException(status_code=404, detail=f"供应商 {vendor_id} 不存在")
+    db.delete(vendor_id)
+    return {"status": "deleted", "vendor_id": vendor_id}
+
+
+# ============== 模型管理 ==============
+
+
+@app.get("/models", response_model=List[ModelInfo])
+def list_models(type: Optional[str] = None):
+    """获取所有模型，或按类型筛选"""
+    from llamaindex_study.config import get_model_registry
+
+    registry = get_model_registry()
+    if type:
+        models = registry.get_by_type(type)
+    else:
+        models = registry.list_models()
+    return [ModelInfo(**m) for m in models]
+
+
+@app.post("/models", response_model=ModelInfo)
+def create_model(req: ModelCreateRequest):
+    """创建或更新模型"""
+    from kb.database import init_model_db, init_vendor_db
+
+    vendor_db = init_vendor_db()
+    if not vendor_db.get(req.vendor_id):
+        vendor_db.upsert(
+            vendor_id=req.vendor_id,
+            name=req.vendor_id.capitalize(),
+            is_active=True,
+        )
+
+    model_db = init_model_db()
+    name = req.name or req.id.split("/")[-1]
+    model_db.upsert(
+        model_id=req.id,
+        vendor_id=req.vendor_id,
+        name=name,
+        type=req.type,
+        is_active=req.is_active,
+        is_default=req.is_default,
+        config=req.config,
+    )
+    if req.is_default:
+        model_db.set_default(req.id)
+    from llamaindex_study.config import get_model_registry
+
+    get_model_registry().reload()
+    return ModelInfo(**model_db.get(req.id))
+
+
+@app.get("/models/{model_id}", response_model=ModelInfo)
+def get_model(model_id: str):
+    """获取指定模型"""
+    from llamaindex_study.config import get_model_registry
+
+    registry = get_model_registry()
+    model = registry.get_model(model_id)
+    if not model:
+        raise HTTPException(status_code=404, detail=f"模型 {model_id} 不存在")
+    return ModelInfo(**model)
+
+
+@app.delete("/models/{model_id}")
+def delete_model(model_id: str):
+    """删除模型"""
+    from kb.database import init_model_db
+    from llamaindex_study.config import get_model_registry
+
+    db = init_model_db()
+    if not db.get(model_id):
+        raise HTTPException(status_code=404, detail=f"模型 {model_id} 不存在")
+    db.delete(model_id)
+    get_model_registry().reload()
+    return {"status": "deleted", "model_id": model_id}
+
+
+@app.put("/models/{model_id}/default")
+def set_default_model(model_id: str):
+    """设置默认模型"""
+    from kb.database import init_model_db
+    from llamaindex_study.config import get_model_registry
+
+    db = init_model_db()
+    if not db.get(model_id):
+        raise HTTPException(status_code=404, detail=f"模型 {model_id} 不存在")
+    db.set_default(model_id)
+    get_model_registry().reload()
+    return {"status": "success", "model_id": model_id}
+
+
 # ============== 检索接口 ==============
 
 
@@ -776,6 +971,7 @@ def search(req: SearchRequest):
             exclude=req.exclude,
             use_auto_merging=req.use_auto_merging,
             mode="auto",
+            embed_model_id=req.embed_model_id,
         )
         return [SearchResult(**r) for r in result.get("results", [])]
 
@@ -791,6 +987,7 @@ def search(req: SearchRequest):
         req.query,
         top_k=req.top_k,
         use_auto_merging=req.use_auto_merging,
+        embed_model_id=req.embed_model_id,
     )
     return [SearchResult(**r) for r in results]
 
@@ -804,6 +1001,15 @@ def query(req: QueryRequest):
     )
 
     try:
+        model_id = req.model_id
+        if not model_id and req.llm_mode:
+            from llamaindex_study.config import get_model_registry
+
+            registry = get_model_registry()
+            default_llm = registry.get_default("llm")
+            if default_llm:
+                model_id = default_llm["id"]
+
         if req.route_mode == "auto":
             result = QueryRouter.query(
                 req.query,
@@ -815,7 +1021,8 @@ def query(req: QueryRequest):
                 use_auto_merging=req.use_auto_merging,
                 response_mode=req.response_mode,
                 retrieval_mode=req.retrieval_mode,
-                llm_mode=req.llm_mode,
+                model_id=model_id,
+                embed_model_id=req.embed_model_id,
             )
             return QueryResponse(**result)
 
@@ -837,7 +1044,8 @@ def query(req: QueryRequest):
             use_auto_merging=req.use_auto_merging,
             response_mode=req.response_mode,
             retrieval_mode=req.retrieval_mode,
-            llm_mode=req.llm_mode,
+            model_id=model_id,
+            embed_model_id=req.embed_model_id,
         )
         return QueryResponse(**result)
 

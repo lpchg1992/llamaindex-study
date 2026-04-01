@@ -85,6 +85,7 @@ llamaindex-study <command> [subcommand] [options]
   category                      分类规则
   admin                         管理命令
   config                        配置管理
+  model                         模型管理
 ```
 
 ### 交互式问答 (chat)
@@ -270,7 +271,7 @@ uv run llamaindex-study search "赖氨酸配比" --auto --exclude tech_tools,aca
 ### RAG 问答
 
 ```bash
-uv run llamaindex-study query "<问题>" [--kb-ids <kb1,kb2>] [-k <top_k>] [--auto] [--exclude <kb1,kb2>] [--hyde] [--multi-query] [--auto-merging] [--response-mode <mode>]
+uv run llamaindex-study query "<问题>" [--kb-ids <kb1,kb2>] [-k <top_k>] [--auto] [--exclude <kb1,kb2>] [--hyde] [--multi-query] [--auto-merging] [--response-mode <mode>] [--model-id <model_id>]
 ```
 
 参数说明：
@@ -284,6 +285,7 @@ uv run llamaindex-study query "<问题>" [--kb-ids <kb1,kb2>] [-k <top_k>] [--au
 | `--hyde` | 启用 HyDE 查询转换 | False |
 | `--multi-query` | 启用多查询转换 | False |
 | `--auto-merging` | 启用 Auto-Merging Retriever | False |
+| `--model-id` | 指定使用的模型 ID (如 `siliconflow/DeepSeek-V3.2`, `ollama/lfm2.5-instruct`) | 使用默认模型 |
 | `--response-mode` | 答案生成模式 | 使用配置默认值 |
 
 **答案生成模式说明**：
@@ -924,6 +926,179 @@ uv run llamaindex-study admin delete-table <kb_id> --yes
 ```bash
 # 删除向量表（需要确认）
 uv run llamaindex-study admin delete-table tech_tools --yes
+```
+
+---
+
+## 供应商管理 (vendor)
+
+供应商管理命令用于管理模型供应商（如 SiliconFlow、Ollama）。
+
+### 列出所有供应商
+
+```bash
+uv run llamaindex-study vendor list
+```
+
+输出示例：
+
+```
+id           name         api_base                       is_active
+-----------  -----------  -----------------------------  ---------
+ollama       Ollama       http://localhost:11434         True
+siliconflow  SiliconFlow  https://api.siliconflow.cn/v1  True
+```
+
+### 添加供应商
+
+```bash
+uv run llamaindex-study vendor add <vendor_id> [options]
+```
+
+参数：
+- `vendor_id`: 供应商ID，如 `siliconflow`, `ollama`
+
+选项：
+- `--name <name>`: 显示名称
+- `--api-base <url>`: API端点
+- `--api-key <key>`: API密钥（Ollama不需要）
+
+示例：
+
+```bash
+# 添加 SiliconFlow 供应商
+uv run llamaindex-study vendor add siliconflow --name "SiliconFlow" \
+  --api-base "https://api.siliconflow.cn/v1" \
+  --api-key "your-api-key"
+
+# 添加 Ollama 供应商
+uv run llamaindex-study vendor add ollama --name "Ollama" \
+  --api-base "http://localhost:11434"
+```
+
+### 删除供应商
+
+```bash
+uv run llamaindex-study vendor remove <vendor_id>
+```
+
+示例：
+
+```bash
+uv run llamaindex-study vendor remove ollama
+```
+
+### 设置供应商激活状态
+
+```bash
+uv run llamaindex-study vendor set-active <vendor_id> [--enable|--disable]
+```
+
+示例：
+
+```bash
+# 禁用供应商
+uv run llamaindex-study vendor set-active siliconflow --disable
+
+# 启用供应商
+uv run llamaindex-study vendor set-active siliconflow --enable
+```
+
+---
+
+## 模型管理 (model)
+
+模型管理命令用于管理 LLM/Embedding/Reranker 模型，支持 siliconflow、ollama 等供应商。
+
+### 列出所有模型
+
+```bash
+uv run llamaindex-study model list
+uv run llamaindex-study model list --type llm
+uv run llamaindex-study model list --type embedding
+```
+
+输出示例：
+
+```
+id                                         vendor_id      name                           type       is_default  is_active
+-----------------------------------------  -------------  -----------------------------  ---------  ----------  ---------
+ollama/bge-m3:latest                       ollama         bge-m3:latest                  embedding  True        True
+ollama_homepc/bge-m3:latest                ollama_homepc  bge-m3:latest                  embedding  False       True
+siliconflow/Pro/deepseek-ai/DeepSeek-V3.2  siliconflow    Pro/deepseek-ai/DeepSeek-V3.2  llm        True        True
+ollama/lfm2.5-thinking:latest              ollama         lfm2.5-thinking:latest         llm        False       True
+```
+
+### 添加模型
+
+```bash
+uv run llamaindex-study model add <model_id> [options]
+```
+
+参数：
+- `model_id`: 模型ID，格式 `{vendor_id}/{model-name}`，如 `siliconflow/DeepSeek-V3.2`
+
+选项：
+- `--vendor-id <id>`: 供应商ID（必填）
+- `--name <name>`: 显示名称
+- `--type <type>`: 模型类型 (`llm`, `embedding`, `reranker`)，默认 `llm`
+- `--set-default`: 设为默认模型
+
+示例：
+
+```bash
+# 添加 Ollama LLM 模型
+uv run llamaindex-study model add ollama/lfm2.5-thinking:latest \
+  --vendor-id ollama --name "LFM 2.5 Thinking" --type llm
+
+# 添加 Ollama Embedding 模型
+uv run llamaindex-study model add ollama/bge-m3:latest \
+  --vendor-id ollama --name "BGE-M3" --type embedding --set-default
+
+# 添加远程 Embedding 模型
+uv run llamaindex-study model add ollama_homepc/bge-m3:latest \
+  --vendor-id ollama_homepc --name "BGE-M3 (HomePC)" --type embedding
+
+# 添加 SiliconFlow 模型并设为默认
+uv run llamaindex-study model add siliconflow/DeepSeek-V3.2 \
+  --vendor-id siliconflow --name "DeepSeek V3.2" --type llm --set-default
+```
+
+### 删除模型
+
+```bash
+uv run llamaindex-study model remove <model_id>
+```
+
+示例：
+
+```bash
+uv run llamaindex-study model remove ollama/lfm2.5-thinking:latest
+```
+
+### 设置默认模型
+
+```bash
+uv run llamaindex-study model set-default <model_id>
+```
+
+示例：
+
+```bash
+uv run llamaindex-study model set-default siliconflow/DeepSeek-V3.2
+```
+
+### 在查询中使用指定模型
+
+```bash
+uv run llamaindex-study query <kb_id> "<question>" --model-id <model_id>
+```
+
+示例：
+
+```bash
+# 使用指定模型进行问答
+uv run llamaindex-study query tech_tools "如何优化Python性能？" --model-id ollama/lfm2.5-thinking:latest
 ```
 
 ---

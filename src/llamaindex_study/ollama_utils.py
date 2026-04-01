@@ -132,11 +132,15 @@ def create_parallel_ollama_embedding():
     return create_parallel_embedding_model()
 
 
-def configure_llamaindex_for_siliconflow() -> None:
+def _configure_siliconflow_llm(
+    model: str,
+    api_key: str,
+    api_base: str,
+) -> None:
     """
     配置 LlamaIndex 使用 SiliconFlow LLM
 
-    注册 DeepSeek-V3.2 模型的上下文窗口和 tokenizer，
+    注册模型的上下文窗口和 tokenizer，
     使 LlamaIndex 能正确处理该模型。
     """
     from llama_index.llms.openai import OpenAI
@@ -144,19 +148,31 @@ def configure_llamaindex_for_siliconflow() -> None:
     import tiktoken
     import tiktoken.model as tm
 
-    settings = get_settings()
-
-    model_key = settings.siliconflow_model
-    if model_key not in ALL_AVAILABLE_MODELS:
-        ALL_AVAILABLE_MODELS[model_key] = 128000
+    if model not in ALL_AVAILABLE_MODELS:
+        ALL_AVAILABLE_MODELS[model] = 128000
 
     try:
-        tiktoken.encoding_for_model(model_key)
+        tiktoken.encoding_for_model(model)
     except KeyError:
-        tm.MODEL_TO_ENCODING[model_key] = "cl100k_base"
+        tm.MODEL_TO_ENCODING[model] = "cl100k_base"
 
     LlamaSettings.llm = OpenAI(
-        model=model_key,
+        model=model,
+        api_key=api_key,
+        api_base=api_base,
+    )
+
+
+def configure_llamaindex_for_siliconflow() -> None:
+    """
+    配置 LlamaIndex 使用 SiliconFlow LLM（使用默认配置）
+
+    注册 DeepSeek-V3.2 模型的上下文窗口和 tokenizer，
+    使 LlamaIndex 能正确处理该模型。
+    """
+    settings = get_settings()
+    _configure_siliconflow_llm(
+        model=settings.siliconflow_model,
         api_key=settings.siliconflow_api_key,
         api_base=settings.siliconflow_base_url,
     )
@@ -240,6 +256,7 @@ class RetryableOllama:
 
 
 def create_llm(
+    model_id: Optional[str] = None,
     mode: Optional[str] = None,
     model: Optional[str] = None,
 ) -> Any:
@@ -247,13 +264,51 @@ def create_llm(
     根据配置创建 LLM 实例
 
     Args:
+        model_id: 模型ID (如 siliconflow/DeepSeek-V3.2, ollama/lfm2.5-instruct)，优先于 mode 参数
         mode: LLM 模式，可选 "siliconflow" 或 "ollama"。如果为 None，使用配置默认值。
-        model: 模型名称。对于 ollama 模式，可选 "tomng/lfm2.5-instruct:1.2b" 或 "lfm2.5-thinking:latest"。
-               对于 siliconflow 模式，忽略此参数。
+        model: 模型名称 (已废弃，使用 model_id 代替)
 
     Returns:
         LLM 实例
     """
+    if model_id:
+        from llamaindex_study.config import get_model_registry
+        from kb.database import init_vendor_db
+
+        registry = get_model_registry()
+        model_info = registry.get_model(model_id)
+        if not model_info:
+            raise ValueError(f"模型不存在: {model_id}")
+
+        vendor_id = model_info.get("vendor_id", "")
+        vendor_db = init_vendor_db()
+        vendor_info = vendor_db.get(vendor_id) if vendor_id else None
+
+        if vendor_id == "ollama":
+            base_url = (
+                vendor_info.get("api_base") if vendor_info else None
+            ) or get_settings().ollama_base_url
+            return RetryableOllama(
+                model=model_info["name"],
+                base_url=base_url,
+                max_retries=5,
+                initial_delay=2.0,
+                backoff_factor=1.5,
+            )
+        else:
+            api_key = (
+                vendor_info.get("api_key") if vendor_info else None
+            ) or get_settings().siliconflow_api_key
+            api_base = (
+                vendor_info.get("api_base") if vendor_info else None
+            ) or get_settings().siliconflow_base_url
+            _configure_siliconflow_llm(
+                model=model_info["name"],
+                api_key=api_key,
+                api_base=api_base,
+            )
+            return LlamaSettings.llm
+
     from llama_index.llms.openai import OpenAI
 
     settings = get_settings()
@@ -271,6 +326,84 @@ def create_llm(
     else:
         configure_llamaindex_for_siliconflow()
         return LlamaSettings.llm
+
+
+def configure_llm_by_model_id(model_id: str) -> None:
+    """根据模型ID配置全局 LLM
+
+    Args:
+        model_id: 模型ID (如 siliconflow/DeepSeek-V3.2, ollama/lfm2.5-instruct)
+    """
+    from llamaindex_study.config import get_model_registry
+    from kb.database import init_vendor_db
+
+    registry = get_model_registry()
+    model_info = registry.get_model(model_id)
+    if not model_info:
+        raise ValueError(f"模型不存在: {model_id}")
+
+    vendor_id = model_info.get("vendor_id", "")
+    vendor_db = init_vendor_db()
+    vendor_info = vendor_db.get(vendor_id) if vendor_id else None
+
+    if vendor_id == "ollama":
+        from llama_index.llms.ollama import Ollama
+
+        base_url = (
+            vendor_info.get("api_base") if vendor_info else None
+        ) or get_settings().ollama_base_url
+        llm = Ollama(
+            model=model_info["name"],
+            base_url=base_url,
+            request_timeout=300,
+        )
+        LlamaSettings.llm = llm
+    else:
+        api_key = (
+            vendor_info.get("api_key") if vendor_info else None
+        ) or get_settings().siliconflow_api_key
+        api_base = (
+            vendor_info.get("api_base") if vendor_info else None
+        ) or get_settings().siliconflow_base_url
+        _configure_siliconflow_llm(
+            model=model_info["name"],
+            api_key=api_key,
+            api_base=api_base,
+        )
+
+
+def configure_embed_model_by_model_id(model_id: str) -> OllamaEmbedding:
+    """根据模型ID配置全局 Embedding 模型
+
+    Args:
+        model_id: 模型ID (如 ollama/bge-m3:latest, ollama_homepc/bge-m3:latest)
+
+    Returns:
+        OllamaEmbedding 实例
+    """
+    from llamaindex_study.config import get_model_registry
+    from kb.database import init_vendor_db
+
+    registry = get_model_registry()
+    model_info = registry.get_model(model_id)
+    if not model_info:
+        raise ValueError(f"模型不存在: {model_id}")
+
+    vendor_id = model_info.get("vendor_id", "")
+    vendor_db = init_vendor_db()
+    vendor_info = vendor_db.get(vendor_id) if vendor_id else None
+
+    base_url = (
+        vendor_info.get("api_base") if vendor_info else None
+    ) or get_settings().ollama_base_url
+
+    embed_model = OllamaEmbedding(
+        model_name=model_info["name"],
+        base_url=base_url,
+    )
+
+    LlamaSettings.embed_model = embed_model
+    return embed_model
 
 
 def configure_llamaindex(mode: Optional[str] = None) -> None:
@@ -432,6 +565,7 @@ __all__ = [
     "create_ollama_embedding",
     "create_parallel_ollama_embedding",
     "configure_global_embed_model",
+    "configure_embed_model_by_model_id",
     "configure_llamaindex_for_siliconflow",
     "BatchEmbeddingHelper",
 ]
