@@ -38,8 +38,8 @@
 ### 检索查询
 | 方法 | 端点 | 功能 |
 |------|------|------|
-| POST | `/kbs/{kb_id}/search` | 向量检索 |
-| POST | `/kbs/{kb_id}/query` | RAG 问答 |
+| POST | `/search` | 向量检索 |
+| POST | `/query` | RAG 问答 |
 
 ### 文档导入
 | 方法 | 端点 | 功能 |

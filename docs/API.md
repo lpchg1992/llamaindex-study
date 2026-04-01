@@ -659,8 +659,8 @@ if r["result"]:
     print(f"远程: {r['result']['endpoint_stats']['远程']}")
 
 # 4. 搜索
-r = requests.post(f"{BASE}/kbs/tech_tools/search",
-    json={"query": "Python", "top_k": 5})
+r = requests.post(f"{BASE}/search",
+    json={"query": "Python", "kb_ids": "tech_tools", "top_k": 5})
 print(r.json())
 ```
 
