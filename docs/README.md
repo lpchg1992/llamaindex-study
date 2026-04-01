@@ -9,6 +9,15 @@
 | [docs/ARCHITECTURE.md](ARCHITECTURE.md) | 项目架构文档，包含模块说明、设计模式、数据流 |
 | [docs/CLI.md](CLI.md) | CLI 命令行工具完整使用文档 |
 
+## 当前状态（导入链路）
+
+- CLI / API / 脚本导入入口已统一到 `kb/import_service.py`
+- 导入类型统一为 `generic`、`obsidian`、`zotero`
+- 导入语义统一：
+  - `async_mode`：控制同步/异步执行
+  - `refresh_topics`：控制导入后 topics 刷新
+- 任务执行统一走任务队列与执行器，写入统一走 LanceDB 串行写队列
+
 ## 快速导航
 
 ### 新手入门
@@ -45,9 +54,11 @@
 | 方法 | 端点 | 功能 |
 |------|------|------|
 | POST | `/kbs/{kb_id}/ingest` | 通用文件导入 |
-| POST | `/kbs/{kb_id}/ingest/obsidian` | Obsidian 导入（并行） |
+| POST | `/kbs/{kb_id}/ingest/obsidian` | Obsidian 导入 |
 | POST | `/kbs/{kb_id}/ingest/zotero` | Zotero 导入 |
 | POST | `/kbs/{kb_id}/initialize` | 初始化知识库（清空数据） |
+| GET | `/kbs/{kb_id}/topics` | 查看知识库 topics |
+| POST | `/kbs/{kb_id}/topics/refresh` | 手动刷新 topics |
 
 ### 任务队列
 | 方法 | 端点 | 功能 |
@@ -96,13 +107,14 @@
 | 模块 | 文件 | 说明 |
 |------|------|------|
 | 服务层 | `services.py` | **统一入口** |
+| 导入编排 | `import_service.py` | 导入统一编排（CLI/API/脚本共用） |
 | 知识库注册 | `registry.py` | 知识库定义、路径配置 |
 | 数据库 | `database.py` | SQLite 数据库管理 |
 | 任务队列 | `task_queue.py` | SQLite 持久化 |
 | 任务执行器 | `task_executor.py` | 异步执行 |
 | 任务锁 | `task_lock.py` | 去重锁（Semaphore） |
 | 并行 Embedding | `parallel_embedding.py` | 自适应负载均衡 |
-| 写入队列 | `ingest_vdb.py` | LanceDB 写入队列 |
+| 写入队列 | `lancedb_write_queue.py` | LanceDB 写入队列 |
 | 去重管理 | `deduplication.py` | 增量同步 |
 | 文档处理 | `document_processor.py` | 统一文档解析 |
 | Obsidian | `obsidian_processor.py` | Obsidian 导入 |

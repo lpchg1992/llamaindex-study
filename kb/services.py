@@ -6,6 +6,7 @@
 """
 
 import asyncio
+import re
 import time
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Callable
@@ -137,6 +138,7 @@ class ObsidianService:
         recursive: bool = True,
         exclude_patterns: Optional[List[str]] = None,
         rebuild: bool = False,
+        refresh_topics: bool = True,
         progress_callback: Optional[Callable[[str], None]] = None,
     ) -> Dict[str, Any]:
         """
@@ -207,6 +209,11 @@ class ObsidianService:
                     f"完成！导入 {stats.get('files', 0)} 个文件，{stats.get('nodes', 0)} 个节点"
                 )
 
+            if refresh_topics:
+                KnowledgeBaseService.refresh_topics(
+                    kb_id=kb_id,
+                    has_new_docs=stats.get("files", 0) > 0,
+                )
             return stats
 
         finally:
@@ -244,6 +251,7 @@ class ZoteroService:
         collection_id: Optional[str] = None,
         collection_name: Optional[str] = None,
         rebuild: bool = False,
+        refresh_topics: bool = True,
         progress_callback: Optional[Callable[[str], None]] = None,
     ) -> Dict[str, Any]:
         """
@@ -314,6 +322,11 @@ class ZoteroService:
                     f"完成！导入 {stats.get('items', 0)} 篇文献，{stats.get('nodes', 0)} 个节点"
                 )
 
+            if refresh_topics:
+                KnowledgeBaseService.refresh_topics(
+                    kb_id=kb_id,
+                    has_new_docs=stats.get("items", 0) > 0,
+                )
             return stats
 
         finally:
@@ -327,6 +340,7 @@ class GenericService:
     def import_file(
         kb_id: str,
         path: str,
+        refresh_topics: bool = True,
         progress_callback: Optional[Callable[[str], None]] = None,
     ) -> Dict[str, Any]:
         """
@@ -364,6 +378,11 @@ class GenericService:
                     f"完成！导入 {stats.get('files', 0)} 个文件，{stats.get('nodes', 0)} 个节点"
                 )
 
+            if refresh_topics:
+                KnowledgeBaseService.refresh_topics(
+                    kb_id=kb_id,
+                    has_new_docs=stats.get("files", 0) > 0,
+                )
             return stats
 
         except Exception as e:
@@ -488,7 +507,23 @@ class KnowledgeBaseService:
         else:
             info["status"] = "not_found"
 
+        kb_meta = init_kb_meta_db().get(kb_id)
+        info["topics"] = kb_meta.get("topics", []) if kb_meta else []
+        info["tags"] = kb_meta.get("tags", []) if kb_meta else []
+
         return info
+
+    @staticmethod
+    def get_topics(kb_id: str) -> List[str]:
+        from kb.database import init_kb_meta_db
+
+        return init_kb_meta_db().get_topics(kb_id)
+
+    @staticmethod
+    def refresh_topics(kb_id: str, has_new_docs: bool = True) -> List[str]:
+        from kb.topic_analyzer import analyze_and_update_topics
+
+        return analyze_and_update_topics(kb_id, has_new_docs=has_new_docs)
 
     @staticmethod
     def sync_from_registry(kb_id: str, source_type: str = "obsidian") -> bool:
@@ -849,6 +884,9 @@ class QueryRouter:
         if not kb_ids:
             kb_ids = QueryRouter._keyword_route(query, kbs)
 
+        if not kb_ids:
+            kb_ids = QueryRouter._fallback_route(query, kbs)
+
         return kb_ids[:top_k]
 
     @staticmethod
@@ -897,7 +935,7 @@ class QueryRouter:
                     "max_tokens": 100,
                     "temperature": 0.3,
                 },
-                timeout=60.0,
+                timeout=20.0,
             )
             resp.raise_for_status()
             data = resp.json()
@@ -918,8 +956,7 @@ class QueryRouter:
     @staticmethod
     def _keyword_route(query: str, kbs: List[Dict[str, Any]]) -> List[str]:
         """使用关键词匹配进行知识库路由（仅基于 topics）"""
-        query_lower = query.lower()
-        query_words = set(query_lower.replace(",", " ").split())
+        query_words = QueryRouter._tokenize_query(query)
 
         scores: Dict[str, float] = {}
 
@@ -931,13 +968,13 @@ class QueryRouter:
 
             score = 0.0
             for word in query_words:
-                if len(word) < 2:
+                if len(word) < 1:
                     continue
                 for topic in topics:
                     topic_lower = topic.lower()
                     if word in topic_lower:
                         score += 1.0
-                    if topic_lower in word:
+                    if len(topic_lower) >= 2 and topic_lower in word:
                         score += 0.5
 
             if score > 0:
@@ -948,6 +985,52 @@ class QueryRouter:
 
         sorted_kbs = sorted(scores.items(), key=lambda x: x[1], reverse=True)
         return [kb_id for kb_id, _ in sorted_kbs]
+
+    @staticmethod
+    def _tokenize_query(query: str) -> List[str]:
+        query_lower = query.lower().strip()
+        tokens = {w for w in query_lower.replace(",", " ").split() if w}
+        chinese_segments = re.findall(r"[\u4e00-\u9fff]+", query_lower)
+        for seg in chinese_segments:
+            tokens.add(seg)
+            if len(seg) > 1:
+                for i in range(len(seg) - 1):
+                    tokens.add(seg[i : i + 2])
+        return [t for t in tokens if t]
+
+    @staticmethod
+    def _fallback_route(query: str, kbs: List[Dict[str, Any]]) -> List[str]:
+        tokens = QueryRouter._tokenize_query(query)
+        scores: Dict[str, float] = {}
+        for kb in kbs:
+            kb_id = kb["id"]
+            kb_name = str(kb.get("name", "")).lower()
+            kb_desc = str(kb.get("description", "")).lower()
+            kb_topics = [str(t).lower() for t in (kb.get("topics") or [])]
+            score = 0.0
+            for token in tokens:
+                if token in kb_name:
+                    score += 1.0
+                if token in kb_desc:
+                    score += 0.8
+                for topic in kb_topics:
+                    if token in topic:
+                        score += 1.2
+            if score > 0:
+                scores[kb_id] = score
+
+        if scores:
+            sorted_kbs = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+            return [kb_id for kb_id, _ in sorted_kbs]
+
+        indexed_kbs = sorted(
+            [kb for kb in kbs if int(kb.get("row_count", 0) or 0) > 0],
+            key=lambda kb: int(kb.get("row_count", 0) or 0),
+            reverse=True,
+        )
+        if indexed_kbs:
+            return [kb["id"] for kb in indexed_kbs]
+        return [kb["id"] for kb in kbs]
 
     @staticmethod
     def search(
@@ -990,6 +1073,87 @@ class QueryRouter:
             "results": all_results[:top_k],
             "kbs_queried": kb_ids,
             "query": query,
+        }
+
+    @staticmethod
+    def _resolve_kb_ids(
+        query: str,
+        mode: str,
+        exclude: Optional[List[str]] = None,
+    ) -> List[str]:
+        if mode == "all":
+            all_kbs = KnowledgeBaseService.list_all()
+            exclude = exclude or []
+            return [kb["id"] for kb in all_kbs if kb["id"] not in exclude]
+        return QueryRouter.route(query, exclude=exclude)
+
+    @staticmethod
+    def _query_across_kbs(
+        kb_ids: List[str],
+        query: str,
+        top_k: int = 5,
+        use_auto_merging: Optional[bool] = None,
+        retrieval_mode: str = "vector",
+        model_id: Optional[str] = None,
+        embed_model_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        contexts = []
+        sources = []
+
+        for kb_id in kb_ids:
+            try:
+                result = SearchService.search(
+                    kb_id,
+                    query,
+                    top_k=top_k,
+                    use_auto_merging=use_auto_merging,
+                    mode=retrieval_mode,
+                    embed_model_id=embed_model_id,
+                )
+                for r in result:
+                    contexts.append(f"[{kb_id}] {r['text']}")
+                    sources.append(
+                        {
+                            "kb_id": kb_id,
+                            "text": r["text"][:200],
+                            "score": r.get("score", 0),
+                        }
+                    )
+            except Exception:
+                continue
+
+        if not contexts:
+            return {
+                "response": "在所有知识库中都没有找到相关内容",
+                "sources": [],
+                "kbs_queried": kb_ids,
+            }
+
+        context_text = "\n\n".join(contexts[:10])
+        prompt = f"""基于以下上下文信息回答用户问题。如果上下文中没有相关信息，请说明。
+
+上下文：
+{context_text}
+
+用户问题：{query}
+
+回答："""
+
+        try:
+            from llamaindex_study.ollama_utils import create_llm
+
+            llm = create_llm(model_id=model_id)
+            response = llm.complete(prompt)
+            answer = response.text.strip()
+        except Exception as e:
+            logger = get_logger(__name__)
+            logger.warning(f"LLM 生成失败: {e}")
+            answer = f"（在 {', '.join(kb_ids)} 中找到 {len(contexts)} 条相关内容）"
+
+        return {
+            "response": answer,
+            "sources": sources[:top_k],
+            "kbs_queried": kb_ids,
         }
 
     @staticmethod
@@ -1037,12 +1201,11 @@ class QueryRouter:
 
             get_parallel_processor().set_model_by_model_id(embed_model_id)
 
-        if mode == "all":
-            all_kbs = KnowledgeBaseService.list_all()
-            exclude = exclude or []
-            kb_ids = [kb["id"] for kb in all_kbs if kb["id"] not in exclude]
-        else:
-            kb_ids = QueryRouter.route(query, exclude=exclude)
+        kb_ids = QueryRouter._resolve_kb_ids(
+            query=query,
+            mode=mode,
+            exclude=exclude,
+        )
 
         if not kb_ids:
             return {
@@ -1065,66 +1228,15 @@ class QueryRouter:
                 embed_model_id=embed_model_id,
             )
 
-        contexts = []
-        sources = []
-
-        for kb_id in kb_ids:
-            try:
-                result = SearchService.search(
-                    kb_id,
-                    query,
-                    top_k=top_k,
-                    use_auto_merging=use_auto_merging,
-                    mode=retrieval_mode,
-                    embed_model_id=embed_model_id,
-                )
-                for r in result:
-                    contexts.append(f"[{kb_id}] {r['text']}")
-                    sources.append(
-                        {
-                            "kb_id": kb_id,
-                            "text": r["text"][:200],
-                            "score": r.get("score", 0),
-                        }
-                    )
-            except Exception:
-                continue
-
-        if not contexts:
-            return {
-                "response": "在所有知识库中都没有找到相关内容",
-                "sources": [],
-                "kbs_queried": kb_ids,
-            }
-
-        context_text = "\n\n".join(contexts[:10])
-
-        prompt = f"""基于以下上下文信息回答用户问题。如果上下文中没有相关信息，请说明。
-
-上下文：
-{context_text}
-
-用户问题：{query}
-
-回答："""
-
-        try:
-            from llamaindex_study.ollama_utils import create_llm
-
-            llm = create_llm(model_id=model_id)
-            response = llm.complete(prompt)
-            answer = response.text.strip()
-
-        except Exception as e:
-            logger = get_logger(__name__)
-            logger.warning(f"LLM 生成失败: {e}")
-            answer = f"（在 {', '.join(kb_ids)} 中找到 {len(contexts)} 条相关内容）"
-
-        return {
-            "response": answer,
-            "sources": sources[:top_k],
-            "kbs_queried": kb_ids,
-        }
+        return QueryRouter._query_across_kbs(
+            kb_ids=kb_ids,
+            query=query,
+            top_k=top_k,
+            use_auto_merging=use_auto_merging,
+            retrieval_mode=retrieval_mode,
+            model_id=model_id,
+            embed_model_id=embed_model_id,
+        )
 
     @staticmethod
     def query_multi(
@@ -1173,66 +1285,15 @@ class QueryRouter:
                 embed_model_id=embed_model_id,
             )
 
-        contexts = []
-        sources = []
-
-        for kb_id in kb_ids:
-            try:
-                result = SearchService.search(
-                    kb_id,
-                    query,
-                    top_k=top_k,
-                    use_auto_merging=use_auto_merging,
-                    mode=retrieval_mode,
-                    embed_model_id=embed_model_id,
-                )
-                for r in result:
-                    contexts.append(f"[{kb_id}] {r['text']}")
-                    sources.append(
-                        {
-                            "kb_id": kb_id,
-                            "text": r["text"][:200],
-                            "score": r.get("score", 0),
-                        }
-                    )
-            except Exception:
-                continue
-
-        if not contexts:
-            return {
-                "response": "在所有知识库中都没有找到相关内容",
-                "sources": [],
-                "kbs_queried": kb_ids,
-            }
-
-        context_text = "\n\n".join(contexts[:10])
-
-        prompt = f"""基于以下上下文信息回答用户问题。如果上下文中没有相关信息，请说明。
-
-上下文：
-{context_text}
-
-用户问题：{query}
-
-回答："""
-
-        try:
-            from llamaindex_study.ollama_utils import create_llm
-
-            llm = create_llm(model_id=model_id)
-            response = llm.complete(prompt)
-            answer = response.text.strip()
-
-        except Exception as e:
-            logger = get_logger(__name__)
-            logger.warning(f"LLM 生成失败: {e}")
-            answer = f"（在 {', '.join(kb_ids)} 中找到 {len(contexts)} 条相关内容）"
-
-        return {
-            "response": answer,
-            "sources": sources[:top_k],
-            "kbs_queried": kb_ids,
-        }
+        return QueryRouter._query_across_kbs(
+            kb_ids=kb_ids,
+            query=query,
+            top_k=top_k,
+            use_auto_merging=use_auto_merging,
+            retrieval_mode=retrieval_mode,
+            model_id=model_id,
+            embed_model_id=embed_model_id,
+        )
 
 
 class TaskService:

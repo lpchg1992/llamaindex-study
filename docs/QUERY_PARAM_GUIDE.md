@@ -456,11 +456,15 @@ A: 关闭 `use_hyde`、`use_auto_merging`，使用默认 `compact` 模式。
 | `--auto` | `route_mode="auto"` | 自动路由 |
 | `--kb-ids` | `kb_ids` | 指定知识库（逗号分隔） |
 | `--exclude` | `exclude` | 排除的知识库 |
-| `--hyde` | `use_hyde=true` | HyDE 查询转换 |
-| `--multi-query` | `use_multi_query=true` | 多查询转换 |
-| `--auto-merging` | `use_auto_merging=true` | Auto-Merging |
+| `--hyde` | `use_hyde=true` | 显式开启 HyDE 查询转换 |
+| `--no-hyde` | `use_hyde=false` | 显式关闭 HyDE 查询转换 |
+| `--multi-query` | `use_multi_query=true` | 显式开启多查询转换 |
+| `--no-multi-query` | `use_multi_query=false` | 显式关闭多查询转换 |
+| `--auto-merging` | `use_auto_merging=true` | 显式开启 Auto-Merging |
+| `--no-auto-merging` | `use_auto_merging=false` | 显式关闭 Auto-Merging |
 | `--response-mode` | `response_mode` | 答案生成模式 |
 | `--model-id` | `model_id` | 指定使用的模型ID |
+| `--embed-model-id` | `embed_model_id` | 指定 Embedding 模型ID |
 
 ---
 

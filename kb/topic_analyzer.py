@@ -24,9 +24,13 @@ class TopicAnalyzer:
     def extract_topics(
         self, documents: List[str], use_llm: bool = True
     ) -> List[Tuple[str, float]]:
+        if not documents:
+            return []
         if use_llm:
-            return self._llm_extract_topics(documents)
-        return []
+            llm_topics = self._llm_extract_topics(documents)
+            if llm_topics:
+                return llm_topics
+        return self._stat_extract_topics(documents)
 
     def _clean_text(self, text: str) -> str:
         text = re.sub(r"!\[\[.*?\]\]", "", text)
@@ -99,6 +103,56 @@ class TopicAnalyzer:
         except Exception as e:
             logger.warning(f"LLM topic 提取失败: {e}")
             return []
+
+    def _tokenize_text(self, text: str) -> List[str]:
+        cleaned = self._clean_text(text)
+        pattern = r"[\u4e00-\u9fff]{2,}|[A-Za-z][A-Za-z0-9_-]{2,}"
+        tokens = re.findall(pattern, cleaned)
+        normalized: List[str] = []
+        stopwords = self._get_stopwords()
+        for token in tokens:
+            token = token.strip()
+            if re.match(r"^[A-Za-z]", token):
+                token = token.lower()
+            if token.lower() in stopwords:
+                continue
+            if self._is_garbage(token):
+                continue
+            normalized.append(token)
+        return normalized
+
+    def _stat_extract_topics(self, texts: List[str]) -> List[Tuple[str, float]]:
+        if not texts:
+            return []
+
+        tf_counter = Counter()
+        doc_counter = Counter()
+        doc_count = len(texts)
+
+        for text in texts:
+            tokens = self._tokenize_text(text)
+            if not tokens:
+                continue
+            tf_counter.update(tokens)
+            doc_counter.update(set(tokens))
+
+        if not tf_counter:
+            return []
+
+        scored: List[Tuple[str, float]] = []
+        for token, tf in tf_counter.items():
+            if tf < self.min_freq:
+                continue
+            df = doc_counter.get(token, 1)
+            idf = 1.0 + log((doc_count + 1) / (df + 1))
+            score = float(tf) * idf
+            scored.append((token, score))
+
+        if not scored:
+            scored = [(token, float(tf)) for token, tf in tf_counter.most_common(self.MAX_TOPICS * 2)]
+
+        scored.sort(key=lambda x: x[1], reverse=True)
+        return scored[: self.MAX_TOPICS]
 
     def _get_stopwords(self) -> Set[str]:
         return {
@@ -302,9 +356,9 @@ class TopicAnalyzer:
 
         if not existing:
             return [
-                t[0]
-                for t, s in new_topics[: self.MAX_TOPICS]
-                if not self._is_garbage(t[0])
+                topic
+                for topic, _ in new_topics[: self.MAX_TOPICS]
+                if not self._is_garbage(topic)
             ]
 
         if not new_topics:
@@ -346,12 +400,27 @@ class TopicAnalyzer:
 def get_kb_documents_for_analysis(kb_id: str, sample_size: int = 50) -> List[str]:
     try:
         from kb.registry import registry
+        from kb.database import init_kb_meta_db
+        from kb.registry import get_storage_root
 
         kb = registry.get(kb_id)
-        if not kb:
+        persist_dir = None
+        if kb:
+            persist_dir = kb.persist_dir
+        else:
+            kb_meta = init_kb_meta_db().get(kb_id)
+            if kb_meta:
+                persist_path = kb_meta.get("persist_path")
+                if persist_path:
+                    from pathlib import Path
+
+                    persist_dir = Path(persist_path)
+                else:
+                    persist_dir = get_storage_root() / kb_id
+
+        if persist_dir is None:
             return []
 
-        persist_dir = kb.persist_dir
         if not persist_dir.exists():
             return []
 
@@ -362,7 +431,8 @@ def get_kb_documents_for_analysis(kb_id: str, sample_size: int = 50) -> List[str
         if not table_names:
             return []
 
-        table = db.open_table(table_names[0])
+        table_name = kb_id if kb_id in table_names else table_names[0]
+        table = db.open_table(table_name)
         df = table.to_pandas()
 
         if "text" not in df.columns:

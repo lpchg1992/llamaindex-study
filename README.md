@@ -9,6 +9,7 @@
 - 🗃️ **多知识库** — 独立向量存储，隔离管理
 - ⚡ **并行处理** — 本地/远程 Ollama 自适应负载均衡
 - 🔄 **增量同步** — 基于文件哈希检测变更
+- 🧭 **统一导入编排** — CLI / API / 脚本共用 `ImportApplicationService`
 
 ### 检索策略
 - 🔍 **混合搜索** — 向量检索 + BM25 关键词融合
@@ -72,6 +73,11 @@ uv run llamaindex-study kb create my_kb --name "我的知识库"
 uv run llamaindex-study ingest obsidian my_kb --folder-path 技术
 uv run llamaindex-study ingest file my_kb ./docs.pdf
 uv run llamaindex-study ingest zotero my_kb --collection-name "文献"
+uv run llamaindex-study ingest batch my_kb ./docs ./notes --wait --timeout 120
+
+# topics 管理
+uv run llamaindex-study kb topics my_kb --update
+uv run llamaindex-study kb topics-local my_kb --update
 
 # 检索问答
 uv run llamaindex-study search my_kb "Python 异步编程"
@@ -111,6 +117,18 @@ print(result)
 # 自动路由（根据问题内容选择知识库）
 from kb.services import QueryRouter
 result = QueryRouter.query("Python 异步编程最佳实践")
+```
+
+### REST API 示例
+
+```bash
+# 获取知识库 topics
+curl http://localhost:37241/kbs/HTE_history/topics
+
+# 刷新知识库 topics
+curl -X POST http://localhost:37241/kbs/HTE_history/topics/refresh \
+  -H "Content-Type: application/json" \
+  -d '{"has_new_docs": true}'
 ```
 
 ## 配置

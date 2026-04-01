@@ -202,10 +202,9 @@ class Settings:
     def _resolve_dir(self, configured_dir: str, fallback_dir: str) -> str:
         candidate = Path(configured_dir).expanduser()
         try:
+            if candidate.exists():
+                return str(candidate)
             candidate.mkdir(parents=True, exist_ok=True)
-            probe = candidate / ".write_probe"
-            probe.write_text("ok", encoding="utf-8")
-            probe.unlink()
             return str(candidate)
         except OSError as exc:
             fallback = Path(fallback_dir).expanduser()

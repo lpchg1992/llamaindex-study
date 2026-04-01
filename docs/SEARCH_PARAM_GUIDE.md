@@ -282,7 +282,9 @@ A: 关闭 `use_auto_merging`，使用较少的 `top_k`。
 | `--auto` | `route_mode="auto"` | 自动路由 |
 | `--kb-ids` | `kb_ids` | 指定知识库（逗号分隔） |
 | `--exclude` | `exclude` | 排除的知识库 |
-| `--auto-merging` | `use_auto_merging=true` | Auto-Merging |
+| `--embed-model-id` | `embed_model_id` | 指定 Embedding 模型 |
+| `--auto-merging` | `use_auto_merging=true` | 显式开启 Auto-Merging |
+| `--no-auto-merging` | `use_auto_merging=false` | 显式关闭 Auto-Merging |
 | `--top-k` | `top_k` | 检索数量 |
 
 ---

@@ -237,7 +237,12 @@ def run_interactive() -> int:
 
 
 def submit_task_and_handle(
-    task_type: str, kb_id: str, params: dict[str, Any], source: str
+    task_type: str,
+    kb_id: str,
+    params: dict[str, Any],
+    source: str,
+    wait: bool = False,
+    timeout: float = 0,
 ) -> int:
     from kb.task_executor import SchedulerStarter, is_scheduler_running
 
@@ -250,7 +255,32 @@ def submit_task_and_handle(
         task_type=task_type, kb_id=kb_id, params=params, source=source
     )
     print_json(result)
+    if wait:
+        task_id = result["task_id"]
+        final = TaskService.wait_for_task(task_id, interval=1.0, timeout=timeout)
+        print_json({"final_status": final.get("status"), "task": final})
 
+    return 0
+
+
+def submit_import_and_handle(
+    req: "ImportRequest",
+    wait: bool = False,
+    timeout: float = 0,
+) -> int:
+    from kb.import_service import ImportApplicationService
+    from kb.task_executor import SchedulerStarter, is_scheduler_running
+
+    if not is_scheduler_running():
+        print("⚙️  调度器未运行，正在启动...", file=sys.stderr)
+        SchedulerStarter.ensure_scheduler_running()
+
+    result = ImportApplicationService.submit_task(req)
+    print_json(result)
+    if wait:
+        task_id = result["task_id"]
+        final = TaskService.wait_for_task(task_id, interval=1.0, timeout=timeout)
+        print_json({"final_status": final.get("status"), "task": final})
     return 0
 
 
@@ -770,12 +800,26 @@ def handle_search(args: argparse.Namespace) -> int:
         print("错误: 请提供查询内容", file=sys.stderr)
         return 1
 
-    use_auto_merging = getattr(args, "auto_merging", False)
+    use_auto_merging = getattr(args, "use_auto_merging", None)
+    embed_model_id = getattr(args, "embed_model_id", None)
 
-    if getattr(args, "auto", False):
+    auto_mode = getattr(args, "auto", False)
+    kb_ids = getattr(args, "kb_ids", None)
+    exclude = getattr(args, "exclude", None)
+
+    if auto_mode and kb_ids:
+        print("错误: --auto 与 --kb-ids 不能同时使用", file=sys.stderr)
+        return 1
+    if not auto_mode and exclude:
+        print("错误: --exclude 仅在 --auto 模式下有效", file=sys.stderr)
+        return 1
+    if not auto_mode and not kb_ids:
+        print("错误: 请提供 --kb-ids 参数指定要检索的知识库", file=sys.stderr)
+        return 1
+
+    if auto_mode:
         from kb.services import QueryRouter
 
-        exclude = getattr(args, "exclude", None)
         if exclude:
             exclude = [e.strip() for e in exclude.split(",") if e.strip()]
         result = QueryRouter.search(
@@ -783,18 +827,19 @@ def handle_search(args: argparse.Namespace) -> int:
             top_k=args.top_k,
             exclude=exclude,
             use_auto_merging=use_auto_merging,
+            embed_model_id=embed_model_id,
         )
     else:
-        kb_ids = getattr(args, "kb_ids", None)
-        if not kb_ids:
-            print("错误: 请提供 --kb-ids 参数指定要检索的知识库", file=sys.stderr)
-            return 1
         kb_id_list = [k.strip() for k in kb_ids.split(",") if k.strip()]
+        if not kb_id_list:
+            print("错误: --kb-ids 参数无效", file=sys.stderr)
+            return 1
         result = SearchService.search_multi(
             kb_id_list,
             query,
             top_k=args.top_k,
             use_auto_merging=use_auto_merging,
+            embed_model_id=embed_model_id,
         )
     print_json(result)
     return 0
@@ -813,11 +858,25 @@ def handle_query(args: argparse.Namespace) -> int:
     model_id = getattr(args, "model_id", None)
 
     retrieval_mode = getattr(args, "retrieval_mode", "vector")
+    embed_model_id = getattr(args, "embed_model_id", None)
 
-    if getattr(args, "auto", False):
+    auto_mode = getattr(args, "auto", False)
+    kb_ids = getattr(args, "kb_ids", None)
+    exclude = getattr(args, "exclude", None)
+
+    if auto_mode and kb_ids:
+        print("错误: --auto 与 --kb-ids 不能同时使用", file=sys.stderr)
+        return 1
+    if not auto_mode and exclude:
+        print("错误: --exclude 仅在 --auto 模式下有效", file=sys.stderr)
+        return 1
+    if not auto_mode and not kb_ids:
+        print("错误: 请提供 --kb-ids 参数指定要查询的知识库", file=sys.stderr)
+        return 1
+
+    if auto_mode:
         from kb.services import QueryRouter
 
-        exclude = getattr(args, "exclude", None)
         if exclude:
             exclude = [e.strip() for e in exclude.split(",") if e.strip()]
         result = QueryRouter.query(
@@ -830,13 +889,13 @@ def handle_query(args: argparse.Namespace) -> int:
             response_mode=response_mode,
             retrieval_mode=retrieval_mode,
             model_id=model_id,
+            embed_model_id=embed_model_id,
         )
     else:
-        kb_ids = getattr(args, "kb_ids", None)
-        if not kb_ids:
-            print("错误: 请提供 --kb-ids 参数指定要查询的知识库", file=sys.stderr)
-            return 1
         kb_id_list = [k.strip() for k in kb_ids.split(",") if k.strip()]
+        if not kb_id_list:
+            print("错误: --kb-ids 参数无效", file=sys.stderr)
+            return 1
         from kb.services import QueryRouter
 
         result = QueryRouter.query_multi(
@@ -849,36 +908,50 @@ def handle_query(args: argparse.Namespace) -> int:
             response_mode=response_mode,
             retrieval_mode=retrieval_mode,
             model_id=model_id,
+            embed_model_id=embed_model_id,
         )
     print_json(result)
     return 0
 
 
 def handle_ingest_obsidian(args: argparse.Namespace) -> int:
-    params = {
-        "vault_path": args.vault_path,
-        "folder_path": args.folder_path,
-        "recursive": args.recursive,
-        "rebuild": args.rebuild,
-        "force_delete": args.force_delete,
-        "persist_dir": args.persist_dir,
-    }
-    return submit_task_and_handle(
-        "obsidian",
-        args.kb_id,
-        params,
-        source=args.folder_path or args.vault_path,
+    from kb.import_service import ImportRequest
+
+    return submit_import_and_handle(
+        ImportRequest(
+            kind="obsidian",
+            kb_id=args.kb_id,
+            vault_path=args.vault_path,
+            folder_path=args.folder_path,
+            recursive=args.recursive,
+            force_delete=args.force_delete,
+            rebuild=args.rebuild,
+            persist_dir=args.persist_dir,
+            refresh_topics=args.refresh_topics,
+            source=args.folder_path or args.vault_path,
+        ),
+        wait=args.wait,
+        timeout=args.timeout,
     )
 
 
 def handle_ingest_zotero(args: argparse.Namespace) -> int:
-    params = {
-        "collection_id": args.collection_id,
-        "collection_name": args.collection_name,
-        "rebuild": args.rebuild,
-    }
+    from kb.import_service import ImportRequest
+
     source = args.collection_name or args.collection_id or "zotero"
-    return submit_task_and_handle("zotero", args.kb_id, params, source=source)
+    return submit_import_and_handle(
+        ImportRequest(
+            kind="zotero",
+            kb_id=args.kb_id,
+            collection_id=args.collection_id,
+            collection_name=args.collection_name,
+            rebuild=args.rebuild,
+            refresh_topics=args.refresh_topics,
+            source=source,
+        ),
+        wait=args.wait,
+        timeout=args.timeout,
+    )
 
 
 def _collect_files_for_validation(
@@ -913,6 +986,8 @@ def _collect_files_for_validation(
 
 
 def handle_ingest_file(args: argparse.Namespace) -> int:
+    from kb.import_service import ImportRequest
+
     path = Path(args.path)
     if not path.exists():
         print(f"❌ 路径不存在: {args.path}", file=sys.stderr)
@@ -927,12 +1002,22 @@ def handle_ingest_file(args: argparse.Namespace) -> int:
         return 1
 
     print(f"📁 将导入 {file_count} 个文件")
-    return submit_task_and_handle(
-        "generic", args.kb_id, {"paths": [args.path]}, source=args.path
+    return submit_import_and_handle(
+        ImportRequest(
+            kind="generic",
+            kb_id=args.kb_id,
+            paths=[args.path],
+            refresh_topics=args.refresh_topics,
+            source=args.path,
+        ),
+        wait=args.wait,
+        timeout=args.timeout,
     )
 
 
 def handle_ingest_batch(args: argparse.Namespace) -> int:
+    from kb.import_service import ImportRequest
+
     paths = args.paths
     include_exts = None
     exclude_exts = None
@@ -964,24 +1049,34 @@ def handle_ingest_batch(args: argparse.Namespace) -> int:
         return 1
 
     print(f"📁 将导入 {file_count} 个文件")
-    params = {"paths": paths}
-    if include_exts:
-        params["include_exts"] = include_exts
-    if exclude_exts:
-        params["exclude_exts"] = exclude_exts
-
-    return submit_task_and_handle(
-        "generic",
-        args.kb_id,
-        params,
-        source=paths[0],
+    return submit_import_and_handle(
+        ImportRequest(
+            kind="generic",
+            kb_id=args.kb_id,
+            paths=paths,
+            include_exts=include_exts,
+            exclude_exts=exclude_exts,
+            refresh_topics=args.refresh_topics,
+            source=paths[0],
+        ),
+        wait=args.wait,
+        timeout=args.timeout,
     )
 
 
 def handle_ingest_rebuild(args: argparse.Namespace) -> int:
-    params = {"rebuild": True}
-    return submit_task_and_handle(
-        "obsidian", args.kb_id, params, source="cli:ingest:rebuild"
+    from kb.import_service import ImportRequest
+
+    return submit_import_and_handle(
+        ImportRequest(
+            kind="obsidian",
+            kb_id=args.kb_id,
+            rebuild=True,
+            refresh_topics=args.refresh_topics,
+            source="cli:ingest:rebuild",
+        ),
+        wait=args.wait,
+        timeout=args.timeout,
     )
 
 
@@ -1015,22 +1110,24 @@ def handle_obsidian_mappings(_: argparse.Namespace) -> int:
 
 def handle_obsidian_import_all(args: argparse.Namespace) -> int:
     from kb.obsidian_config import OBSIDIAN_KB_MAPPINGS
+    from kb.import_service import ImportApplicationService, ImportRequest
 
     results = []
     for mapping in OBSIDIAN_KB_MAPPINGS:
         folders = mapping.folders or [None]
         for folder_path in folders:
-            submission = TaskService.submit(
-                task_type="obsidian",
-                kb_id=mapping.kb_id,
-                params={
-                    "vault_path": args.vault_path,
-                    "folder_path": folder_path,
-                    "recursive": True,
-                    "rebuild": args.rebuild,
-                    "force_delete": args.force_delete,
-                },
-                source=folder_path or mapping.kb_id,
+            submission = ImportApplicationService.submit_task(
+                ImportRequest(
+                    kind="obsidian",
+                    kb_id=mapping.kb_id,
+                    vault_path=args.vault_path,
+                    folder_path=folder_path,
+                    recursive=True,
+                    rebuild=args.rebuild,
+                    force_delete=args.force_delete,
+                    refresh_topics=True,
+                    source=folder_path or mapping.kb_id,
+                )
             )
             results.append(submission)
     print_json({"tasks": results, "count": len(results)})
@@ -1647,8 +1744,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="指定知识库 ID（逗号分隔，可指定多个，route_mode=general）",
     )
     search_parser.add_argument(
+        "--embed-model-id",
+        default=None,
+        help="使用的Embedding模型ID (如 ollama/bge-m3:latest)",
+    )
+    search_parser.add_argument(
         "--auto-merging",
-        action="store_true",
+        dest="use_auto_merging",
+        action=argparse.BooleanOptionalAction,
+        default=None,
         help="启用 Auto-Merging（需知识库使用层级分块）",
     )
     search_parser.set_defaults(handler=handle_search)
@@ -1671,17 +1775,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     query_parser.add_argument(
         "--hyde",
-        action="store_true",
+        dest="use_hyde",
+        action=argparse.BooleanOptionalAction,
+        default=None,
         help="启用 HyDE 查询转换（生成假设性答案辅助检索）",
     )
     query_parser.add_argument(
         "--multi-query",
-        action="store_true",
+        dest="use_multi_query",
+        action=argparse.BooleanOptionalAction,
+        default=None,
         help="启用多查询转换（生成多个查询变体减少遗漏）",
     )
     query_parser.add_argument(
         "--auto-merging",
-        action="store_true",
+        dest="use_auto_merging",
+        action=argparse.BooleanOptionalAction,
+        default=None,
         help="启用 Auto-Merging Retriever（需知识库使用层级分块）",
     )
     query_parser.add_argument(
@@ -1707,6 +1817,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--model-id",
         default=None,
         help="使用的模型ID (如 siliconflow/DeepSeek-V3.2, ollama/lfm2.5-instruct)",
+    )
+    query_parser.add_argument(
+        "--embed-model-id",
+        default=None,
+        help="使用的Embedding模型ID (如 ollama/bge-m3:latest)",
     )
     query_parser.set_defaults(handler=handle_query)
 
@@ -1740,6 +1855,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--force-delete", action=argparse.BooleanOptionalAction, default=True
     )
     ingest_obsidian.add_argument("--persist-dir")
+    ingest_obsidian.add_argument(
+        "--refresh-topics",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="导入完成后是否刷新 topics",
+    )
+    ingest_obsidian.add_argument(
+        "--wait", action="store_true", help="等待任务执行完成并输出最终状态"
+    )
+    ingest_obsidian.add_argument(
+        "--timeout", type=float, default=0, help="等待超时秒数（0 表示不超时）"
+    )
     ingest_obsidian.set_defaults(handler=handle_ingest_obsidian)
 
     ingest_zotero = ingest_sub.add_parser("zotero", help="导入 Zotero 收藏夹")
@@ -1747,11 +1874,35 @@ def build_parser() -> argparse.ArgumentParser:
     ingest_zotero.add_argument("--collection-id")
     ingest_zotero.add_argument("--collection-name")
     ingest_zotero.add_argument("--rebuild", action="store_true")
+    ingest_zotero.add_argument(
+        "--refresh-topics",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="导入完成后是否刷新 topics",
+    )
+    ingest_zotero.add_argument(
+        "--wait", action="store_true", help="等待任务执行完成并输出最终状态"
+    )
+    ingest_zotero.add_argument(
+        "--timeout", type=float, default=0, help="等待超时秒数（0 表示不超时）"
+    )
     ingest_zotero.set_defaults(handler=handle_ingest_zotero)
 
     ingest_file = ingest_sub.add_parser("file", help="导入单个文件或目录")
     ingest_file.add_argument("kb_id")
     ingest_file.add_argument("path")
+    ingest_file.add_argument(
+        "--refresh-topics",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="导入完成后是否刷新 topics",
+    )
+    ingest_file.add_argument(
+        "--wait", action="store_true", help="等待任务执行完成并输出最终状态"
+    )
+    ingest_file.add_argument(
+        "--timeout", type=float, default=0, help="等待超时秒数（0 表示不超时）"
+    )
     ingest_file.set_defaults(handler=handle_ingest_file)
 
     ingest_batch = ingest_sub.add_parser("batch", help="批量导入多个路径")
@@ -1765,12 +1916,36 @@ def build_parser() -> argparse.ArgumentParser:
         "--exclude",
         help="从默认格式中排除指定的文件格式 (如: xlsx,png)，逗号分隔",
     )
+    ingest_batch.add_argument(
+        "--refresh-topics",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="导入完成后是否刷新 topics",
+    )
+    ingest_batch.add_argument(
+        "--wait", action="store_true", help="等待任务执行完成并输出最终状态"
+    )
+    ingest_batch.add_argument(
+        "--timeout", type=float, default=0, help="等待超时秒数（0 表示不超时）"
+    )
     ingest_batch.set_defaults(handler=handle_ingest_batch)
 
     ingest_rebuild = ingest_sub.add_parser(
         "rebuild", help="重建知识库（清空后重新导入）"
     )
     ingest_rebuild.add_argument("kb_id")
+    ingest_rebuild.add_argument(
+        "--refresh-topics",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="重建完成后是否刷新 topics",
+    )
+    ingest_rebuild.add_argument(
+        "--wait", action="store_true", help="等待任务执行完成并输出最终状态"
+    )
+    ingest_rebuild.add_argument(
+        "--timeout", type=float, default=0, help="等待超时秒数（0 表示不超时）"
+    )
     ingest_rebuild.set_defaults(handler=handle_ingest_rebuild)
 
     obsidian_parser = subparsers.add_parser("obsidian", help="Obsidian 辅助命令")

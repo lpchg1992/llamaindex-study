@@ -14,10 +14,8 @@ API 端点:
     DELETE /kbs/{kb_id}            - 删除知识库
 
     检索查询:
-    POST /kbs/{kb_id}/search        - 向量检索
-    POST /kbs/{kb_id}/query        - RAG 问答
-    POST /search                     - 自动路由检索
-    POST /query                      - 自动路由问答
+    POST /search                     - 统一检索入口（general/auto）
+    POST /query                      - 统一问答入口（general/auto）
 
     RAG 评估:
     POST /evaluate/{kb_id}           - RAG 性能评估
@@ -53,7 +51,7 @@ API 端点:
 import asyncio
 import threading
 from pathlib import Path
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Literal
 import markdown
 
 from fastapi import FastAPI, HTTPException
@@ -81,10 +79,11 @@ from kb.services import (
     VectorStoreService,
     ObsidianService,
     ZoteroService,
-    GenericService,
     KnowledgeBaseService,
     SearchService,
+    TaskService,
 )
+from kb.import_service import ImportApplicationService, ImportRequest
 from llamaindex_study.rag_evaluator import RAGEvaluator, RAGMetrics
 
 
@@ -154,7 +153,7 @@ app.add_middleware(
 class SearchRequest(BaseModel):
     query: str = Field(..., description="搜索查询")
     top_k: int = Field(5, ge=1, le=100)
-    route_mode: str = Field(
+    route_mode: Literal["general", "auto"] = Field(
         "general",
         description="路由模式: general(用户选择知识库), auto(自动路由)",
     )
@@ -183,11 +182,11 @@ class SearchResult(BaseModel):
 class QueryRequest(BaseModel):
     query: str = Field(..., description="查询")
     top_k: int = Field(5, ge=1, le=100)
-    route_mode: str = Field(
+    route_mode: Literal["general", "auto"] = Field(
         "general",
         description="路由模式: general(用户选择知识库), auto(自动路由)",
     )
-    retrieval_mode: str = Field(
+    retrieval_mode: Literal["vector", "hybrid"] = Field(
         "vector", description="检索模式: vector(向量检索), hybrid(混合搜索)"
     )
     model_id: Optional[str] = Field(
@@ -237,6 +236,7 @@ class EvaluateRequest(BaseModel):
 class IngestRequest(BaseModel):
     path: str = Field(..., description="文件路径")
     async_mode: bool = Field(True, description="是否异步处理")
+    refresh_topics: bool = Field(True, description="任务完成后是否刷新 topics")
 
 
 class IngestResponse(BaseModel):
@@ -265,6 +265,20 @@ class TaskResponse(BaseModel):
     progress: Optional[int] = 0
     result: Optional[Dict] = None
     error: Optional[str] = None
+
+
+def _parse_kb_ids_or_raise(kb_ids: Optional[str], route_mode: str) -> List[str]:
+    if route_mode != "general":
+        raise HTTPException(status_code=400, detail="仅 general 模式支持 kb_ids")
+    if not kb_ids:
+        raise HTTPException(
+            status_code=400,
+            detail="route_mode=general 时，kb_ids 为必填参数",
+        )
+    kb_id_list = [k.strip() for k in kb_ids.split(",") if k.strip()]
+    if not kb_id_list:
+        raise HTTPException(status_code=400, detail="kb_ids 参数无效")
+    return kb_id_list
 
 
 # ============== 全局事件循环 ==============
@@ -964,6 +978,12 @@ def set_default_model(model_id: str):
 def search(req: SearchRequest):
     from kb.services import QueryRouter
 
+    if req.route_mode == "general" and req.exclude:
+        raise HTTPException(
+            status_code=400,
+            detail="route_mode=general 时不支持 exclude 参数",
+        )
+
     if req.route_mode == "auto":
         result = QueryRouter.search(
             req.query,
@@ -975,12 +995,7 @@ def search(req: SearchRequest):
         )
         return [SearchResult(**r) for r in result.get("results", [])]
 
-    if not req.kb_ids:
-        return []
-
-    kb_id_list = [k.strip() for k in req.kb_ids.split(",") if k.strip()]
-    if not kb_id_list:
-        return []
+    kb_id_list = _parse_kb_ids_or_raise(req.kb_ids, req.route_mode)
 
     results = SearchService.search_multi(
         kb_id_list,
@@ -1001,6 +1016,12 @@ def query(req: QueryRequest):
     )
 
     try:
+        if req.route_mode == "general" and req.exclude:
+            raise HTTPException(
+                status_code=400,
+                detail="route_mode=general 时不支持 exclude 参数",
+            )
+
         model_id = req.model_id
         if not model_id and req.llm_mode:
             from llamaindex_study.config import get_model_registry
@@ -1026,14 +1047,7 @@ def query(req: QueryRequest):
             )
             return QueryResponse(**result)
 
-        if not req.kb_ids:
-            return QueryResponse(
-                response="请提供 kb_ids 参数指定要查询的知识库", sources=[]
-            )
-
-        kb_id_list = [k.strip() for k in req.kb_ids.split(",") if k.strip()]
-        if not kb_id_list:
-            return QueryResponse(response="kb_ids 参数无效", sources=[])
+        kb_id_list = _parse_kb_ids_or_raise(req.kb_ids, req.route_mode)
 
         result = QueryRouter.query_multi(
             kb_id_list,
@@ -1049,6 +1063,8 @@ def query(req: QueryRequest):
         )
         return QueryResponse(**result)
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"[QUERY] Error: {type(e).__name__}: {e}", exc_info=True)
         raise HTTPException(
@@ -1129,15 +1145,35 @@ def ingest(kb_id: str, req: IngestRequest):
             detail=f"没有找到可处理的文件: {req.path}",
         )
 
-    from kb.task_queue import task_queue
+    if not req.async_mode:
+        stats = ImportApplicationService.run_sync(
+            ImportRequest(
+                kind="generic",
+                kb_id=kb_id,
+                async_mode=False,
+                path=req.path,
+                refresh_topics=req.refresh_topics,
+            )
+        )
+        return IngestResponse(
+            status="completed",
+            files_processed=stats.get("files", 0),
+            nodes_created=stats.get("nodes", 0),
+            failed=stats.get("failed", 0),
+            message="同步导入完成",
+        )
 
-    task_id = task_queue.submit_task(
-        task_type="generic",
-        kb_id=kb_id,
-        params={"path": req.path},
-        source=req.path,
+    task = ImportApplicationService.submit_task(
+        ImportRequest(
+            kind="generic",
+            kb_id=kb_id,
+            path=req.path,
+            refresh_topics=req.refresh_topics,
+            source=req.path,
+        )
     )
 
+    task_id = task["task_id"]
     return IngestResponse(
         status="pending",
         task_id=task_id,
@@ -1153,6 +1189,7 @@ class ZoteroIngestRequest(BaseModel):
     collection_name: Optional[str] = None
     async_mode: bool = Field(True, description="是否异步处理")
     rebuild: bool = Field(False, description="是否重建")
+    refresh_topics: bool = Field(True, description="任务完成后是否刷新 topics")
 
 
 @app.get("/zotero/collections")
@@ -1172,8 +1209,6 @@ def search_zotero_collections(q: str):
 @app.post("/kbs/{kb_id}/ingest/zotero", response_model=IngestResponse)
 def ingest_zotero(kb_id: str, req: ZoteroIngestRequest):
     """Zotero 收藏夹导入"""
-    from kb.task_queue import task_queue
-    from kb.task_executor import task_executor
     from kb.zotero_processor import ZoteroImporter
 
     # 先验证收藏夹是否存在
@@ -1200,18 +1235,39 @@ def ingest_zotero(kb_id: str, req: ZoteroIngestRequest):
 
     importer.close()
 
-    task_id = task_queue.submit_task(
-        task_type="zotero",
-        kb_id=kb_id,
-        params={
-            "collection_id": collection_id,
-            "collection_name": collection_name,
-            "rebuild": req.rebuild,
-        },
-        source=f"zotero:{collection_name}",
-    )
+    if not req.async_mode:
+        stats = ImportApplicationService.run_sync(
+            ImportRequest(
+                kind="zotero",
+                kb_id=kb_id,
+                async_mode=False,
+                collection_id=collection_id,
+                collection_name=collection_name,
+                rebuild=req.rebuild,
+                refresh_topics=req.refresh_topics,
+            )
+        )
+        return IngestResponse(
+            status="completed",
+            files_processed=stats.get("items", 0),
+            nodes_created=stats.get("nodes", 0),
+            failed=stats.get("failed", 0),
+            message="同步导入完成",
+            source="zotero",
+        )
 
-    # 任务由调度器启动
+    task = ImportApplicationService.submit_task(
+        ImportRequest(
+            kind="zotero",
+            kb_id=kb_id,
+            collection_id=collection_id,
+            collection_name=collection_name,
+            rebuild=req.rebuild,
+            refresh_topics=req.refresh_topics,
+            source=f"zotero:{collection_name}",
+        )
+    )
+    task_id = task["task_id"]
 
     return IngestResponse(
         status="pending",
@@ -1232,6 +1288,7 @@ class ObsidianIngestRequest(BaseModel):
     recursive: bool = Field(True, description="递归处理子文件夹")
     async_mode: bool = Field(True, description="是否异步处理")
     exclude_patterns: Optional[List[str]] = Field(None, description="排除模式")
+    refresh_topics: bool = Field(True, description="任务完成后是否刷新 topics")
 
 
 @app.get("/obsidian/vaults")
@@ -1253,9 +1310,6 @@ def get_obsidian_vault(vault_name: str):
 @app.post("/kbs/{kb_id}/ingest/obsidian", response_model=IngestResponse)
 def ingest_obsidian(kb_id: str, req: ObsidianIngestRequest):
     """Obsidian vault 导入"""
-    from kb.task_queue import task_queue
-    from kb.task_executor import task_executor
-
     vault_path = Path(req.vault_path)
     if not vault_path.exists():
         raise HTTPException(
@@ -1270,19 +1324,41 @@ def ingest_obsidian(kb_id: str, req: ObsidianIngestRequest):
                 status_code=400, detail=f"文件夹路径不存在: {req.folder_path}"
             )
 
-    task_id = task_queue.submit_task(
-        task_type="obsidian",
-        kb_id=kb_id,
-        params={
-            "vault_path": str(vault_path),
-            "folder_path": req.folder_path,
-            "recursive": req.recursive,
-            "exclude_patterns": req.exclude_patterns,
-        },
-        source=f"obsidian:{import_dir.name}",
-    )
+    if not req.async_mode:
+        stats = ImportApplicationService.run_sync(
+            ImportRequest(
+                kind="obsidian",
+                kb_id=kb_id,
+                async_mode=False,
+                vault_path=str(vault_path),
+                folder_path=req.folder_path,
+                recursive=req.recursive,
+                exclude_patterns=req.exclude_patterns,
+                refresh_topics=req.refresh_topics,
+            )
+        )
+        return IngestResponse(
+            status="completed",
+            files_processed=stats.get("files", 0),
+            nodes_created=stats.get("nodes", 0),
+            failed=stats.get("failed", 0),
+            message="同步导入完成",
+            source="obsidian",
+        )
 
-    # 任务由调度器启动
+    task = ImportApplicationService.submit_task(
+        ImportRequest(
+            kind="obsidian",
+            kb_id=kb_id,
+            vault_path=str(vault_path),
+            folder_path=req.folder_path,
+            recursive=req.recursive,
+            exclude_patterns=req.exclude_patterns,
+            refresh_topics=req.refresh_topics,
+            source=f"obsidian:{import_dir.name}",
+        )
+    )
+    task_id = task["task_id"]
 
     return IngestResponse(
         status="pending",
@@ -1290,6 +1366,39 @@ def ingest_obsidian(kb_id: str, req: ObsidianIngestRequest):
         message=f"Obsidian {import_dir.name} 导入任务已提交，ID: {task_id}",
         source="obsidian",
     )
+
+
+@app.get("/kbs/{kb_id}/topics")
+def get_kb_topics(kb_id: str):
+    info = KnowledgeBaseService.get_info(kb_id)
+    if not info:
+        raise HTTPException(status_code=404, detail=f"知识库不存在: {kb_id}")
+    topics = KnowledgeBaseService.get_topics(kb_id)
+    return {
+        "kb_id": kb_id,
+        "topics": topics,
+        "topic_count": len(topics),
+    }
+
+
+class RefreshTopicsRequest(BaseModel):
+    has_new_docs: bool = Field(True, description="是否按有新文档方式刷新 topics")
+
+
+@app.post("/kbs/{kb_id}/topics/refresh")
+def refresh_kb_topics(kb_id: str, req: RefreshTopicsRequest):
+    info = KnowledgeBaseService.get_info(kb_id)
+    if not info:
+        raise HTTPException(status_code=404, detail=f"知识库不存在: {kb_id}")
+    topics = KnowledgeBaseService.refresh_topics(
+        kb_id=kb_id,
+        has_new_docs=req.has_new_docs,
+    )
+    return {
+        "kb_id": kb_id,
+        "topics": topics,
+        "topic_count": len(topics),
+    }
 
 
 # ============== Obsidian 全库分类导入 ==============
@@ -1316,32 +1425,29 @@ def list_obsidian_mappings():
 @app.post("/obsidian/import-all")
 def import_obsidian_all():
     """Obsidian 全库分类导入"""
-    from kb.task_queue import task_queue
-    from kb.task_executor import task_executor
     from kb.obsidian_config import OBSIDIAN_KB_MAPPINGS
+    from kb.registry import get_vault_root
 
     task_ids = []
-    use_remote_counter = 0
+    vault_root = get_vault_root()
 
     for mapping in OBSIDIAN_KB_MAPPINGS:
         if not mapping.folders:
             continue
 
         for folder in mapping.folders:
-            use_remote = use_remote_counter % 2 == 1
-            use_remote_counter += 1
-
-            task_id = task_queue.submit_task(
-                task_type="obsidian_folder",
-                kb_id=mapping.kb_id,
-                params={
-                    "folder": folder,
-                    "use_remote": use_remote,
-                },
-                source=f"obsidian:{folder}",
+            task = ImportApplicationService.submit_task(
+                ImportRequest(
+                    kind="obsidian",
+                    kb_id=mapping.kb_id,
+                    vault_path=str(vault_root),
+                    folder_path=folder,
+                    recursive=True,
+                    refresh_topics=True,
+                    source=f"obsidian:{folder}",
+                )
             )
-
-            # 任务由调度器启动
+            task_id = task["task_id"]
 
             task_ids.append(
                 {

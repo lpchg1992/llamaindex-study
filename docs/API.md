@@ -130,9 +130,14 @@ curl "http://localhost:37241/tasks/abc12345"
 | 方法 | 端点 | 功能 |
 |------|------|------|
 | POST | `/kbs/{kb_id}/ingest` | 通用文件导入 |
-| POST | `/kbs/{kb_id}/ingest/obsidian` | Obsidian 导入（并行） |
+| POST | `/kbs/{kb_id}/ingest/obsidian` | Obsidian 导入 |
 | POST | `/kbs/{kb_id}/ingest/zotero` | Zotero 导入 |
 | POST | `/kbs/{kb_id}/initialize` | 初始化知识库（清空数据） |
+| GET | `/kbs/{kb_id}/topics` | 查看知识库 topics |
+| POST | `/kbs/{kb_id}/topics/refresh` | 手动刷新知识库 topics |
+
+> 导入相关端点统一走 `kb/import_service.py` 的 `ImportApplicationService`。  
+> 同一类导入在 API、CLI、脚本三种入口保持同一业务语义与参数解释。
 
 ### 检索查询
 
@@ -368,10 +373,15 @@ curl -X POST "http://localhost:37241/tasks/abc12345/resume"
 ```bash
 curl -X POST "http://localhost:37241/kbs/my_kb/ingest" \
   -H "Content-Type: application/json" \
-  -d '{"path": "/path/to/file.pdf"}'
+  -d '{"path": "/path/to/file.pdf", "async_mode": true, "refresh_topics": true}'
 ```
 
 > **预验证**：提交任务前会检查路径是否存在、是否有可处理的文件。如果路径不存在或没有找到文件，返回 400 错误。
+> 
+> **执行语义**：
+> - `async_mode=true`：提交后台任务，返回 `task_id`
+> - `async_mode=false`：同步执行，直接返回导入统计
+> - `refresh_topics`：导入完成后是否刷新 topics
 
 ```json
 {
@@ -401,7 +411,9 @@ curl -X POST "http://localhost:37241/kbs/tech_tools/ingest/obsidian" \
   -d '{
     "vault_path": "/Users/xxx/Documents/Obsidian Vault",
     "folder_path": "IT",
-    "recursive": true
+    "recursive": true,
+    "async_mode": true,
+    "refresh_topics": true
   }'
 ```
 
@@ -421,7 +433,7 @@ Zotero 收藏夹导入：
 ```bash
 curl -X POST "http://localhost:37241/kbs/swine_nutrition/ingest/zotero" \
   -H "Content-Type: application/json" \
-  -d '{"collection_name": "营养饲料理论"}'
+  -d '{"collection_name": "营养饲料理论", "async_mode": true, "refresh_topics": true}'
 ```
 
 ```json
@@ -439,6 +451,24 @@ curl -X POST "http://localhost:37241/kbs/swine_nutrition/ingest/zotero" \
 
 ```bash
 curl -X POST "http://localhost:37241/kbs/tech_tools/initialize"
+```
+
+#### GET /kbs/{kb_id}/topics
+
+查看知识库当前 topics：
+
+```bash
+curl "http://localhost:37241/kbs/HTE_history/topics"
+```
+
+#### POST /kbs/{kb_id}/topics/refresh
+
+手动刷新知识库 topics（可指定是否按“有新文档”模式刷新）：
+
+```bash
+curl -X POST "http://localhost:37241/kbs/HTE_history/topics/refresh" \
+  -H "Content-Type: application/json" \
+  -d '{"has_new_docs": true}'
 ```
 
 ---
@@ -466,11 +496,15 @@ curl -X POST "http://localhost:37241/search" \
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `query` | string | 必填 | 查询内容 |
-| `route_mode` | string | `"general"` | 路由模式：`general`(用户选择知识库), `auto`(自动路由) |
+| `route_mode` | enum | `"general"` | 路由模式：`general` 或 `auto` |
 | `top_k` | int | `5` | 返回结果数量 |
 | `kb_ids` | string | null | 指定知识库 ID（逗号分隔，`route_mode=general` 时必填） |
 | `exclude` | string[] | null | 排除的知识库 ID 列表（仅 `route_mode=auto` 时有效） |
 | `use_auto_merging` | bool | null | 启用 Auto-Merging（null=使用配置默认值） |
+
+**参数约束：**
+- `route_mode=general`：必须提供 `kb_ids`，且不支持 `exclude`
+- `route_mode=auto`：可使用 `exclude`，`kb_ids` 可省略
 
 **响应格式：**
 
@@ -511,9 +545,9 @@ curl -X POST "http://localhost:37241/query" \
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `query` | string | 必填 | 查询内容 |
-| `route_mode` | string | `"general"` | 路由模式：`general`(用户选择知识库), `auto`(自动路由) |
+| `route_mode` | enum | `"general"` | 路由模式：`general` 或 `auto` |
 | `top_k` | int | `5` | 返回结果数量 |
-| `retrieval_mode` | string | `"vector"` | 检索模式：`vector` 或 `hybrid` |
+| `retrieval_mode` | enum | `"vector"` | 检索模式：`vector` 或 `hybrid` |
 | `model_id` | string | null | 使用的模型ID（如 `siliconflow/DeepSeek-V3.2`, `ollama/lfm2.5-instruct`），不填则使用默认模型 |
 | `kb_ids` | string | null | 指定知识库 ID（逗号分隔，`route_mode=general` 时必填） |
 | `exclude` | string[] | null | 排除的知识库 ID 列表（仅 `route_mode=auto` 时有效） |
@@ -521,6 +555,10 @@ curl -X POST "http://localhost:37241/query" \
 | `use_multi_query` | bool | null | 启用多查询转换（null=使用配置默认值） |
 | `use_auto_merging` | bool | null | 启用 Auto-Merging（null=使用配置默认值） |
 | `response_mode` | string | null | 答案生成模式（null=使用配置默认值） |
+
+**参数约束：**
+- `route_mode=general`：必须提供 `kb_ids`，且不支持 `exclude`
+- `route_mode=auto`：可使用 `exclude`，`kb_ids` 可省略
 
 **响应格式：**
 
@@ -954,8 +992,8 @@ curl -X POST "http://localhost:37241/search" \
 uv run llamaindex-study kb list
 
 # 检索 / 问答
-uv run llamaindex-study search tech_tools "Python 异步编程" -k 5
-uv run llamaindex-study query tech_tools "总结当前知识库重点"
+uv run llamaindex-study search "Python 异步编程" --kb-ids tech_tools -k 5
+uv run llamaindex-study query "总结当前知识库重点" --kb-ids tech_tools
 
 # 提交导入任务
 uv run llamaindex-study ingest obsidian tech_tools --folder-path IT

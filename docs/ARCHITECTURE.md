@@ -58,7 +58,7 @@ async with DedupLock():
 #### LanceDB 写入队列
 
 ```python
-# kb/ingest_vdb.py
+# kb/lancedb_write_queue.py
 class LanceDBWriteQueue:
     async def _worker(self):
         while True:
@@ -140,6 +140,22 @@ def _get_embedding_with_retry(self, text: str, ep: EmbeddingEndpoint) -> Embeddi
 ```
 
 ## 核心模块说明
+
+### 0. 导入编排统一层
+
+- 新增统一编排层：`kb/import_service.py`
+- 入口层（CLI/API）不再直接拼任务参数，统一通过 `ImportApplicationService` 组装并派发
+- 统一处理三类导入：
+  - `generic`（file/batch）
+  - `obsidian`
+  - `zotero`
+- 统一语义：
+  - `async_mode` 仅控制执行模式
+  - `refresh_topics` 统一控制导入后 topics 刷新
+- 当前入口映射：
+  - CLI：`llamaindex-study ingest ...` → `ImportApplicationService`
+  - API：`/kbs/{kb_id}/ingest*`、`/obsidian/import-all` → `ImportApplicationService`
+  - 脚本：`python -m kb.ingest*` → `ImportApplicationService`
 
 ### 1. 任务执行流程
 
@@ -309,7 +325,7 @@ uv run llamaindex-study ingest obsidian my_kb --rebuild
 ### 4. LanceDB 写入队列
 
 ```python
-# kb/ingest_vdb.py
+# kb/lancedb_write_queue.py
 
 class LanceDBWriteQueue:
     """确保串行写入，避免数据库锁定"""

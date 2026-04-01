@@ -181,6 +181,9 @@ class TaskExecutor:
         except Exception as e:
             logger.warning(f"更新 KB topics 失败 {kb_id}: {e}")
 
+    def _should_refresh_topics(self, params: Dict[str, Any]) -> bool:
+        return bool(params.get("refresh_topics", True))
+
     # ==================== Obsidian 导入 ====================
 
     async def _execute_obsidian(self, task: "Task") -> None:
@@ -196,7 +199,7 @@ class TaskExecutor:
         from kb.task_lock import DedupLock
         from llama_index.core.schema import Document as LlamaDocument
         from kb.parallel_embedding import get_parallel_processor
-        from kb.ingest_vdb import lance_write_queue
+        from kb.lancedb_write_queue import lance_write_queue
         from llamaindex_study.node_parser import get_node_parser
 
         kb_id = task.kb_id
@@ -394,7 +397,8 @@ class TaskExecutor:
             },
         )
 
-        self._update_kb_topics(kb_id, has_new_docs=len(to_add) > 0)
+        if self._should_refresh_topics(params):
+            self._update_kb_topics(kb_id, has_new_docs=len(to_add) > 0)
 
     def _process_deletes(
         self,
@@ -505,7 +509,8 @@ class TaskExecutor:
                 },
             )
 
-            self._update_kb_topics(kb_id, has_new_docs=stats.get("items", 0) > 0)
+            if self._should_refresh_topics(params):
+                self._update_kb_topics(kb_id, has_new_docs=stats.get("items", 0) > 0)
 
         except Exception as e:
             self.queue.update_progress(task.task_id, message=f"导入失败: {str(e)}")
@@ -517,7 +522,7 @@ class TaskExecutor:
         """执行通用文件导入"""
         from kb.generic_processor import GenericImporter
         from kb.parallel_embedding import get_parallel_processor
-        from kb.ingest_vdb import lance_write_queue
+        from kb.lancedb_write_queue import lance_write_queue
         from llamaindex_study.node_parser import get_node_parser
 
         kb_id = task.kb_id
@@ -637,7 +642,8 @@ class TaskExecutor:
 
         vs.set_chunk_strategy(settings.chunk_strategy)
 
-        self._update_kb_topics(kb_id, has_new_docs=stats["files"] > 0)
+        if self._should_refresh_topics(params):
+            self._update_kb_topics(kb_id, has_new_docs=stats["files"] > 0)
 
     async def _execute_initialize(self, task: "Task") -> None:
         kb_id = task.kb_id
