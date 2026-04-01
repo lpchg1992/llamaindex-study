@@ -10,9 +10,8 @@ RAG 查询有两种路由方式：
 
 | 模式 | route_mode 值 | 说明 | 使用场景 |
 |------|--------------|------|---------|
-| **指定知识库** | `"kb"` | 在指定的知识库中查询 | 明确知道问题属于哪个知识库 |
+| **用户选择** | `"general"` | 用户在前端勾选要查询的知识库 | 明确知道问题属于哪个/哪些知识库 |
 | **自动路由** | `"auto"` | 系统根据 query 内容选择相关知识库 | 不确定问题属于哪个知识库 |
-| **所有知识库** | `"all"` | 查询所有知识库 | 需要全面检索时 |
 
 ---
 
@@ -20,13 +19,7 @@ RAG 查询有两种路由方式：
 
 | 端点 | 说明 |
 |------|------|
-| `POST /kbs/{kb_id}/query` | 主要端点，支持所有路由模式 |
-| `POST /query` | **已废弃**，请使用上面的端点 |
-
-| 端点 | 说明 |
-|------|------|
-| `POST /kbs/{kb_id}/query` | 主要端点，支持所有路由模式 |
-| `POST /query` | **已废弃**，请使用上面的端点，设置 `route_mode` 参数 |
+| `POST /query` | 统一入口，支持所有路由模式 |
 
 ---
 
@@ -36,9 +29,8 @@ RAG 查询有两种路由方式：
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `route_mode` | string | `"kb"` | 路由模式：`kb`(指定知识库), `auto`(自动路由), `all`(所有知识库) |
-| `kb_id` | string | - | URL 路径参数，指定知识库 ID |
-| `kb_ids` | string | - | 指定多个知识库（逗号分隔，仅 `route_mode=kb` 时有效） |
+| `route_mode` | string | `"general"` | 路由模式：`general`(用户选择知识库), `auto`(自动路由) |
+| `kb_ids` | string | - | 指定知识库（逗号分隔，`route_mode=general` 时必填） |
 | `exclude` | string[] | - | 排除的知识库 ID 列表（仅 `route_mode=auto` 时有效） |
 
 ### 检索参数
@@ -67,29 +59,29 @@ RAG 查询有两种路由方式：
 
 ## 路由模式详解
 
-### route_mode = "kb"（默认）
+### route_mode = "general"（默认）
 
-使用指定的知识库进行查询。
+用户在前端勾选要查询的知识库。
 
 **有效参数**：
-- `kb_id`（URL 路径）
-- `kb_ids`（body，逗号分隔多个）
+- `kb_ids`：指定知识库 ID（逗号分隔，可指定 1 个或多个）
 
 **示例**：
 
 ```json
-POST /kbs/tech_tools/query
+POST /query
 {
   "query": "Python 异步编程",
-  "route_mode": "kb"
+  "route_mode": "general",
+  "kb_ids": "tech_tools"
 }
 ```
 
 ```json
-POST /kbs/tech_tools/query
+POST /query
 {
   "query": "Python 和 JavaScript 对比",
-  "route_mode": "kb",
+  "route_mode": "general",
   "kb_ids": "tech_tools,programming"
 }
 ```
@@ -106,29 +98,10 @@ POST /kbs/tech_tools/query
 **示例**：
 
 ```json
-POST /kbs/tech_tools/query
+POST /query
 {
   "query": "如何配置 Nginx",
   "route_mode": "auto"
-}
-```
-
----
-
-### route_mode = "all"（所有知识库）
-
-查询所有知识库。
-
-**有效参数**：
-- `exclude`：排除的知识库 ID 列表
-
-**示例**：
-
-```json
-POST /kbs/tech_tools/query
-{
-  "query": "项目总结",
-  "route_mode": "all"
 }
 ```
 
@@ -264,40 +237,40 @@ POST /kbs/tech_tools/query
 ### 指定单库查询
 
 ```json
-POST /kbs/tech_tools/query
+POST /query
 {
   "query": "Python 异步编程的要点是什么？",
-  "route_mode": "kb"
+  "kb_ids": "tech_tools"
 }
 ```
 
 ### 自动路由查询
 
 ```json
-POST /kbs/tech_tools/query
+POST /query
 {
   "query": "如何配置 Nginx 反向代理",
   "route_mode": "auto"
 }
 ```
 
-### 查询所有知识库
+### 多库查询
 
 ```json
-POST /kbs/tech_tools/query
+POST /query
 {
   "query": "项目总结报告",
-  "route_mode": "all"
+  "kb_ids": "tech_tools,programming,devops"
 }
 ```
 
 ### 深度分析模式
 
 ```json
-POST /kbs/tech_tools/query
+POST /query
 {
   "query": "分析当前经济形势下的投资策略",
-  "route_mode": "kb",
+  "kb_ids": "tech_tools",
   "use_hyde": true,
   "use_auto_merging": true,
   "response_mode": "tree_summarize"
@@ -307,10 +280,10 @@ POST /kbs/tech_tools/query
 ### 全面检索模式
 
 ```json
-POST /kbs/tech_tools/query
+POST /query
 {
   "query": "这个项目涉及哪些技术领域",
-  "route_mode": "kb",
+  "kb_ids": "tech_tools,programming",
   "use_multi_query": true,
   "retrieval_mode": "hybrid"
 }
@@ -358,9 +331,8 @@ A: 关闭 `use_hyde`、`use_multi_query`、`use_auto_merging`，使用默认 `co
 
 | CLI 参数 | API 参数 | 说明 |
 |----------|----------|------|
-| `kb_id` | URL 路径 | 指定知识库 |
 | `--auto` | `route_mode="auto"` | 自动路由 |
-| `--kb-ids` | `kb_ids` | 指定多个知识库 |
+| `--kb-ids` | `kb_ids` | 指定知识库（逗号分隔） |
 | `--exclude` | `exclude` | 排除的知识库 |
 | `--hyde` | `use_hyde=true` | HyDE 查询转换 |
 | `--multi-query` | `use_multi_query=true` | 多查询转换 |

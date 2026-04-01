@@ -155,11 +155,11 @@ class SearchRequest(BaseModel):
     query: str = Field(..., description="搜索查询")
     top_k: int = Field(5, ge=1, le=100)
     route_mode: str = Field(
-        "kb",
-        description="路由模式: kb(使用指定知识库), auto(自动路由), all(所有知识库)",
+        "general",
+        description="路由模式: general(用户选择知识库), auto(自动路由)",
     )
     kb_ids: Optional[str] = Field(
-        None, description="指定多个知识库 ID（逗号分隔，仅在 route_mode=kb 时有效）"
+        None, description="指定知识库 ID（逗号分隔，route_mode=general 时必填）"
     )
     exclude: Optional[List[str]] = Field(
         None, description="排除的知识库 ID 列表（仅在 route_mode=auto 时有效）"
@@ -180,14 +180,14 @@ class QueryRequest(BaseModel):
     query: str = Field(..., description="查询")
     top_k: int = Field(5, ge=1, le=100)
     route_mode: str = Field(
-        "kb",
-        description="路由模式: kb(使用指定知识库), auto(自动路由), all(所有知识库)",
+        "general",
+        description="路由模式: general(用户选择知识库), auto(自动路由)",
     )
     retrieval_mode: str = Field(
         "vector", description="检索模式: vector(向量检索), hybrid(混合搜索)"
     )
     kb_ids: Optional[str] = Field(
-        None, description="指定多个知识库 ID（逗号分隔，仅在 route_mode=kb 时有效）"
+        None, description="指定知识库 ID（逗号分隔，route_mode=general 时必填）"
     )
     exclude: Optional[List[str]] = Field(
         None, description="排除的知识库 ID 列表（仅在 route_mode=auto 时有效）"
@@ -761,15 +761,8 @@ def delete_kb(kb_id: str):
 # ============== 检索接口 ==============
 
 
-@app.post("/kbs/{kb_id}/search", response_model=List[SearchResult])
-def search(kb_id: str, req: SearchRequest):
-    """向量检索
-
-    route_mode 参数说明：
-    - kb: 使用指定的知识库（URL 中的 kb_id 或 body 中的 kb_ids）
-    - auto: 自动路由（根据 query 内容选择相关知识库）
-    - all: 查询所有知识库
-    """
+@app.post("/search", response_model=List[SearchResult])
+def search(req: SearchRequest):
     from kb.services import QueryRouter
 
     if req.route_mode == "auto":
@@ -778,55 +771,36 @@ def search(kb_id: str, req: SearchRequest):
             top_k=req.top_k,
             exclude=req.exclude,
             use_auto_merging=req.use_auto_merging,
+            mode="auto",
         )
         return [SearchResult(**r) for r in result.get("results", [])]
 
-    if req.route_mode == "all":
-        result = QueryRouter.search(
-            req.query,
-            top_k=req.top_k,
-            exclude=req.exclude,
-            use_auto_merging=req.use_auto_merging,
-            mode="all",
-        )
-        return [SearchResult(**r) for r in result.get("results", [])]
+    if not req.kb_ids:
+        return []
 
-    if req.kb_ids:
-        kb_id_list = [k.strip() for k in req.kb_ids.split(",") if k.strip()]
-    else:
-        kb_id_list = [kb_id]
+    kb_id_list = [k.strip() for k in req.kb_ids.split(",") if k.strip()]
+    if not kb_id_list:
+        return []
 
-    if len(kb_id_list) == 1:
-        results = SearchService.search(
-            kb_id_list[0],
-            req.query,
-            top_k=req.top_k,
-            use_auto_merging=req.use_auto_merging,
-        )
-    else:
-        results = SearchService.search_multi(
-            kb_id_list,
-            req.query,
-            top_k=req.top_k,
-            use_auto_merging=req.use_auto_merging,
-        )
+    results = SearchService.search_multi(
+        kb_id_list,
+        req.query,
+        top_k=req.top_k,
+        use_auto_merging=req.use_auto_merging,
+    )
     return [SearchResult(**r) for r in results]
 
 
-@app.post("/kbs/{kb_id}/query", response_model=QueryResponse)
-def query(kb_id: str, req: QueryRequest):
-    """RAG 问答
+@app.post("/query", response_model=QueryResponse)
+def query(req: QueryRequest):
+    from kb.services import QueryRouter
 
-    route_mode 参数说明：
-    - kb: 使用指定的知识库（URL 中的 kb_id 或 body 中的 kb_ids）
-    - auto: 自动路由（根据 query 内容选择相关知识库）
-    - all: 查询所有知识库
-    """
     if req.route_mode == "auto":
         result = QueryRouter.query(
             req.query,
             top_k=req.top_k,
             exclude=req.exclude,
+            mode="auto",
             use_hyde=req.use_hyde,
             use_multi_query=req.use_multi_query,
             use_auto_merging=req.use_auto_merging,
@@ -834,153 +808,19 @@ def query(kb_id: str, req: QueryRequest):
         )
         return QueryResponse(**result)
 
-    if req.route_mode == "all":
-        result = QueryRouter.query(
-            req.query,
-            top_k=req.top_k,
-            exclude=req.exclude,
-            mode="all",
-            use_hyde=req.use_hyde,
-            use_multi_query=req.use_multi_query,
-            use_auto_merging=req.use_auto_merging,
-            response_mode=req.response_mode,
-        )
-        return QueryResponse(**result)
-
-    if req.kb_ids:
-        kb_id_list = [k.strip() for k in req.kb_ids.split(",") if k.strip()]
-    else:
-        kb_id_list = [kb_id]
-
-    if len(kb_id_list) == 1:
-        result = SearchService.query(
-            kb_id_list[0],
-            req.query,
-            mode=req.retrieval_mode,
-            top_k=req.top_k,
-            use_hyde=req.use_hyde,
-            use_multi_query=req.use_multi_query,
-            use_auto_merging=req.use_auto_merging,
-            response_mode=req.response_mode,
-        )
-    else:
-        result = QueryRouter.query_multi(
-            kb_id_list,
-            req.query,
-            top_k=req.top_k,
-            use_hyde=req.use_hyde,
-            use_multi_query=req.use_multi_query,
-            use_auto_merging=req.use_auto_merging,
-            response_mode=req.response_mode,
-        )
-    return QueryResponse(**result)
-
-
-@app.post("/search", response_model=List[SearchResult])
-def search_auto(req: SearchRequest):
-    """自动路由向量检索（已废弃，请使用 POST /kbs/{kb_id}/search with route_mode 参数）
-
-    废弃说明：请使用 /kbs/{kb_id}/search 端点，设置 route_mode="auto" 或 route_mode="all"
-    """
-    import warnings
-
-    warnings.warn(
-        "/search endpoint is deprecated. Use POST /kbs/{kb_id}/search with route_mode parameter instead.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    from kb.services import QueryRouter
-
-    if req.route_mode == "kb":
-        raise HTTPException(
-            status_code=400,
-            detail="/search endpoint requires route_mode='auto' or route_mode='all' (no kb_id in URL). "
-            "Use /kbs/{kb_id}/search for single KB search.",
+    if not req.kb_ids:
+        return QueryResponse(
+            response="请提供 kb_ids 参数指定要查询的知识库", sources=[]
         )
 
-    if req.route_mode == "auto" or req.route_mode == "all":
-        result = QueryRouter.search(
-            req.query,
-            top_k=req.top_k,
-            exclude=req.exclude,
-            use_auto_merging=req.use_auto_merging,
-            mode=req.route_mode if req.route_mode == "all" else "auto",
-        )
-        return [SearchResult(**r) for r in result.get("results", [])]
+    kb_id_list = [k.strip() for k in req.kb_ids.split(",") if k.strip()]
+    if not kb_id_list:
+        return QueryResponse(response="kb_ids 参数无效", sources=[])
 
-    kb_id_list = (
-        [k.strip() for k in req.kb_ids.split(",") if k.strip()] if req.kb_ids else []
-    )
-    if kb_id_list:
-        results = SearchService.search_multi(
-            kb_id_list,
-            req.query,
-            top_k=req.top_k,
-            use_auto_merging=req.use_auto_merging,
-        )
-        return [SearchResult(**r) for r in results]
-
-    result = QueryRouter.search(
+    result = QueryRouter.query_multi(
+        kb_id_list,
         req.query,
         top_k=req.top_k,
-        exclude=req.exclude,
-        use_auto_merging=req.use_auto_merging,
-    )
-    return [SearchResult(**r) for r in result.get("results", [])]
-
-
-@app.post("/query", response_model=QueryResponse)
-def query_auto(req: QueryRequest):
-    """自动路由 RAG 问答（已废弃，请使用 POST /kbs/{kb_id}/query with route_mode 参数）
-
-    废弃说明：请使用 /kbs/{kb_id}/query 端点，设置 route_mode="auto" 或 route_mode="all"
-    """
-    import warnings
-
-    warnings.warn(
-        "/query endpoint is deprecated. Use POST /kbs/{kb_id}/query with route_mode parameter instead.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    from kb.services import QueryRouter
-
-    if req.route_mode == "kb":
-        raise HTTPException(
-            status_code=400,
-            detail="/query endpoint requires route_mode='auto' or route_mode='all' (no kb_id in URL). "
-            "Use /kbs/{kb_id}/query for single KB query.",
-        )
-
-    if req.route_mode == "auto" or req.route_mode == "all":
-        result = QueryRouter.query(
-            req.query,
-            top_k=req.top_k,
-            exclude=req.exclude,
-            mode=req.route_mode if req.route_mode == "all" else "auto",
-            use_hyde=req.use_hyde,
-            use_multi_query=req.use_multi_query,
-            use_auto_merging=req.use_auto_merging,
-            response_mode=req.response_mode,
-        )
-        return QueryResponse(**result)
-
-    if req.kb_ids:
-        kb_id_list = [k.strip() for k in req.kb_ids.split(",") if k.strip()]
-        result = QueryRouter.query_multi(
-            kb_id_list,
-            req.query,
-            top_k=req.top_k,
-            use_hyde=req.use_hyde,
-            use_multi_query=req.use_multi_query,
-            use_auto_merging=req.use_auto_merging,
-            response_mode=req.response_mode,
-        )
-        return QueryResponse(**result)
-
-    result = QueryRouter.query(
-        req.query,
-        top_k=req.top_k,
-        exclude=req.exclude,
         use_hyde=req.use_hyde,
         use_multi_query=req.use_multi_query,
         use_auto_merging=req.use_auto_merging,

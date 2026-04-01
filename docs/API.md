@@ -138,10 +138,8 @@ curl "http://localhost:37241/tasks/abc12345"
 
 | 方法 | 端点 | 功能 |
 |------|------|------|
-| POST | `/kbs/{kb_id}/search` | 向量检索（支持 route_mode 参数） |
-| POST | `/kbs/{kb_id}/query` | RAG 问答（支持 route_mode 参数） |
-| ~~POST~~ | ~~`/search`~~ | ~~已废弃，请使用 `/kbs/{kb_id}/search`~~ |
-| ~~POST~~ | ~~`/query`~~ | ~~已废弃，请使用 `/kbs/{kb_id}/query`~~ |
+| POST | `/search` | 向量检索（统一入口） |
+| POST | `/query` | RAG 问答（统一入口） |
 
 ### Obsidian
 
@@ -361,25 +359,20 @@ curl -X POST "http://localhost:37241/kbs/tech_tools/initialize"
 
 ### 检索查询
 
-#### POST /kbs/{kb_id}/search
+#### POST /search
 
-向量检索，支持指定知识库、自动路由、所有知识库三种模式：
+向量检索的统一入口，支持两种路由模式：
 
 ```bash
-# 指定知识库检索（默认）
-curl -X POST "http://localhost:37241/kbs/tech_tools/search" \
+# 用户选择知识库检索（默认）
+curl -X POST "http://localhost:37241/search" \
   -H "Content-Type: application/json" \
-  -d '{"query": "Python 异步编程", "top_k": 5}'
+  -d '{"query": "Python 异步编程", "kb_ids": "tech_tools,academic", "top_k": 5}'
 
 # 自动路由检索
-curl -X POST "http://localhost:37241/kbs/tech_tools/search" \
+curl -X POST "http://localhost:37241/search" \
   -H "Content-Type: application/json" \
   -d '{"query": "Python 异步编程", "route_mode": "auto"}'
-
-# 查询所有知识库
-curl -X POST "http://localhost:37241/kbs/tech_tools/search" \
-  -H "Content-Type: application/json" \
-  -d '{"query": "Python 异步编程", "route_mode": "all"}'
 ```
 
 **请求参数说明：**
@@ -387,11 +380,13 @@ curl -X POST "http://localhost:37241/kbs/tech_tools/search" \
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `query` | string | 必填 | 查询内容 |
-| `route_mode` | string | `"kb"` | 路由模式：`kb`(指定知识库), `auto`(自动路由), `all`(所有知识库) |
+| `route_mode` | string | `"general"` | 路由模式：`general`(用户选择知识库), `auto`(自动路由) |
 | `top_k` | int | `5` | 返回结果数量 |
-| `kb_ids` | string | null | 指定多个知识库 ID（逗号分隔，仅 `route_mode=kb` 时有效） |
+| `kb_ids` | string | null | 指定知识库 ID（逗号分隔，`route_mode=general` 时必填） |
 | `exclude` | string[] | null | 排除的知识库 ID 列表（仅 `route_mode=auto` 时有效） |
 | `use_auto_merging` | bool | null | 启用 Auto-Merging（null=使用配置默认值） |
+
+**响应格式：**
 
 ```json
 [
@@ -404,43 +399,20 @@ curl -X POST "http://localhost:37241/kbs/tech_tools/search" \
 ]
 ```
 
-**多库检索示例：**
+#### POST /query
+
+RAG 问答的统一入口，支持两种路由模式：
 
 ```bash
-# 在多个知识库中检索
-curl -X POST "http://localhost:37241/kbs/tech_tools/search" \
+# 用户选择知识库问答（默认）
+curl -X POST "http://localhost:37241/query" \
   -H "Content-Type: application/json" \
-  -d '{"query": "Python 异步编程", "route_mode": "kb", "kb_ids": "tech_tools,academic", "top_k": 5}'
-```
-
-**Auto-Merging 检索示例：**
-
-```bash
-# 启用 Auto-Merging（自动合并子节点到父节点）
-curl -X POST "http://localhost:37241/kbs/tech_tools/search" \
-  -H "Content-Type: application/json" \
-  -d '{"query": "Python 异步编程", "top_k": 5, "use_auto_merging": true}'
-```
-
-#### POST /kbs/{kb_id}/query
-
-RAG 问答，支持指定知识库、自动路由、所有知识库三种模式：
-
-```bash
-# 指定知识库问答（默认）
-curl -X POST "http://localhost:37241/kbs/tech_tools/query" \
-  -H "Content-Type: application/json" \
-  -d '{"query": "如何优化 Python 性能？", "top_k": 5}'
+  -d '{"query": "如何优化 Python 性能？", "kb_ids": "tech_tools,academic", "top_k": 5}'
 
 # 自动路由问答
-curl -X POST "http://localhost:37241/kbs/tech_tools/query" \
+curl -X POST "http://localhost:37241/query" \
   -H "Content-Type: application/json" \
   -d '{"query": "如何优化 Python 性能？", "route_mode": "auto"}'
-
-# 查询所有知识库
-curl -X POST "http://localhost:37241/kbs/tech_tools/query" \
-  -H "Content-Type: application/json" \
-  -d '{"query": "如何优化 Python 性能？", "route_mode": "all"}'
 ```
 
 **请求参数说明：**
@@ -448,23 +420,25 @@ curl -X POST "http://localhost:37241/kbs/tech_tools/query" \
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `query` | string | 必填 | 查询内容 |
-| `route_mode` | string | `"kb"` | 路由模式：`kb`(指定知识库), `auto`(自动路由), `all`(所有知识库) |
+| `route_mode` | string | `"general"` | 路由模式：`general`(用户选择知识库), `auto`(自动路由) |
 | `top_k` | int | `5` | 返回结果数量 |
 | `retrieval_mode` | string | `"vector"` | 检索模式：`vector` 或 `hybrid` |
-| `kb_ids` | string | null | 指定多个知识库 ID（逗号分隔，仅 `route_mode=kb` 时有效） |
+| `kb_ids` | string | null | 指定知识库 ID（逗号分隔，`route_mode=general` 时必填） |
 | `exclude` | string[] | null | 排除的知识库 ID 列表（仅 `route_mode=auto` 时有效） |
 | `use_hyde` | bool | null | 启用 HyDE 查询转换（null=使用配置默认值） |
 | `use_multi_query` | bool | null | 启用多查询转换（null=使用配置默认值） |
 | `use_auto_merging` | bool | null | 启用 Auto-Merging（null=使用配置默认值） |
 | `response_mode` | string | null | 答案生成模式（null=使用配置默认值） |
 
-**多库问答示例：**
+**响应格式：**
 
-```bash
-# 在多个知识库中问答
-curl -X POST "http://localhost:37241/kbs/tech_tools/query" \
-  -H "Content-Type: application/json" \
-  -d '{"query": "如何优化 Python 性能？", "kb_ids": "tech_tools,academic", "top_k": 5}'
+```json
+{
+  "response": "优化 Python 性能可以从以下几个方面入手...",
+  "sources": [
+    {"text": "Python 性能优化技巧...", "score": 0.85}
+  ]
+}
 ```
 
 ### 检索查询扩展功能
@@ -474,10 +448,9 @@ curl -X POST "http://localhost:37241/kbs/tech_tools/query" \
 HyDE (Hypothetical Document Embeddings) 使用 LLM 生成假设性文档，然后用假设性文档的 embedding 来检索真实文档：
 
 ```bash
-# 通过 API 参数启用 HyDE
-curl -X POST "http://localhost:37241/kbs/tech_tools/query" \
+curl -X POST "http://localhost:37241/query" \
   -H "Content-Type: application/json" \
-  -d '{"query": "Python 异步编程最佳实践", "top_k": 5, "use_hyde": true}'
+  -d '{"query": "Python 异步编程最佳实践", "kb_ids": "tech_tools", "use_hyde": true}'
 ```
 
 #### 多查询转换
@@ -485,10 +458,9 @@ curl -X POST "http://localhost:37241/kbs/tech_tools/query" \
 生成多个查询变体，减少检索遗漏：
 
 ```bash
-# 通过 API 参数启用多查询
-curl -X POST "http://localhost:37241/kbs/tech_tools/query" \
+curl -X POST "http://localhost:37241/query" \
   -H "Content-Type: application/json" \
-  -d '{"query": "如何优化 Python 性能", "top_k": 5, "use_multi_query": true}'
+  -d '{"query": "如何优化 Python 性能", "kb_ids": "tech_tools", "use_multi_query": true}'
 ```
 
 #### Auto-Merging Retriever
@@ -496,10 +468,9 @@ curl -X POST "http://localhost:37241/kbs/tech_tools/query" \
 自动合并相关子节点为父节点，提供更完整的上下文：
 
 ```bash
-# 通过 API 参数启用 Auto-Merging
-curl -X POST "http://localhost:37241/kbs/tech_tools/query" \
+curl -X POST "http://localhost:37241/query" \
   -H "Content-Type: application/json" \
-  -d '{"query": "Python 异步编程", "top_k": 5, "use_auto_merging": true}'
+  -d '{"query": "Python 异步编程", "kb_ids": "tech_tools", "use_auto_merging": true}'
 ```
 
 > **注意**：Auto-Merging 需要知识库使用 `hierarchical` 分块策略（父子节点分块）。如果 KB 使用 `sentence` 或 `semantic` 策略，查询时会自动回退到普通 retriever。
@@ -509,10 +480,9 @@ curl -X POST "http://localhost:37241/kbs/tech_tools/query" \
 答案生成模式，可通过 `response_mode` 参数动态指定：
 
 ```bash
-# 使用 tree_summarize 模式
-curl -X POST "http://localhost:37241/kbs/tech_tools/query" \
+curl -X POST "http://localhost:37241/query" \
   -H "Content-Type: application/json" \
-  -d '{"query": "Python 性能优化", "top_k": 5, "response_mode": "tree_summarize"}'
+  -d '{"query": "Python 性能优化", "kb_ids": "tech_tools", "response_mode": "tree_summarize"}'
 ```
 
 | 模式 | 说明 |
@@ -525,88 +495,6 @@ curl -X POST "http://localhost:37241/kbs/tech_tools/query" \
 | `accumulate` | 累积式生成 |
 | `generation` | 仅生成答案（不使用检索结果） |
 | `compact_accumulate` | 压缩后累积式生成 |
-
-```json
-{
-  "response": "优化 Python 性能可以从以下几个方面入手...",
-  "sources": [
-    {"text": "Python 性能优化技巧...", "score": 0.85}
-  ]
-}
-```
-
-#### POST /search - 自动路由检索
-
-自动选择知识库进行向量检索：
-
-**路由模式**：
-
-| mode | 说明 |
-|------|------|
-| `auto`（默认） | LLM 分析问题，自动选择相关知识库 |
-| `all` | 查询所有知识库 |
-
-```bash
-# 自动路由（默认）
-curl -X POST "http://localhost:37241/search" \
-  -H "Content-Type: application/json" \
-  -d '{"query": "Python 异步编程", "top_k": 5}'
-
-# 全库查询
-curl -X POST "http://localhost:37241/search" \
-  -H "Content-Type: application/json" \
-  -d '{"query": "Python 异步编程", "top_k": 5, "mode": "all"}'
-```
-
-```json
-[
-  {
-    "text": "Python asyncio 使用指南...",
-    "score": 0.92,
-    "metadata": {"kb_id": "tech_tools"}
-  }
-]
-```
-
-**排除指定知识库：**
-
-```bash
-curl -X POST "http://localhost:37241/search" \
-  -H "Content-Type: application/json" \
-  -d '{"query": "Python 异步编程", "top_k": 5, "exclude": ["academic", "industry_news"]}'
-```
-
-#### POST /search - ~~自动路由向量检索~~（已废弃）
-
-> ⚠️ **已废弃**：请使用 `POST /kbs/{kb_id}/search` 端点，设置 `route_mode` 参数。
-
-**废弃说明**：
-- 原 `/search` 端点功能已合并到 `/kbs/{kb_id}/search`
-- 使用 `route_mode="auto"` 实现自动路由
-- 使用 `route_mode="all"` 查询所有知识库
-
-```bash
-# 请改用：
-curl -X POST "http://localhost:37241/kbs/tech_tools/search" \
-  -H "Content-Type: application/json" \
-  -d '{"query": "Python 异步编程", "route_mode": "auto"}'
-```
-
-#### POST /query - ~~自动路由 RAG 问答~~（已废弃）
-
-> ⚠️ **已废弃**：请使用 `POST /kbs/{kb_id}/query` 端点，设置 `route_mode` 参数。
-
-**废弃说明**：
-- 原 `/query` 端点功能已合并到 `/kbs/{kb_id}/query`
-- 使用 `route_mode="auto"` 实现自动路由
-- 使用 `route_mode="all"` 查询所有知识库
-
-```bash
-# 请改用：
-curl -X POST "http://localhost:37241/kbs/tech_tools/query" \
-  -H "Content-Type: application/json" \
-  -d '{"query": "如何优化 Python 性能？", "route_mode": "auto"}'
-```
 
 ---
 
