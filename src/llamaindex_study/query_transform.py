@@ -25,6 +25,9 @@ Query Transformations Module
 from typing import Any, Optional
 
 from llamaindex_study.config import get_settings
+from llamaindex_study.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 def get_llm():
@@ -125,30 +128,23 @@ def get_multi_query_engine(
     创建多查询引擎
 
     从多个角度生成查询变体，解决单查询可能遗漏的问题
-
-    Args:
-        base_query_engine: 基础查询引擎
-        num_queries: 生成的查询数量
-
-    Returns:
-        QueryEngine with multi-query transformation
     """
-    from llama_index.core.indices.query.query_transform import MultiStepQueryTransform
-    from llama_index.core.query_engine import MultiStepQueryEngine
+    try:
+        from llama_index.core.indices.query.query_transform import (
+            StepDecomposeQueryTransform,
+        )
+        from llama_index.core.query_engine import MultiStepQueryEngine
 
-    llm = get_llm()
-
-    step_decompose_transform = MultiStepQueryTransform(
-        llm=llm,
-        num_steps=num_queries,
-    )
-
-    query_engine = MultiStepQueryEngine(
-        query_engine=base_query_engine,
-        query_transform=step_decompose_transform,
-    )
-
-    return query_engine
+        llm = get_llm()
+        step_decompose_transform = StepDecomposeQueryTransform(llm=llm)
+        query_engine = MultiStepQueryEngine(
+            query_engine=base_query_engine,
+            query_transform=step_decompose_transform,
+        )
+        return query_engine
+    except ImportError:
+        logger.warning("Multi-Query 功能在当前 LlamaIndex 版本中不可用")
+        return base_query_engine
 
 
 class QueryTransformPipeline:

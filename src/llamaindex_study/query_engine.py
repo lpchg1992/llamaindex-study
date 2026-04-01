@@ -177,17 +177,20 @@ class QueryEngineWrapper:
             logger.info("启用 HyDE 查询转换")
 
         if self.use_multi_query:
-            from llama_index.core.indices.query.query_transform import (
-                MultiStepQueryTransform,
-            )
-            from llama_index.core.query_engine import MultiStepQueryEngine
+            try:
+                from llama_index.core.indices.query.query_transform import (
+                    StepDecomposeQueryTransform,
+                )
+                from llama_index.core.query_engine import MultiStepQueryEngine
 
-            step_decompose = MultiStepQueryTransform(num_steps=3)
-            base_engine = MultiStepQueryEngine(
-                query_engine=base_engine,
-                query_transform=step_decompose,
-            )
-            logger.info("启用 Multi-Query 查询转换")
+                step_decompose = StepDecomposeQueryTransform()
+                base_engine = MultiStepQueryEngine(
+                    query_engine=base_engine,
+                    query_transform=step_decompose,
+                )
+                logger.info("启用 Multi-Query 查询转换")
+            except ImportError as e:
+                logger.warning(f"Multi-Query 功能不可用: {e}")
 
         return base_engine
 
