@@ -592,8 +592,8 @@ uv run llamaindex-study kb topics --all --update
 ### 检索流程
 
 ```
-1. API: POST /kbs/tech_tools/query
-        Body: {"query": "猪营养配方设计"}
+1. API: POST /query
+        Body: {"query": "猪营养配方设计", "kb_ids": "tech_tools"}
 
 2. 查询转换（可选）
    ├── HyDE: 生成假设性文档 → 用假设性文档检索

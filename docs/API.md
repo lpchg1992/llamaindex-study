@@ -676,9 +676,9 @@ curl -X POST "http://localhost:37241/kbs/tech_tools/ingest/obsidian" \
 curl "http://localhost:37241/tasks/{task_id}"
 
 # 搜索
-curl -X POST "http://localhost:37241/kbs/tech_tools/search" \
+curl -X POST "http://localhost:37241/search" \
   -H "Content-Type: application/json" \
-  -d '{"query": "Python", "top_k": 5}'
+  -d '{"query": "Python", "kb_ids": "tech_tools", "top_k": 5}'
 ```
 
 ---
