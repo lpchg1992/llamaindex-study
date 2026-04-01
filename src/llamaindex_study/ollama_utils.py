@@ -125,21 +125,11 @@ def configure_global_embed_model(
     chunk_size: int = 512,
     embed_batch_size: int = 10,
 ) -> OllamaEmbedding:
-    """
-    配置全局 LlamaIndex Embedding 模型
-
-    将 Ollama embedding 模型设置为 LlamaIndex 全局设置。
-
-    Args:
-        model: 模型名称（默认从配置读取）
-        base_url: Ollama 服务地址（默认从配置读取）
-        chunk_size: 文档分块大小
-        embed_batch_size: embedding 批处理大小
-
-    Returns:
-        配置好的 OllamaEmbedding 实例
-    """
-    embed_model = create_ollama_embedding(model=model, base_url=base_url)
+    settings = get_settings()
+    embed_model = OllamaEmbedding(
+        model_name=model or settings.ollama_embed_model,
+        base_url=base_url or settings.ollama_base_url,
+    )
 
     LlamaSettings.embed_model = embed_model
     LlamaSettings.chunk_size = chunk_size
