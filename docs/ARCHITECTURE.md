@@ -227,6 +227,85 @@ class DedupLock:
         self.lock.release()
 ```
 
+### 增量同步机制
+
+文档导入时通过 `DeduplicationManager` 实现增量同步，避免重复处理。
+
+**代码位置**：`kb/deduplication.py`
+
+#### 核心概念
+
+| 概念 | 说明 |
+|------|------|
+| `ChangeType` | 变更类型枚举：ADD（新增）、UPDATE（更新）、DELETE（删除）、UNCHANGE（未变更） |
+| `FileChange` | 文件变更记录，包含路径、哈希、变更类型 |
+| `ProcessingRecord` | 处理记录，持久化到 dedup.db |
+
+#### 检测流程
+
+```
+导入文件列表
+    ↓
+遍历文件，计算 SHA256 哈希
+    ↓
+查询 dedup.db 中的历史记录
+    ↓
+比较哈希值
+    ├── 哈希相同 → UNCHANGED（跳过）
+    ├── 哈希不同 → UPDATE
+    └── 新文件 → ADD
+    ↓
+同步检测删除的文件（历史记录存在但当前文件不存在 → DELETE）
+```
+
+#### 关键方法
+
+| 方法 | 说明 |
+|------|------|
+| `detect_changes()` | 检测文件变更，返回 (to_add, to_update, to_delete, unchanged) |
+| `mark_processed()` | 标记文件为已处理 |
+| `clear()` | 清除所有记录（用于重建模式） |
+| `_save()` | 保存状态到 dedup.db |
+
+#### 数据库 Schema
+
+```sql
+CREATE TABLE dedup_records (
+    kb_id TEXT NOT NULL,       -- 知识库 ID
+    file_path TEXT NOT NULL,   -- 文件相对路径
+    hash TEXT NOT NULL,        -- SHA256 哈希值
+    doc_id TEXT NOT NULL,      -- 文档 ID（LlamaIndex 生成）
+    chunk_count INTEGER,        -- 分块数量
+    mtime REAL NOT NULL,       -- 文件修改时间
+    last_processed REAL,       -- 最后处理时间
+    PRIMARY KEY (kb_id, file_path)
+);
+```
+
+#### 与 LanceDB 配合
+
+去重管理层与 LanceDB 的 upsert 机制配合：
+
+```
+detect_changes() → 找出需要处理的文件
+    ↓
+处理文件，生成 nodes（含 doc_id）
+    ↓
+Upsert 到 LanceDB（基于 doc_id 去重）
+    ↓
+mark_processed() → 更新 dedup.db 记录
+```
+
+#### CLI 控制
+
+```bash
+# 增量同步（默认行为）
+uv run llamaindex-study ingest obsidian my_kb
+
+# 强制重建（清除 dedup.db，清空 LanceDB）
+uv run llamaindex-study ingest obsidian my_kb --rebuild
+```
+
 ### 4. LanceDB 写入队列
 
 ```python
@@ -391,6 +470,123 @@ API 提交任务
 5. 任务完成
    └── TaskQueue.complete_task()
        └── {"files": 26, "nodes": 248, "endpoint_stats": {"本地": 124, "远程": 124}}
+```
+
+### 自动路由机制
+
+当使用 `QueryRouter` 进行自动路由查询时（不指定 `kb_id`）：
+
+```
+用户查询
+    │
+    ▼
+QueryRouter.route()
+    │
+    ├─→ 1. LLM 路由 (_llm_route)
+    │     - 收集所有 KB 的 topics
+    │     - 发送给 LLM (DeepSeek-V3.2)
+    │     - LLM 判断哪些 KB 相关
+    │     - 成功 → 返回 KB ID 列表
+    │
+    └─→ 失败时降级 → 2. 关键词匹配路由 (_keyword_route)
+          - 分词 query
+          - 匹配 KB topics
+          - 计算得分排序
+          - 返回 KB ID 列表
+```
+
+**代码位置**：`kb/services.py` → `QueryRouter`
+
+| 方法 | 说明 |
+|------|------|
+| `route()` | 主入口，协调 LLM 路由和关键词匹配 |
+| `_llm_route()` | 调用 LLM 智能选择 KB |
+| `_keyword_route()` | 关键词匹配（fallback） |
+
+### Topics 生成机制
+
+Topics 是知识库的主题词标签，用于自动路由时的知识库选择。
+
+**代码位置**：`kb/topic_analyzer.py` → `TopicAnalyzer`
+
+#### 触发生成
+
+| 时机 | 说明 |
+|------|------|
+| 文档导入完成 | `_execute_obsidian()`、`_execute_zotero()`、`_execute_generic()` 完成后自动调用 |
+| 手动触发 | `kb topics` / `kb topics-local` CLI 命令 |
+
+#### 生成流程
+
+```
+文档导入完成
+    ↓
+_update_kb_topics(kb_id, has_new_docs=True)
+    ↓
+get_kb_documents_for_analysis() 
+    - 从 LanceDB 采样最多 50 个文档
+    ↓
+TopicAnalyzer.extract_topics(docs, use_llm=True)
+    ↓
+_llm_extract_topics()
+    - 合并前 30 个文档（最多 8000 字符）
+    - 调用 SiliconFlow API (DeepSeek-V3.2)
+    - Prompt 要求提取 15-25 个专业术语
+    - 过滤停用词和垃圾词
+    ↓
+merge_topics()
+    - 与现有 topics 合并
+    - 去重、相似度检测
+    ↓
+_is_significant_change()
+    - Jaccard 相似度 < 0.7 时认为显著变化
+    ↓
+db.update_topics() → 写入数据库
+```
+
+#### LLM 提取 Prompt
+
+```python
+prompt = """你是一个专业的知识库主题分析助手。请从以下文档内容中提取15-25个主题词。
+
+要求：
+1. 只提取专业术语、学术名词、具体概念（如蛋白质代谢、猪营养配方、线性规划等）
+2. 只提取名词性词汇，不要动词、形容词、副词、介词
+3. 优先提取能体现学科领域特色的专业词汇
+4. 用换行符分隔，每行一个词
+
+---文档内容---
+{combined_text}
+---文档结束---
+
+主题词（每行一个）："""
+```
+
+#### 配置参数
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `MAX_TOPICS` | 30 | 最多保留主题词数量 |
+| `TOPIC_THRESHOLD` | 0.3 | 主题词得分阈值 |
+| `SAMPLE_SIZE` | 50 | 从 LanceDB 采样文档数 |
+
+#### 存储位置
+
+- **数据库表**：`knowledge_bases`
+- **字段**：`topics` (JSON 数组)
+- **操作方法**：`db.update_topics()`、`db.get_topics()`
+
+#### CLI 命令
+
+```bash
+# 使用远程 LLM（DeepSeek-V3.2）
+uv run llamaindex-study kb topics <kb_id>
+
+# 使用本地模型（统计方法）
+uv run llamaindex-study kb topics-local <kb_id>
+
+# 分析所有知识库
+uv run llamaindex-study kb topics --all --update
 ```
 
 ### 检索流程

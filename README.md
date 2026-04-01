@@ -20,6 +20,9 @@
 - 🏗️ **层级分块** — 父子节点结构（默认），支持 Auto-Merging
 - 🧩 **语义分块** — 基于 embedding 相似度的智能分块
 
+### 质量评估
+- 📊 **RAG 评估** — 基于 Ragas 框架评估 faithfulness、answer_relevancy、context_precision、context_recall
+
 ## 快速开始
 
 ### 环境要求
@@ -73,6 +76,10 @@ uv run llamaindex-study ingest zotero my_kb --collection-name "文献"
 # 检索问答
 uv run llamaindex-study search my_kb "Python 异步编程"
 uv run llamaindex-study query my_kb "如何优化代码性能"
+
+# 自动路由（LLM 选择知识库）
+uv run llamaindex-study search "猪饲料配方" --auto
+uv run llamaindex-study query "如何优化代码性能" --auto
 
 # 高级检索
 uv run llamaindex-study query my_kb "..." --auto-merging  # Auto-Merging

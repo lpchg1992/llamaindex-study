@@ -19,6 +19,10 @@ API 端点:
     POST /search                     - 自动路由检索
     POST /query                      - 自动路由问答
 
+    RAG 评估:
+    POST /evaluate/{kb_id}           - RAG 性能评估
+    GET  /evaluate/metrics           - 获取评估指标说明
+
     任务队列:
     POST /tasks                      - 提交任务
     GET  /tasks                      - 列出任务
@@ -81,6 +85,7 @@ from kb.services import (
     KnowledgeBaseService,
     SearchService,
 )
+from llamaindex_study.rag_evaluator import RAGEvaluator, RAGMetrics
 
 
 # ============== Lifespan 和调度器 ==============
@@ -114,7 +119,21 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="LlamaIndex RAG API",
-    description="RAG 检索增强生成 API，支持任务队列异步处理",
+    description="""
+RAG 检索增强生成 API，支持任务队列异步处理。
+
+## 核心文档
+
+- [Query 参数设计指南](./QUERY_PARAM_GUIDE.md) - 客户端 UI 设计参考
+- [CLI 使用文档](./CLI.md) - 命令行接口详细说明
+- [架构设计](./ARCHITECTURE.md) - 系统架构与设计模式
+
+## 快速开始
+
+1. 创建知识库: `POST /kbs`
+2. 导入文档: `POST /kbs/{kb_id}/ingest`
+3. RAG 问答: `POST /kbs/{kb_id}/query`
+    """,
     version="3.1.0",
     docs_url="/docs",
     lifespan=lifespan,
@@ -135,10 +154,16 @@ app.add_middleware(
 class SearchRequest(BaseModel):
     query: str = Field(..., description="搜索查询")
     top_k: int = Field(5, ge=1, le=100)
-    kb_ids: Optional[str] = Field(
-        None, description="指定多个知识库 ID（逗号分隔，如: kb1,kb2）"
+    route_mode: str = Field(
+        "kb",
+        description="路由模式: kb(使用指定知识库), auto(自动路由), all(所有知识库)",
     )
-    exclude: Optional[List[str]] = Field(None, description="排除的知识库 ID 列表")
+    kb_ids: Optional[str] = Field(
+        None, description="指定多个知识库 ID（逗号分隔，仅在 route_mode=kb 时有效）"
+    )
+    exclude: Optional[List[str]] = Field(
+        None, description="排除的知识库 ID 列表（仅在 route_mode=auto 时有效）"
+    )
     use_auto_merging: Optional[bool] = Field(
         None, description="启用 Auto-Merging（合并子节点到父节点）"
     )
@@ -153,12 +178,20 @@ class SearchResult(BaseModel):
 
 class QueryRequest(BaseModel):
     query: str = Field(..., description="查询")
-    mode: str = Field("vector", description="检索模式: vector, hybrid")
     top_k: int = Field(5, ge=1, le=100)
-    kb_ids: Optional[str] = Field(
-        None, description="指定多个知识库 ID（逗号分隔，如: kb1,kb2）"
+    route_mode: str = Field(
+        "kb",
+        description="路由模式: kb(使用指定知识库), auto(自动路由), all(所有知识库)",
     )
-    exclude: Optional[List[str]] = Field(None, description="排除的知识库 ID 列表")
+    retrieval_mode: str = Field(
+        "vector", description="检索模式: vector(向量检索), hybrid(混合搜索)"
+    )
+    kb_ids: Optional[str] = Field(
+        None, description="指定多个知识库 ID（逗号分隔，仅在 route_mode=kb 时有效）"
+    )
+    exclude: Optional[List[str]] = Field(
+        None, description="排除的知识库 ID 列表（仅在 route_mode=auto 时有效）"
+    )
     use_hyde: Optional[bool] = Field(
         None, description="启用 HyDE 查询转换（None=使用配置默认值）"
     )
@@ -177,6 +210,12 @@ class QueryRequest(BaseModel):
 class QueryResponse(BaseModel):
     response: str
     sources: List[dict] = []
+
+
+class EvaluateRequest(BaseModel):
+    questions: List[str] = Field(..., description="问题列表")
+    ground_truths: List[str] = Field(..., description="标准答案列表")
+    top_k: int = Field(5, ge=1, le=100, description="检索返回结果数")
 
 
 class IngestRequest(BaseModel):
@@ -255,29 +294,40 @@ def health():
 
 
 @app.get("/api-docs", response_class=HTMLResponse)
-def api_docs_page():
-    """显示 API 文档页面 (docs/API.md)"""
-    docs_path = Path(__file__).parent / "docs" / "API.md"
-    if not docs_path.exists():
-        return HTMLResponse(
-            content="<html><body><h1>API 文档未找到</h1><p>docs/API.md 不存在</p></body></html>",
-            status_code=404,
+def api_docs_page(doc: str = None):
+    """显示 Markdown 格式的 API 文档页面
+
+    文档列表:
+    - /api-docs - 文档首页（所有文档链接）
+    - /api-docs?doc=API - API 文档
+    - /api-docs?doc=CLI - CLI 使用文档
+    - /api-docs?doc=ARCHITECTURE - 架构设计文档
+    - /api-docs?doc=QUERY_PARAM_GUIDE - Query 参数设计指南
+    """
+    docs_dir = Path(__file__).parent / "docs"
+
+    doc_files = {
+        "API": "API.md",
+        "CLI": "CLI.md",
+        "ARCHITECTURE": "ARCHITECTURE.md",
+        "QUERY_PARAM_GUIDE": "QUERY_PARAM_GUIDE.md",
+    }
+
+    def render_md_to_html(md_content, title):
+        html_content = markdown.markdown(
+            md_content,
+            extensions=["tables", "fenced_code", "codehilite"],
         )
+        return f"""
+        <div class="content">
+            {html_content}
+        </div>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+        <script>hljs.highlightAll();</script>
+        """
 
-    md_content = docs_path.read_text(encoding="utf-8")
-    html_content = markdown.markdown(
-        md_content,
-        extensions=["tables", "fenced_code", "codehilite"],
-    )
-
-    html_page = f"""<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>API 文档 - LlamaIndex RAG API</title>
-    <style>
-        :root {{
+    common_styles = """
+        :root {
             --bg-color: #ffffff;
             --text-color: #333333;
             --code-bg: #f5f5f5;
@@ -287,9 +337,10 @@ def api_docs_page():
             --header-color: #ffffff;
             --table-header-bg: #f0f0f0;
             --blockquote-border: #4caf50;
-        }}
-        @media (prefers-color-scheme: dark) {{
-            :root {{
+            --sidebar-bg: #f8f9fa;
+        }
+        @media (prefers-color-scheme: dark) {
+            :root {
                 --bg-color: #1a1a1a;
                 --text-color: #e0e0e0;
                 --code-bg: #2d2d2d;
@@ -297,114 +348,229 @@ def api_docs_page():
                 --link-color: #66b3ff;
                 --header-bg: #2c3e50;
                 --table-header-bg: #2d2d2d;
-            }}
-        }}
-        * {{ box-sizing: border-box; }}
-        body {{
+                --sidebar-bg: #252525;
+            }
+        }
+        * { box-sizing: border-box; }
+        body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
             line-height: 1.6;
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 20px;
+            margin: 0;
+            padding: 0;
             background-color: var(--bg-color);
             color: var(--text-color);
-        }}
-        h1, h2, h3, h4, h5, h6 {{ margin-top: 1.5em; margin-bottom: 0.5em; font-weight: 600; }}
-        h1 {{
-            font-size: 2.2em;
-            border-bottom: 3px solid var(--header-bg);
-            padding-bottom: 0.3em;
-        }}
-        h2 {{ font-size: 1.8em; border-bottom: 1px solid var(--border-color); padding-bottom: 0.2em; }}
-        a {{ color: var(--link-color); text-decoration: none; }}
-        a:hover {{ text-decoration: underline; }}
-        code {{
+        }
+        .layout {
+            display: flex;
+            min-height: 100vh;
+        }
+        .sidebar {
+            width: 280px;
+            background-color: var(--sidebar-bg);
+            border-right: 1px solid var(--border-color);
+            padding: 20px;
+            position: fixed;
+            height: 100vh;
+            overflow-y: auto;
+        }
+        .main {
+            flex: 1;
+            padding: 20px 40px;
+            max-width: 1100px;
+            margin-left: 280px;
+        }
+        h1, h2, h3, h4 { margin-top: 1.5em; margin-bottom: 0.5em; font-weight: 600; }
+        h1 { font-size: 2.2em; border-bottom: 3px solid var(--header-bg); padding-bottom: 0.3em; }
+        h2 { font-size: 1.8em; border-bottom: 1px solid var(--border-color); padding-bottom: 0.2em; }
+        a { color: var(--link-color); text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        code {
             background-color: var(--code-bg);
             padding: 2px 6px;
             border-radius: 3px;
-            font-family: "SF Mono", Monaco, Consolas, "Liberation Mono", monospace;
+            font-family: "SF Mono", Monaco, Consolas, monospace;
             font-size: 0.9em;
-        }}
-        pre {{
+        }
+        pre {
             background-color: var(--code-bg);
             padding: 15px;
             border-radius: 5px;
             overflow-x: auto;
             border: 1px solid var(--border-color);
-        }}
-        pre code {{
-            padding: 0;
-            background: none;
-        }}
-        table {{
-            width: 100%;
-            border-collapse: collapse;
-            margin: 1em 0;
-        }}
-        th, td {{
-            border: 1px solid var(--border-color);
-            padding: 10px 12px;
-            text-align: left;
-        }}
-        th {{
-            background-color: var(--table-header-bg);
-            font-weight: 600;
-        }}
-        blockquote {{
+        }
+        pre code { padding: 0; background: none; }
+        table { width: 100%; border-collapse: collapse; margin: 1em 0; }
+        th, td { border: 1px solid var(--border-color); padding: 10px 12px; text-align: left; }
+        th { background-color: var(--table-header-bg); font-weight: 600; }
+        blockquote {
             margin: 1em 0;
             padding: 0.5em 1em;
             border-left: 4px solid var(--blockquote-border);
             background-color: var(--code-bg);
-        }}
-        hr {{
-            border: none;
-            border-top: 1px solid var(--border-color);
-            margin: 2em 0;
-        }}
-        .nav {{
+        }
+        .nav {
             background-color: var(--header-bg);
             color: var(--header-color);
             padding: 15px 20px;
-            margin: -20px -20px 20px -20px;
-            border-radius: 0;
-        }}
-        .nav a {{
-            color: var(--header-color);
-            margin-right: 20px;
-        }}
-        .nav a:hover {{
-            text-decoration: underline;
-        }}
-        .warning {{
-            background-color: #fff3cd;
-            border: 1px solid #ffc107;
-            color: #856404;
-            padding: 10px 15px;
+        }
+        .nav a { color: var(--header-color); margin-right: 20px; }
+        .nav a:hover { text-decoration: underline; }
+        .doc-card {
+            background: var(--bg-color);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 15px;
+            transition: box-shadow 0.2s;
+        }
+        .doc-card:hover {
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+        .doc-card h3 { margin: 0 0 10px 0; }
+        .doc-card p { margin: 0; color: #666; }
+        .doc-card .badge {
+            display: inline-block;
+            padding: 2px 8px;
             border-radius: 4px;
-            margin: 1em 0;
-        }}
-        @media (prefers-color-scheme: dark) {{
-            .warning {{
-                background-color: #3d3d1a;
-                border-color: #6b5a00;
-                color: #d4a017;
-            }}
-        }}
-    </style>
+            font-size: 0.8em;
+            margin-right: 8px;
+        }
+        .badge-api { background: #e3f2fd; color: #1565c0; }
+        .badge-cli { background: #e8f5e9; color: #2e7d32; }
+        .badge-arch { background: #fff3e0; color: #e65100; }
+        .badge-guide { background: #f3e5f5; color: #7b1fa2; }
+        .active-doc { font-weight: bold; color: var(--link-color); }
+        @media (max-width: 768px) {
+            .sidebar { display: none; }
+            .main { margin-left: 0; padding: 20px; }
+        }
+    """
+
+    common_head = f"""
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/default.min.css">
+    <style>{common_styles}</style>
+    """
+
+    sidebar_html = """
+    <div class="sidebar">
+        <h3 style="margin-top: 0;">📚 文档中心</h3>
+        <ul style="list-style: none; padding: 0;">
+            <li style="margin-bottom: 8px;">
+                <a href="/api-docs" class="%(api_active)s">📖 API 文档</a>
+            </li>
+            <li style="margin-bottom: 8px;">
+                <a href="/api-docs?doc=CLI" class="%(cli_active)s">💻 CLI 使用指南</a>
+            </li>
+            <li style="margin-bottom: 8px;">
+                <a href="/api-docs?doc=ARCHITECTURE" class="%(arch_active)s">🏗️ 架构设计</a>
+            </li>
+            <li style="margin-bottom: 8px;">
+                <a href="/api-docs?doc=QUERY_PARAM_GUIDE" class="%(guide_active)s">🎯 Query 参数指南</a>
+            </li>
+            <li style="margin-bottom: 8px;">
+                <a href="/api-docs?doc=SEARCH_PARAM_GUIDE" class="%(search_active)s">🔍 Search 参数指南</a>
+            </li>
+        </ul>
+        <hr style="margin: 20px 0; border: none; border-top: 1px solid var(--border-color);">
+        <h4>快速链接</h4>
+        <ul style="list-style: none; padding: 0; font-size: 0.9em;">
+            <li style="margin-bottom: 6px;">📄 <a href="/api-docs?doc=API#检索查询">检索查询 API</a></li>
+            <li style="margin-bottom: 6px;">📥 <a href="/api-docs?doc=API#文档导入">文档导入 API</a></li>
+            <li style="margin-bottom: 6px;">⚡ <a href="/api-docs?doc=API#任务队列">任务队列 API</a></li>
+        </ul>
+    </div>
+    """
+
+    if doc is None:
+        doc_content = """
+        <h1>📚 LlamaIndex RAG 文档中心</h1>
+        <p style="font-size: 1.1em; color: #666;">欢迎使用 LlamaIndex RAG 文档中心。这里提供了所有相关文档的链接。</p>
+        
+        <div class="doc-card">
+            <span class="badge badge-api">API</span>
+            <h3><a href="/api-docs?doc=API">API 完整参考</a></h3>
+            <p>FastAPI 所有端点的详细说明，包括请求参数、响应格式、示例。</p>
+        </div>
+        
+        <div class="doc-card">
+            <span class="badge badge-guide">🎯 必读</span>
+            <h3><a href="/api-docs?doc=QUERY_PARAM_GUIDE">Query 参数设计指南</a></h3>
+            <p>客户端 UI 设计必读！详细说明 route_mode、retrieval_mode 及各检索增强参数的适用场景和组合建议。</p>
+        </div>
+        
+        <div class="doc-card">
+            <span class="badge badge-guide">🔍 必读</span>
+            <h3><a href="/api-docs?doc=SEARCH_PARAM_GUIDE">Search 参数设计指南</a></h3>
+            <p>Search 检索的专用指南，说明检索模式、结果排序等参数。</p>
+        </div>
+        
+        <div class="doc-card">
+            <span class="badge badge-cli">CLI</span>
+            <h3><a href="/api-docs?doc=CLI">CLI 使用指南</a></h3>
+            <p>完整的命令行接口文档，包括知识库管理、文档导入、检索查询、任务管理等命令。</p>
+        </div>
+        
+        <div class="doc-card">
+            <span class="badge badge-arch">架构</span>
+            <h3><a href="/api-docs?doc=ARCHITECTURE">架构设计文档</a></h3>
+            <p>系统架构、分层设计、并行处理、资源保护机制、数据库 Schema 等技术细节。</p>
+        </div>
+        """
+        content_html = f"""
+        <div class="layout">
+            {sidebar_html % {"api_active": "", "cli_active": "", "arch_active": "", "guide_active": "", "search_active": ""}}
+            <div class="main">
+                {doc_content}
+            </div>
+        </div>
+        """
+    elif doc in doc_files:
+        docs_path = docs_dir / doc_files[doc]
+        if docs_path.exists():
+            md_content = docs_path.read_text(encoding="utf-8")
+            content_html = render_md_to_html(md_content, doc)
+
+            active_states = {
+                "api_active": "",
+                "cli_active": "",
+                "arch_active": "",
+                "guide_active": "",
+                "search_active": "",
+            }
+            if doc == "API":
+                active_states["api_active"] = 'class="active-doc"'
+            elif doc == "CLI":
+                active_states["cli_active"] = 'class="active-doc"'
+            elif doc == "ARCHITECTURE":
+                active_states["arch_active"] = 'class="active-doc"'
+            elif doc == "QUERY_PARAM_GUIDE":
+                active_states["guide_active"] = 'class="active-doc"'
+            elif doc == "SEARCH_PARAM_GUIDE":
+                active_states["search_active"] = 'class="active-doc"'
+
+            content_html = f"""
+            <div class="layout">
+                {sidebar_html % active_states}
+                <div class="main">
+                    {content_html}
+                </div>
+            </div>
+            """
+        else:
+            content_html = f"<h1>文档未找到</h1><p>{doc_files[doc]} 不存在</p>"
+    else:
+        content_html = f"<h1>文档未找到</h1><p>未知的文档: {doc}</p>"
+
+    html_page = f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>文档中心 - LlamaIndex RAG API</title>
+    {common_head}
 </head>
 <body>
-    <div class="nav">
-        <a href="/">首页</a>
-        <a href="/docs">Swagger API 文档</a>
-        <a href="/redoc">ReDoc 文档</a>
-        <a href="/api-docs">Markdown API 文档</a>
-    </div>
-    <div class="content">
-        {html_content}
-    </div>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-    <script>hljs.highlightAll();</script>
+    {content_html}
 </body>
 </html>"""
     return html_page
@@ -596,7 +762,34 @@ def delete_kb(kb_id: str):
 
 @app.post("/kbs/{kb_id}/search", response_model=List[SearchResult])
 def search(kb_id: str, req: SearchRequest):
-    """向量检索"""
+    """向量检索
+
+    route_mode 参数说明：
+    - kb: 使用指定的知识库（URL 中的 kb_id 或 body 中的 kb_ids）
+    - auto: 自动路由（根据 query 内容选择相关知识库）
+    - all: 查询所有知识库
+    """
+    from kb.services import QueryRouter
+
+    if req.route_mode == "auto":
+        result = QueryRouter.search(
+            req.query,
+            top_k=req.top_k,
+            exclude=req.exclude,
+            use_auto_merging=req.use_auto_merging,
+        )
+        return [SearchResult(**r) for r in result.get("results", [])]
+
+    if req.route_mode == "all":
+        result = QueryRouter.search(
+            req.query,
+            top_k=req.top_k,
+            exclude=req.exclude,
+            use_auto_merging=req.use_auto_merging,
+            mode="all",
+        )
+        return [SearchResult(**r) for r in result.get("results", [])]
+
     if req.kb_ids:
         kb_id_list = [k.strip() for k in req.kb_ids.split(",") if k.strip()]
     else:
@@ -621,7 +814,38 @@ def search(kb_id: str, req: SearchRequest):
 
 @app.post("/kbs/{kb_id}/query", response_model=QueryResponse)
 def query(kb_id: str, req: QueryRequest):
-    """RAG 问答"""
+    """RAG 问答
+
+    route_mode 参数说明：
+    - kb: 使用指定的知识库（URL 中的 kb_id 或 body 中的 kb_ids）
+    - auto: 自动路由（根据 query 内容选择相关知识库）
+    - all: 查询所有知识库
+    """
+    if req.route_mode == "auto":
+        result = QueryRouter.query(
+            req.query,
+            top_k=req.top_k,
+            exclude=req.exclude,
+            use_hyde=req.use_hyde,
+            use_multi_query=req.use_multi_query,
+            use_auto_merging=req.use_auto_merging,
+            response_mode=req.response_mode,
+        )
+        return QueryResponse(**result)
+
+    if req.route_mode == "all":
+        result = QueryRouter.query(
+            req.query,
+            top_k=req.top_k,
+            exclude=req.exclude,
+            mode="all",
+            use_hyde=req.use_hyde,
+            use_multi_query=req.use_multi_query,
+            use_auto_merging=req.use_auto_merging,
+            response_mode=req.response_mode,
+        )
+        return QueryResponse(**result)
+
     if req.kb_ids:
         kb_id_list = [k.strip() for k in req.kb_ids.split(",") if k.strip()]
     else:
@@ -631,7 +855,7 @@ def query(kb_id: str, req: QueryRequest):
         result = SearchService.query(
             kb_id_list[0],
             req.query,
-            mode=req.mode,
+            mode=req.retrieval_mode,
             top_k=req.top_k,
             use_hyde=req.use_hyde,
             use_multi_query=req.use_multi_query,
@@ -653,11 +877,40 @@ def query(kb_id: str, req: QueryRequest):
 
 @app.post("/search", response_model=List[SearchResult])
 def search_auto(req: SearchRequest):
-    """自动路由向量检索"""
+    """自动路由向量检索（已废弃，请使用 POST /kbs/{kb_id}/search with route_mode 参数）
+
+    废弃说明：请使用 /kbs/{kb_id}/search 端点，设置 route_mode="auto" 或 route_mode="all"
+    """
+    import warnings
+
+    warnings.warn(
+        "/search endpoint is deprecated. Use POST /kbs/{kb_id}/search with route_mode parameter instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     from kb.services import QueryRouter
 
-    if req.kb_ids:
-        kb_id_list = [k.strip() for k in req.kb_ids.split(",") if k.strip()]
+    if req.route_mode == "kb":
+        raise HTTPException(
+            status_code=400,
+            detail="/search endpoint requires route_mode='auto' or route_mode='all' (no kb_id in URL). "
+            "Use /kbs/{kb_id}/search for single KB search.",
+        )
+
+    if req.route_mode == "auto" or req.route_mode == "all":
+        result = QueryRouter.search(
+            req.query,
+            top_k=req.top_k,
+            exclude=req.exclude,
+            use_auto_merging=req.use_auto_merging,
+            mode=req.route_mode if req.route_mode == "all" else "auto",
+        )
+        return [SearchResult(**r) for r in result.get("results", [])]
+
+    kb_id_list = (
+        [k.strip() for k in req.kb_ids.split(",") if k.strip()] if req.kb_ids else []
+    )
+    if kb_id_list:
         results = SearchService.search_multi(
             kb_id_list,
             req.query,
@@ -677,8 +930,38 @@ def search_auto(req: SearchRequest):
 
 @app.post("/query", response_model=QueryResponse)
 def query_auto(req: QueryRequest):
-    """自动路由 RAG 问答"""
+    """自动路由 RAG 问答（已废弃，请使用 POST /kbs/{kb_id}/query with route_mode 参数）
+
+    废弃说明：请使用 /kbs/{kb_id}/query 端点，设置 route_mode="auto" 或 route_mode="all"
+    """
+    import warnings
+
+    warnings.warn(
+        "/query endpoint is deprecated. Use POST /kbs/{kb_id}/query with route_mode parameter instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     from kb.services import QueryRouter
+
+    if req.route_mode == "kb":
+        raise HTTPException(
+            status_code=400,
+            detail="/query endpoint requires route_mode='auto' or route_mode='all' (no kb_id in URL). "
+            "Use /kbs/{kb_id}/query for single KB query.",
+        )
+
+    if req.route_mode == "auto" or req.route_mode == "all":
+        result = QueryRouter.query(
+            req.query,
+            top_k=req.top_k,
+            exclude=req.exclude,
+            mode=req.route_mode if req.route_mode == "all" else "auto",
+            use_hyde=req.use_hyde,
+            use_multi_query=req.use_multi_query,
+            use_auto_merging=req.use_auto_merging,
+            response_mode=req.response_mode,
+        )
+        return QueryResponse(**result)
 
     if req.kb_ids:
         kb_id_list = [k.strip() for k in req.kb_ids.split(",") if k.strip()]
@@ -703,6 +986,49 @@ def query_auto(req: QueryRequest):
         response_mode=req.response_mode,
     )
     return QueryResponse(**result)
+
+
+@app.post("/evaluate/{kb_id}")
+def evaluate(kb_id: str, req: EvaluateRequest):
+    """RAG 性能评估
+
+    对知识库进行 RAG 评估，使用预设的问题和标准答案。
+
+    请求体:
+        questions: 问题列表
+        ground_truths: 标准答案列表
+        top_k: 检索返回结果数
+
+    返回:
+        评估结果，包含 faithfulness, answer_relevancy, context_precision, context_recall
+    """
+    if len(req.questions) != len(req.ground_truths):
+        raise HTTPException(
+            status_code=400,
+            detail="questions 和 ground_truths 数量必须一致",
+        )
+
+    contexts, answers = [], []
+    for question in req.questions:
+        results = SearchService.search(kb_id, question, top_k=req.top_k)
+        contexts.append([r["text"] for r in results])
+        answers.append("[仅检索模式]")
+
+    evaluator = RAGEvaluator()
+    result = evaluator.evaluate(
+        questions=req.questions,
+        contexts=contexts,
+        answers=answers,
+        ground_truths=req.ground_truths,
+    )
+
+    return result
+
+
+@app.get("/evaluate/metrics")
+def evaluate_metrics():
+    """获取 RAG 评估指标说明"""
+    return RAGMetrics.get_metrics_info()
 
 
 # ============== 导入接口 ==============

@@ -24,6 +24,7 @@ from kb.services import (
 from llamaindex_study.config import get_settings
 from llamaindex_study.index_builder import IndexBuilder
 from llamaindex_study.query_engine import QueryEngineWrapper
+from llamaindex_study.rag_evaluator import RAGEvaluator, RAGMetrics
 from llamaindex_study.reader import DocumentReader
 
 
@@ -1032,6 +1033,107 @@ def handle_task_watch(args: argparse.Namespace) -> int:
         time.sleep(args.interval)
 
 
+def handle_evaluate(args: argparse.Namespace) -> int:
+    from kb.services import SearchService
+
+    if args.show_metrics:
+        print("\n=== RAG 评估指标 ===\n")
+        for key, info in RAGMetrics.get_metrics_info().items():
+            print(f"【{info['name']}】({key})")
+            print(f"  {info['description']}")
+            print(f"  良好范围: {info['good_range']}\n")
+        return 0
+
+    if not args.dataset:
+        print("错误: 请提供 --dataset 参数指定测试数据文件")
+        print("测试数据格式: questions, answers")
+        return 1
+
+    import json
+
+    with open(args.dataset, encoding="utf-8") as f:
+        dataset = json.load(f)
+
+    questions = dataset.get("questions", [])
+    ground_truths = dataset.get("ground_truths", [])
+
+    if not questions or len(ground_truths) != len(questions):
+        print("错误: 测试数据格式错误，questions 和 ground_truths 数量必须一致")
+        return 1
+
+    print(f"\n评估知识库: {args.kb_id}, 问题数: {len(questions)}\n")
+
+    contexts, answers = [], []
+    for i, q in enumerate(questions):
+        print(f"[{i + 1}/{len(questions)}] {q[:50]}...")
+        try:
+            results = SearchService.search(args.kb_id, q, top_k=args.top_k)
+            contexts.append([r["text"] for r in results])
+            answers.append("[仅检索模式]")
+        except Exception as e:
+            print(f"  失败: {e}")
+            contexts.append([])
+            answers.append("")
+
+    print("\n执行评估...")
+    result = RAGEvaluator().evaluate(questions, contexts, answers, ground_truths)
+    print("\n=== 评估结果 ===\n")
+    print_json(result)
+
+    if args.output:
+        with open(args.output, "w", encoding="utf-8") as f:
+            json.dump(result, f, ensure_ascii=False, indent=2, default=str)
+        print(f"\n结果已保存到: {args.output}")
+
+    return 0
+
+    # 执行评估
+    print(f"\n开始评估知识库: {args.kb_id}")
+    print(f"问题数量: {len(questions)}\n")
+
+    contexts = []
+    answers = []
+
+    for i, question in enumerate(questions):
+        print(f"[{i + 1}/{len(questions)}] 检索: {question[:50]}...")
+        try:
+            # 检索获取上下文
+            results = SearchService.search(args.kb_id, question, top_k=args.top_k)
+            ctx = [r["text"] for r in results]
+            contexts.append(ctx)
+
+            # 生成答案
+            answer = f"[评估模式: 仅检索上下文中，不生成完整答案]"
+            answers.append(answer)
+        except Exception as e:
+            print(f"  检索失败: {e}")
+            contexts.append([])
+            answers.append("")
+
+    print("\n执行评估...")
+
+    evaluator = RAGEvaluator()
+    result = evaluator.evaluate(
+        questions=questions,
+        contexts=contexts,
+        answers=answers,
+        ground_truths=ground_truths,
+    )
+
+    print("\n=== 评估结果 ===\n")
+    print_json(result)
+
+    # 保存结果
+    if args.output:
+        import json
+
+        with open(args.output, "w", encoding="utf-8") as f:
+            json.dump(result, f, ensure_ascii=False, indent=2, default=str)
+        print(f"\n结果已保存到: {args.output}")
+
+    return 0
+
+
 def handle_category_rules_list(_: argparse.Namespace) -> int:
     result = CategoryService.list_rules()
     print_table(
@@ -1368,43 +1470,63 @@ def build_parser() -> argparse.ArgumentParser:
 
     search_parser = subparsers.add_parser("search", help="检索知识库")
     search_parser.add_argument(
-        "kb_id", nargs="?", default=None, help="知识库 ID（省略时自动选择）"
+        "kb_id", nargs="?", default=None, help="知识库 ID（与 --kb-ids 二选一）"
     )
     search_parser.add_argument("query", nargs="*", default=None, help="查询内容")
     search_parser.add_argument("-k", "--top-k", type=int, default=5)
-    search_parser.add_argument("--auto", action="store_true", help="自动选择知识库")
     search_parser.add_argument(
-        "--exclude", help="排除的知识库 ID（逗号分隔，如: tech_tools,academic）"
+        "--auto",
+        action="store_true",
+        help="自动路由（根据 query 内容选择相关知识库），与 --kb-ids 互斥",
     )
     search_parser.add_argument(
-        "--kb-ids", help="指定多个知识库 ID（逗号分隔，如: kb1,kb2,kb3）"
+        "--exclude",
+        help="排除的知识库 ID（逗号分隔，仅在 --auto 模式下有效）",
+    )
+    search_parser.add_argument(
+        "--kb-ids",
+        help="指定多个知识库 ID（逗号分隔，与 kb_id 参数二选一）",
     )
     search_parser.add_argument(
         "--auto-merging",
         action="store_true",
-        help="启用 Auto-Merging（合并子节点到父节点）",
+        help="启用 Auto-Merging（需知识库使用层级分块）",
     )
     search_parser.set_defaults(handler=handle_search)
 
     query_parser = subparsers.add_parser("query", help="知识库问答")
     query_parser.add_argument(
-        "kb_id", nargs="?", default=None, help="知识库 ID（省略时自动选择）"
+        "kb_id", nargs="?", default=None, help="知识库 ID（与 --kb-ids 二选一）"
     )
     query_parser.add_argument("query", nargs="*", default=None, help="查询内容")
     query_parser.add_argument("-k", "--top-k", type=int, default=5)
-    query_parser.add_argument("--auto", action="store_true", help="自动选择知识库")
     query_parser.add_argument(
-        "--exclude", help="排除的知识库 ID（逗号分隔，如: tech_tools,academic）"
+        "--auto",
+        action="store_true",
+        help="自动路由（根据 query 内容选择相关知识库），与 --kb-ids 互斥",
     )
     query_parser.add_argument(
-        "--kb-ids", help="指定多个知识库 ID（逗号分隔，如: kb1,kb2,kb3）"
-    )
-    query_parser.add_argument("--hyde", action="store_true", help="启用 HyDE 查询转换")
-    query_parser.add_argument(
-        "--multi-query", action="store_true", help="启用多查询转换"
+        "--exclude",
+        help="排除的知识库 ID（逗号分隔，仅在 --auto 模式下有效）",
     )
     query_parser.add_argument(
-        "--auto-merging", action="store_true", help="启用 Auto-Merging Retriever"
+        "--kb-ids",
+        help="指定多个知识库 ID（逗号分隔，与 kb_id 参数二选一）",
+    )
+    query_parser.add_argument(
+        "--hyde",
+        action="store_true",
+        help="启用 HyDE 查询转换（生成假设性答案辅助检索）",
+    )
+    query_parser.add_argument(
+        "--multi-query",
+        action="store_true",
+        help="启用多查询转换（生成多个查询变体减少遗漏）",
+    )
+    query_parser.add_argument(
+        "--auto-merging",
+        action="store_true",
+        help="启用 Auto-Merging Retriever（需知识库使用层级分块）",
     )
     query_parser.add_argument(
         "--response-mode",
@@ -1417,9 +1539,22 @@ def build_parser() -> argparse.ArgumentParser:
             "accumulate",
         ],
         default=None,
-        help="答案生成模式（默认使用配置值）",
+        help="答案生成模式（compact=默认）",
     )
     query_parser.set_defaults(handler=handle_query)
+
+    evaluate_parser = subparsers.add_parser("evaluate", help="RAG 性能评估")
+    evaluate_parser.add_argument("kb_id", nargs="?", help="知识库 ID")
+    evaluate_parser.add_argument(
+        "--dataset",
+        help="测试数据文件 (JSON 格式: questions, ground_truths)",
+    )
+    evaluate_parser.add_argument("--top-k", type=int, default=5, help="检索返回结果数")
+    evaluate_parser.add_argument("--output", help="评估结果输出文件 (JSON)")
+    evaluate_parser.add_argument(
+        "--show-metrics", action="store_true", help="显示评估指标说明"
+    )
+    evaluate_parser.set_defaults(handler=handle_evaluate)
 
     ingest_parser = subparsers.add_parser("ingest", help="提交导入任务")
     ingest_sub = ingest_parser.add_subparsers(dest="ingest_command", required=True)
