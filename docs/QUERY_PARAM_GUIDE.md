@@ -46,7 +46,7 @@ RAG 查询有两种路由方式：
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `use_hyde` | bool | null | 启用 HyDE 查询转换 |
-| `use_multi_query` | bool | null | 启用多查询转换 |
+| `use_multi_query` | bool | null | ~~启用多查询转换~~（暂不可用） |
 | `use_auto_merging` | bool | null | 启用 Auto-Merging 检索 |
 
 ### 答案生成参数
@@ -124,12 +124,14 @@ POST /query
 
 ### 2. use_multi_query（多查询转换）
 
+> ⚠️ **暂不可用**：该功能因 LlamaIndex API 变更暂时无法使用。
+
 **作用**：使用 LLM 生成 N 个查询变体，分别检索后融合结果。
 
 **适用场景**：
-- 查询可能涉及多个方面
-- 需要减少检索遗漏
-- 复杂问题
+- ~~查询可能涉及多个方面~~
+- ~~需要减少检索遗漏~~
+- ~~复杂问题~~
 
 **副作用**：启用后会进行多次检索，延迟增加。
 
@@ -221,7 +223,7 @@ POST /query
 |----------|----------|------|
 | **智能问答**（默认） | retrieval_mode=vector, 其他关闭 | 通用场景 |
 | **深度分析** | use_hyde=true, use_auto_merging=true, response_mode=tree_summarize | 复杂问题 |
-| **全面检索** | use_multi_query=true, retrieval_mode=hybrid | 可能涉及多方面 |
+| **全面检索** | retrieval_mode=hybrid | 可能涉及多方面 |
 | **仅检索** | response_mode=no_text | 不生成答案 |
 
 ### 4. 提示信息
@@ -325,7 +327,7 @@ A: 尝试以下组合：
 - 答案不相关 → 启用 `use_hyde=true` 重新检索
 
 ### Q: 响应太慢
-A: 关闭 `use_hyde`、`use_multi_query`、`use_auto_merging`，使用默认 `compact` 模式。
+A: 关闭 `use_hyde`、`use_auto_merging`，使用默认 `compact` 模式。
 
 ---
 
@@ -337,7 +339,7 @@ A: 关闭 `use_hyde`、`use_multi_query`、`use_auto_merging`，使用默认 `co
 | `--kb-ids` | `kb_ids` | 指定知识库（逗号分隔） |
 | `--exclude` | `exclude` | 排除的知识库 |
 | `--hyde` | `use_hyde=true` | HyDE 查询转换 |
-| `--multi-query` | `use_multi_query=true` | 多查询转换 |
+| `--multi-query` | `use_multi_query=true` | ~~多查询转换~~（暂不可用） |
 | `--auto-merging` | `use_auto_merging=true` | Auto-Merging |
 | `--response-mode` | `response_mode` | 答案生成模式 |
 
