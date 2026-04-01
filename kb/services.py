@@ -602,6 +602,7 @@ class SearchService:
         top_k: int = 5,
         with_metadata: bool = True,
         use_auto_merging: Optional[bool] = None,
+        mode: str = "vector",
     ) -> List[Dict[str, Any]]:
         from llamaindex_study.config import get_settings
 
@@ -637,6 +638,12 @@ class SearchService:
         else:
             retriever = base_retriever
 
+        # 支持 hybrid 检索模式
+        if mode == "hybrid" or settings.use_hybrid_search:
+            retriever = SearchService._create_hybrid_retriever(
+                retriever, index, top_k, settings
+            )
+
         results = retriever.retrieve(query)
 
         return [
@@ -649,11 +656,49 @@ class SearchService:
         ]
 
     @staticmethod
+    def _create_hybrid_retriever(
+        vector_retriever: Any,
+        index: Any,
+        top_k: int,
+        settings: Any,
+    ) -> Any:
+        """创建混合搜索检索器（向量 + BM25 + 融合）"""
+        try:
+            from llama_index.core.retrievers import QueryFusionRetriever
+            from llama_index.retrievers.bm25 import BM25Retriever
+
+            bm25_retriever = BM25Retriever.from_defaults(
+                docstore=index.docstore,
+                similarity_top_k=top_k * 3,
+            )
+
+            fusion_retriever = QueryFusionRetriever(
+                retrievers=[vector_retriever, bm25_retriever],
+                similarity_top_k=top_k,
+                num_queries=1,
+                mode=settings.hybrid_search_mode,
+                use_async=False,
+                verbose=False,
+            )
+            logger.info(
+                f"混合搜索: vector + BM25, mode={settings.hybrid_search_mode}, alpha={settings.hybrid_search_alpha}"
+            )
+            return fusion_retriever
+        except ImportError as e:
+            logger.warning(f"混合搜索依赖未安装，回退到向量检索: {e}")
+            return vector_retriever
+        except Exception as e:
+            logger.warning(f"混合搜索初始化失败，回退到向量检索: {e}")
+            return vector_retriever
+
+    @staticmethod
+    @staticmethod
     def search_multi(
         kb_ids: List[str],
         query: str,
         top_k: int = 5,
         use_auto_merging: Optional[bool] = None,
+        mode: str = "vector",
     ) -> List[Dict[str, Any]]:
         configure_global_embed_model()
 
@@ -661,7 +706,11 @@ class SearchService:
         for kb_id in kb_ids:
             try:
                 results = SearchService.search(
-                    kb_id, query, top_k=top_k, use_auto_merging=use_auto_merging
+                    kb_id,
+                    query,
+                    top_k=top_k,
+                    use_auto_merging=use_auto_merging,
+                    mode=mode,
                 )
                 for r in results:
                     r["kb_id"] = kb_id
@@ -682,21 +731,9 @@ class SearchService:
         use_multi_query: Optional[bool] = None,
         use_auto_merging: Optional[bool] = None,
         response_mode: Optional[str] = None,
+        llm_mode: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """RAG 问答
-
-        Args:
-            kb_id: 知识库 ID
-            query: 查询内容
-            mode: 检索模式 (vector, hybrid)
-            top_k: 返回结果数量
-            use_hyde: 启用 HyDE（None=使用配置默认值）
-            use_multi_query: 启用多查询转换（None=使用配置默认值）
-            use_auto_merging: 启用 Auto-Merging（None=使用配置默认值）
-            response_mode: 答案生成模式（None=使用配置默认值）
-        """
         from llamaindex_study.query_engine import create_query_engine
-        from llamaindex_study.config import get_settings
 
         configure_global_embed_model()
         settings = get_settings()
@@ -713,8 +750,34 @@ class SearchService:
             if use_multi_query is not None
             else settings.use_multi_query,
             response_mode=response_mode or settings.response_mode,
+            llm_mode=llm_mode,
+        )
+        logger.info(
+            f"[SearchService.query] use_hyde={use_hyde}, use_multi_query={use_multi_query}, query_engine={type(query_engine).__name__}"
         )
         response = query_engine.query(query)
+        logger.info(
+            f"[SearchService.query] response={str(response)[:100]}, source_nodes={len(response.source_nodes)}"
+        )
+
+        if not response.source_nodes and use_multi_query:
+            logger.warning("Multi-Query 返回空结果，尝试回退到普通查询")
+            query_engine = create_query_engine(
+                kb_id,
+                mode=mode,
+                top_k=top_k,
+                use_auto_merging=use_auto_merging
+                if use_auto_merging is not None
+                else settings.use_auto_merging,
+                use_hyde=use_hyde if use_hyde is not None else settings.use_hyde,
+                use_multi_query=False,
+                response_mode=response_mode or settings.response_mode,
+                llm_mode=llm_mode,
+            )
+            response = query_engine.query(query)
+            logger.info(
+                f"[SearchService.query] fallback response={str(response)[:100]}, source_nodes={len(response.source_nodes)}"
+            )
 
         return {
             "response": str(response),
@@ -907,22 +970,31 @@ class QueryRouter:
         use_multi_query: Optional[bool] = None,
         use_auto_merging: Optional[bool] = None,
         response_mode: Optional[str] = None,
+        retrieval_mode: str = "vector",
+        llm_mode: Optional[str] = None,
     ) -> Dict[str, Any]:
         """自动路由 RAG 问答
 
         Args:
             query: 用户查询
             top_k: 每个知识库检索的数量
-            mode: 检索模式 (auto=自动路由, all=所有知识库)
+            mode: 路由模式 (auto=自动路由, all=所有知识库)
             exclude: 排除的知识库 ID 列表
             use_hyde: 启用 HyDE（None=使用配置默认值）
             use_multi_query: 启用多查询转换（None=使用配置默认值）
             use_auto_merging: 启用 Auto-Merging（None=使用配置默认值）
             response_mode: 答案生成模式（None=使用配置默认值）
+            retrieval_mode: 检索模式 (vector, hybrid)
+            llm_mode: LLM 模式 (siliconflow, ollama)
 
         Returns:
             RAG 问答结果
         """
+        if llm_mode:
+            from llamaindex_study.ollama_utils import configure_llamaindex
+
+            configure_llamaindex(llm_mode)
+
         if mode == "all":
             all_kbs = KnowledgeBaseService.list_all()
             exclude = exclude or []
@@ -941,6 +1013,7 @@ class QueryRouter:
             return SearchService.query(
                 kb_ids[0],
                 query,
+                mode=retrieval_mode,
                 top_k=top_k,
                 use_hyde=use_hyde,
                 use_multi_query=use_multi_query,
@@ -953,7 +1026,13 @@ class QueryRouter:
 
         for kb_id in kb_ids:
             try:
-                result = SearchService.search(kb_id, query, top_k=top_k)
+                result = SearchService.search(
+                    kb_id,
+                    query,
+                    top_k=top_k,
+                    use_auto_merging=use_auto_merging,
+                    mode=retrieval_mode,
+                )
                 for r in result:
                     contexts.append(f"[{kb_id}] {r['text']}")
                     sources.append(
@@ -1019,7 +1098,14 @@ class QueryRouter:
         use_multi_query: Optional[bool] = None,
         use_auto_merging: Optional[bool] = None,
         response_mode: Optional[str] = None,
+        retrieval_mode: str = "vector",
+        llm_mode: Optional[str] = None,
     ) -> Dict[str, Any]:
+        if llm_mode:
+            from llamaindex_study.ollama_utils import configure_llamaindex
+
+            configure_llamaindex(llm_mode)
+
         if not kb_ids:
             return {
                 "response": "没有指定知识库",
@@ -1031,11 +1117,13 @@ class QueryRouter:
             return SearchService.query(
                 kb_ids[0],
                 query,
+                mode=retrieval_mode,
                 top_k=top_k,
                 use_hyde=use_hyde,
                 use_multi_query=use_multi_query,
                 use_auto_merging=use_auto_merging,
                 response_mode=response_mode,
+                llm_mode=llm_mode,
             )
 
         contexts = []
@@ -1044,7 +1132,11 @@ class QueryRouter:
         for kb_id in kb_ids:
             try:
                 result = SearchService.search(
-                    kb_id, query, top_k=top_k, use_auto_merging=use_auto_merging
+                    kb_id,
+                    query,
+                    top_k=top_k,
+                    use_auto_merging=use_auto_merging,
+                    mode=retrieval_mode,
                 )
                 for r in result:
                     contexts.append(f"[{kb_id}] {r['text']}")
@@ -1077,18 +1169,10 @@ class QueryRouter:
 回答："""
 
         try:
-            from llama_index.llms.openai import OpenAI
+            from llamaindex_study.ollama_utils import create_llm
 
-            settings = get_settings()
-            configure_llamaindex_for_siliconflow()
-
-            client = OpenAI(
-                model=settings.siliconflow_model,
-                api_key=settings.siliconflow_api_key,
-                api_base=settings.siliconflow_base_url,
-            )
-
-            response = client.complete(prompt)
+            llm = create_llm(mode=llm_mode)
+            response = llm.complete(prompt)
             answer = response.text.strip()
 
         except Exception as e:

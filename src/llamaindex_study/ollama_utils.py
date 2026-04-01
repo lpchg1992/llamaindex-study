@@ -146,23 +146,155 @@ def configure_llamaindex_for_siliconflow() -> None:
 
     settings = get_settings()
 
-    # 1. 注册模型上下文窗口
     model_key = settings.siliconflow_model
     if model_key not in ALL_AVAILABLE_MODELS:
         ALL_AVAILABLE_MODELS[model_key] = 128000
 
-    # 2. 注册 tokenizer（DeepSeek-V3 用 cl100k_base）
     try:
         tiktoken.encoding_for_model(model_key)
     except KeyError:
         tm.MODEL_TO_ENCODING[model_key] = "cl100k_base"
 
-    # 3. 配置全局 LLM
     LlamaSettings.llm = OpenAI(
         model=model_key,
         api_key=settings.siliconflow_api_key,
         api_base=settings.siliconflow_base_url,
     )
+
+
+class RetryableOllama:
+    """Ollama LLM 包装类，支持 503 错误重试
+
+    当 Ollama 模型未加载时，会返回 503 Service Unavailable。
+    此包装类会自动重试请求，直到模型加载完成。
+    """
+
+    def __init__(
+        self,
+        model: str,
+        base_url: str,
+        max_retries: int = 5,
+        initial_delay: float = 2.0,
+        backoff_factor: float = 1.5,
+    ):
+        from llama_index.llms.ollama import Ollama
+
+        self._ollama = Ollama(
+            model=model,
+            base_url=base_url,
+            request_timeout=300,
+        )
+        self._max_retries = max_retries
+        self._initial_delay = initial_delay
+        self._backoff_factor = backoff_factor
+
+    def _call_with_retry(self, method_name: str, *args, **kwargs) -> Any:
+        """带重试的调用"""
+        import time
+        import logging
+
+        logger = logging.getLogger(__name__)
+        last_error: BaseException = Exception("Unknown error")
+        delay = self._initial_delay
+
+        for attempt in range(self._max_retries):
+            try:
+                method = getattr(self._ollama, method_name)
+                return method(*args, **kwargs)
+            except Exception as e:
+                last_error = e
+                error_str = str(e).lower()
+
+                if "503" in error_str or "service unavailable" in error_str:
+                    logger.warning(
+                        f"Ollama 模型加载中 (尝试 {attempt + 1}/{self._max_retries})，"
+                        f"等待 {delay:.1f}s: {e}"
+                    )
+                    time.sleep(delay)
+                    delay *= self._backoff_factor
+                else:
+                    raise
+
+        raise last_error
+
+    def complete(self, prompt: str, **kwargs) -> Any:
+        return self._call_with_retry("complete", prompt, **kwargs)
+
+    def completion(self, prompt: str, **kwargs) -> Any:
+        return self._call_with_retry("completion", prompt, **kwargs)
+
+    def predict(self, prompt: str, **kwargs) -> Any:
+        return self._call_with_retry("predict", prompt, **kwargs)
+
+    def stream_complete(self, prompt: str, **kwargs) -> Any:
+        return self._call_with_retry("stream_complete", prompt, **kwargs)
+
+    def chat(self, messages: Any, **kwargs) -> Any:
+        return self._call_with_retry("chat", messages, **kwargs)
+
+    def stream_chat(self, messages: Any, **kwargs) -> Any:
+        return self._call_with_retry("stream_chat", messages, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._ollama, name)
+
+
+def create_llm(
+    mode: Optional[str] = None,
+    model: Optional[str] = None,
+) -> Any:
+    """
+    根据配置创建 LLM 实例
+
+    Args:
+        mode: LLM 模式，可选 "siliconflow" 或 "ollama"。如果为 None，使用配置默认值。
+        model: 模型名称。对于 ollama 模式，可选 "tomng/lfm2.5-instruct:1.2b" 或 "lfm2.5-thinking:latest"。
+               对于 siliconflow 模式，忽略此参数。
+
+    Returns:
+        LLM 实例
+    """
+    from llama_index.llms.openai import OpenAI
+
+    settings = get_settings()
+    mode = mode or settings.llm_mode
+
+    if mode == "ollama":
+        ollama_model = model or settings.ollama_llm_model
+        return RetryableOllama(
+            model=ollama_model,
+            base_url=settings.ollama_base_url,
+            max_retries=5,
+            initial_delay=2.0,
+            backoff_factor=1.5,
+        )
+    else:
+        configure_llamaindex_for_siliconflow()
+        return LlamaSettings.llm
+
+
+def configure_llamaindex(mode: Optional[str] = None) -> None:
+    """
+    配置 LlamaIndex 全局 LLM
+
+    Args:
+        mode: LLM 模式，可选 "siliconflow" 或 "ollama"。如果为 None，使用配置默认值。
+    """
+    settings = get_settings()
+    mode = mode or settings.llm_mode
+
+    if mode == "ollama":
+        from llama_index.llms.ollama import Ollama
+
+        ollama_model = settings.ollama_llm_model
+        llm = Ollama(
+            model=ollama_model,
+            base_url=settings.ollama_base_url,
+            request_timeout=300,
+        )
+        LlamaSettings.llm = llm
+    else:
+        configure_llamaindex_for_siliconflow()
 
 
 class BatchEmbeddingHelper:

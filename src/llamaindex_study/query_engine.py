@@ -35,6 +35,7 @@ class QueryEngineWrapper:
         use_multi_query: bool = False,
         response_mode: str = "compact",
         vector_store: Optional[Any] = None,
+        llm_mode: Optional[str] = None,
     ):
         """
         初始化查询引擎
@@ -50,6 +51,7 @@ class QueryEngineWrapper:
             use_multi_query: 是否使用多查询转换
             response_mode: Response Synthesizer 模式
             vector_store: 向量存储实例（用于检测 chunk_strategy）
+            llm_mode: LLM 模式 ("siliconflow", "ollama")
         """
         self.index = index
         self.vector_store = vector_store
@@ -65,6 +67,7 @@ class QueryEngineWrapper:
         self.use_hyde = use_hyde or self.settings.use_hyde
         self.use_multi_query = use_multi_query or self.settings.use_multi_query
         self.response_mode = response_mode or self.settings.response_mode
+        self.llm_mode = llm_mode
 
         self._query_engine = self._create_query_engine()
 
@@ -139,7 +142,9 @@ class QueryEngineWrapper:
         Returns:
             BaseQueryEngine: 查询引擎实例
         """
-        configure_llamaindex_for_siliconflow()
+        from llamaindex_study.ollama_utils import configure_llamaindex
+
+        configure_llamaindex(self.llm_mode)
 
         retriever = self._create_retriever()
 
@@ -186,14 +191,36 @@ class QueryEngineWrapper:
                 )
                 from llama_index.core.query_engine import MultiStepQueryEngine
 
-                step_decompose = StepDecomposeQueryTransform()
-                base_engine = MultiStepQueryEngine(
+                def _multi_query_stop_fn(stop_dict):
+                    """自定义 stop 函数，避免 LlamaIndex 默认 stop_fn 的问题
+
+                    默认 stop_fn 会检查 query_str 是否包含 "none"，
+                    但这会错误地停止 LLM 生成的包含 "None" 的有效查询。
+                    """
+                    query_bundle = stop_dict.get("query_bundle")
+                    if query_bundle is None:
+                        return True
+                    query_str = query_bundle.query_str.lower().strip()
+                    # 只在明确表示"无结果"时停止
+                    if query_str in ("none", "n/a", "null", "无", "没有", ""):
+                        return True
+                    return False
+
+                step_decompose = StepDecomposeQueryTransform(llm=self._get_llm())
+                multi_engine = MultiStepQueryEngine(
                     query_engine=base_engine,
                     query_transform=step_decompose,
+                    num_steps=2,
+                    early_stopping=False,
+                    stop_fn=_multi_query_stop_fn,
                 )
-                logger.info("启用 Multi-Query 查询转换")
+                logger.info("启用 Multi-Query 查询转换 (优化版 stop_fn)")
+                base_engine = multi_engine
+
             except ImportError as e:
                 logger.warning(f"Multi-Query 功能不可用: {e}")
+            except Exception as e:
+                logger.warning(f"Multi-Query 功能初始化失败: {e}")
 
         return base_engine
 
@@ -260,24 +287,14 @@ class QueryEngineWrapper:
 
     def _get_llm(self) -> Any:
         """
-        获取 LLM 实例（硅基流动）
+        获取 LLM 实例
 
         Returns:
             BaseLLM: LLM 实例
         """
-        from llama_index.llms.openai import OpenAI
+        from llamaindex_study.ollama_utils import create_llm
 
-        # 注册 DeepSeek-V3 上下文窗口（同上）
-        from llama_index.llms.openai.utils import ALL_AVAILABLE_MODELS
-
-        if "Pro/deepseek-ai/DeepSeek-V3.2" not in ALL_AVAILABLE_MODELS:
-            ALL_AVAILABLE_MODELS["Pro/deepseek-ai/DeepSeek-V3.2"] = 128000
-
-        return OpenAI(
-            model=self.settings.siliconflow_model,
-            api_key=self.settings.siliconflow_api_key,
-            api_base=self.settings.siliconflow_base_url,
-        )
+        return create_llm(mode=self.llm_mode)
 
     def get_retriever(self) -> Any:
         """
@@ -310,6 +327,7 @@ def create_query_engine(
     use_hyde: bool = False,
     use_multi_query: bool = False,
     response_mode: str = "compact",
+    llm_mode: Optional[str] = None,
 ) -> Any:
     """
     根据知识库 ID 创建查询引擎
@@ -322,6 +340,7 @@ def create_query_engine(
         use_hyde: 是否使用 HyDE（假设文档嵌入）
         use_multi_query: 是否使用多查询转换
         response_mode: Response Synthesizer 模式
+        llm_mode: LLM 模式 ("siliconflow", "ollama")
 
     Returns:
         BaseQueryEngine: 查询引擎实例
@@ -346,6 +365,7 @@ def create_query_engine(
         use_multi_query=use_multi_query,
         response_mode=response_mode,
         vector_store=vector_store,
+        llm_mode=llm_mode,
     )
 
     return wrapper._query_engine

@@ -186,6 +186,10 @@ class QueryRequest(BaseModel):
     retrieval_mode: str = Field(
         "vector", description="检索模式: vector(向量检索), hybrid(混合搜索)"
     )
+    llm_mode: Optional[str] = Field(
+        None,
+        description="LLM 模式: siliconflow(DeepSeek), ollama(本地模型)",
+    )
     kb_ids: Optional[str] = Field(
         None, description="指定知识库 ID（逗号分隔，route_mode=general 时必填）"
     )
@@ -795,38 +799,53 @@ def search(req: SearchRequest):
 def query(req: QueryRequest):
     from kb.services import QueryRouter
 
-    if req.route_mode == "auto":
-        result = QueryRouter.query(
+    logger.info(
+        f"[QUERY] route_mode={req.route_mode}, kb_ids={req.kb_ids}, retrieval_mode={req.retrieval_mode}, query={req.query[:50]}..."
+    )
+
+    try:
+        if req.route_mode == "auto":
+            result = QueryRouter.query(
+                req.query,
+                top_k=req.top_k,
+                exclude=req.exclude,
+                mode="auto",
+                use_hyde=req.use_hyde,
+                use_multi_query=req.use_multi_query,
+                use_auto_merging=req.use_auto_merging,
+                response_mode=req.response_mode,
+                retrieval_mode=req.retrieval_mode,
+                llm_mode=req.llm_mode,
+            )
+            return QueryResponse(**result)
+
+        if not req.kb_ids:
+            return QueryResponse(
+                response="请提供 kb_ids 参数指定要查询的知识库", sources=[]
+            )
+
+        kb_id_list = [k.strip() for k in req.kb_ids.split(",") if k.strip()]
+        if not kb_id_list:
+            return QueryResponse(response="kb_ids 参数无效", sources=[])
+
+        result = QueryRouter.query_multi(
+            kb_id_list,
             req.query,
             top_k=req.top_k,
-            exclude=req.exclude,
-            mode="auto",
             use_hyde=req.use_hyde,
             use_multi_query=req.use_multi_query,
             use_auto_merging=req.use_auto_merging,
             response_mode=req.response_mode,
+            retrieval_mode=req.retrieval_mode,
+            llm_mode=req.llm_mode,
         )
         return QueryResponse(**result)
 
-    if not req.kb_ids:
-        return QueryResponse(
-            response="请提供 kb_ids 参数指定要查询的知识库", sources=[]
+    except Exception as e:
+        logger.error(f"[QUERY] Error: {type(e).__name__}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500, detail=f"查询失败: {type(e).__name__}: {str(e)}"
         )
-
-    kb_id_list = [k.strip() for k in req.kb_ids.split(",") if k.strip()]
-    if not kb_id_list:
-        return QueryResponse(response="kb_ids 参数无效", sources=[])
-
-    result = QueryRouter.query_multi(
-        kb_id_list,
-        req.query,
-        top_k=req.top_k,
-        use_hyde=req.use_hyde,
-        use_multi_query=req.use_multi_query,
-        use_auto_merging=req.use_auto_merging,
-        response_mode=req.response_mode,
-    )
-    return QueryResponse(**result)
 
 
 @app.post("/evaluate/{kb_id}")

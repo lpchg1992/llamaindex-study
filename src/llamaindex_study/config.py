@@ -31,6 +31,8 @@ class Settings:
     _DEFAULT_SILICONFLOW_MODEL: ClassVar[str] = "Pro/deepseek-ai/DeepSeek-V3.2"
     _DEFAULT_OLLAMA_BASE_URL: ClassVar[str] = "http://localhost:11434"
     _DEFAULT_OLLAMA_EMBED_MODEL: ClassVar[str] = "bge-m3"
+    _DEFAULT_OLLAMA_LLM_MODEL: ClassVar[str] = "tomng/lfm2.5-instruct:1.2b"
+    _DEFAULT_LLM_MODE: ClassVar[str] = "ollama"
     _DEFAULT_OLLAMA_REMOTE_URL: ClassVar[str] = ""
     _DEFAULT_PERSIST_DIR: ClassVar[str] = str(PROJECT_ROOT / ".llamaindex" / "storage")
     _DEFAULT_ZOTERO_PERSIST_DIR: ClassVar[str] = str(
@@ -58,6 +60,12 @@ class Settings:
         self.siliconflow_api_key: Optional[str] = os.getenv("SILICONFLOW_API_KEY")
         self.siliconflow_model: str = os.getenv(
             "SILICONFLOW_MODEL", self._DEFAULT_SILICONFLOW_MODEL
+        )
+
+        # ========== LLM 模式选择 ==========
+        self.llm_mode: str = os.getenv("LLM_MODE", self._DEFAULT_LLM_MODE)
+        self.ollama_llm_model: str = os.getenv(
+            "OLLAMA_LLM_MODEL", self._DEFAULT_OLLAMA_LLM_MODEL
         )
 
         # ========== Embedding 配置（Ollama 多端点）==========
