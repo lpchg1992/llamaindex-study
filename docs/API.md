@@ -126,7 +126,7 @@ curl "http://localhost:37241/tasks/abc12345"
 | POST | `/kbs/{kb_id}/ingest` | 通用文件导入 |
 | POST | `/kbs/{kb_id}/ingest/obsidian` | Obsidian 导入（并行） |
 | POST | `/kbs/{kb_id}/ingest/zotero` | Zotero 导入 |
-| POST | `/kbs/{kb_id}/rebuild` | 重建知识库 |
+| POST | `/kbs/{kb_id}/initialize` | 初始化知识库（清空数据） |
 
 ### 检索查询
 
@@ -343,12 +343,12 @@ curl -X POST "http://localhost:37241/kbs/swine_nutrition/ingest/zotero" \
 }
 ```
 
-#### POST /kbs/{kb_id}/rebuild
+#### POST /kbs/{kb_id}/initialize
 
-重建知识库（清空后重新导入）：
+初始化知识库（清空所有数据，但保留知识库配置）：
 
 ```bash
-curl -X POST "http://localhost:37241/kbs/tech_tools/rebuild"
+curl -X POST "http://localhost:37241/kbs/tech_tools/initialize"
 ```
 
 ---

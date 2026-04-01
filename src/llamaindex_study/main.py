@@ -283,8 +283,10 @@ def handle_kb_delete(args: argparse.Namespace) -> int:
     return 0
 
 
-def handle_kb_rebuild(args: argparse.Namespace) -> int:
-    return submit_task_and_handle("rebuild", args.kb_id, {}, source="cli:kb:rebuild")
+def handle_kb_initialize(args: argparse.Namespace) -> int:
+    return submit_task_and_handle(
+        "initialize", args.kb_id, {}, source="cli:kb:initialize"
+    )
 
 
 def handle_kb_topics(args: argparse.Namespace) -> int:
@@ -871,8 +873,9 @@ def handle_ingest_batch(args: argparse.Namespace) -> int:
 
 
 def handle_ingest_rebuild(args: argparse.Namespace) -> int:
+    params = {"rebuild": True}
     return submit_task_and_handle(
-        "rebuild", args.kb_id, {}, source="cli:ingest:rebuild"
+        "obsidian", args.kb_id, params, source="cli:ingest:rebuild"
     )
 
 
@@ -1345,9 +1348,9 @@ def build_parser() -> argparse.ArgumentParser:
     kb_delete.add_argument("--yes", action="store_true")
     kb_delete.set_defaults(handler=handle_kb_delete)
 
-    kb_rebuild = kb_sub.add_parser("rebuild", help="重建知识库")
-    kb_rebuild.add_argument("kb_id")
-    kb_rebuild.set_defaults(handler=handle_kb_rebuild)
+    kb_initialize = kb_sub.add_parser("initialize", help="初始化知识库（清空所有数据）")
+    kb_initialize.add_argument("kb_id")
+    kb_initialize.set_defaults(handler=handle_kb_initialize)
 
     kb_topics = kb_sub.add_parser("topics", help="分析知识库主题词（使用远程LLM）")
     kb_topics.add_argument("kb_id", nargs="?", default=None)
@@ -1462,7 +1465,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ingest_batch.set_defaults(handler=handle_ingest_batch)
 
-    ingest_rebuild = ingest_sub.add_parser("rebuild", help="提交重建任务")
+    ingest_rebuild = ingest_sub.add_parser(
+        "rebuild", help="重建知识库（清空后重新导入）"
+    )
     ingest_rebuild.add_argument("kb_id")
     ingest_rebuild.set_defaults(handler=handle_ingest_rebuild)
 

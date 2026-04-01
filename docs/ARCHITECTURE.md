@@ -274,6 +274,50 @@ parser = get_hierarchical_node_parser()
 # 生成三层: [2048, 512, 128]
 ```
 
+#### HierarchicalNodeParser 层级分块详解
+
+**分块结构**（默认三层）：
+
+```
+文档
+  └── 父节点 (chunk_size=2048)
+        ├── 子节点 (chunk_size=512)
+        │     └── 叶子节点 (chunk_size=128)
+        │
+        └── 子节点 (chunk_size=512)
+              └── 叶子节点 (chunk_size=128)
+```
+
+**关键特性**：
+- 每个子/叶子节点通过 `parent_node_id` 字段引用父节点
+- 检索时利用父子关系实现 Auto-Merging
+
+**Auto-Merging 检索流程**：
+
+```
+1. 查询向量库 → 检索叶子节点 (128)
+           ↓
+2. 如果多个相邻叶子节点都相关 → 合并到父节点 (512)
+           ↓
+3. 如果父节点也高度相关 → 继续合并到根节点 (2048)
+           ↓
+4. 返回包含更完整上下文的节点
+```
+
+**配置参数**：
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `CHUNK_STRATEGY` | `hierarchical` | 分块策略 |
+| `HIERARCHICAL_CHUNK_SIZES` | `2048,512,128` | 各层分块大小 |
+| `CHUNK_OVERLAP` | `50` | 分块重叠大小 |
+| `USE_AUTO_MERGING` | `false` | 是否启用 Auto-Merging 检索 |
+
+**存储的节点关系字段**：
+- `node_id`: 节点唯一ID
+- `parent_node_id`: 父节点ID（根节点此字段为空）
+- `prev_node_id` / `next_node_id`: 兄弟节点关系
+
 **支持的解析器**：
 
 | 解析器 | 说明 | 适用场景 |

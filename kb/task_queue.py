@@ -40,7 +40,7 @@ class TaskType(str, Enum):
     ZOTERO = "zotero"  # Zotero 导入
     OBSIDIAN = "obsidian"  # Obsidian 导入
     GENERIC = "generic"  # 通用文件导入
-    REBUILD = "rebuild"  # 重建知识库
+    INITIALIZE = "initialize"  # 初始化知识库（清空数据）
 
 
 @dataclass

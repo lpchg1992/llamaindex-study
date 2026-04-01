@@ -47,7 +47,7 @@
 | POST | `/kbs/{kb_id}/ingest` | 通用文件导入 |
 | POST | `/kbs/{kb_id}/ingest/obsidian` | Obsidian 导入（并行） |
 | POST | `/kbs/{kb_id}/ingest/zotero` | Zotero 导入 |
-| POST | `/kbs/{kb_id}/rebuild` | 重建知识库 |
+| POST | `/kbs/{kb_id}/initialize` | 初始化知识库（清空数据） |
 
 ### 任务队列
 | 方法 | 端点 | 功能 |

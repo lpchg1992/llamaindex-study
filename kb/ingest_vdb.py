@@ -120,7 +120,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tasks", action="store_true", help="列出最近任务")
     parser.add_argument("--show-changes", action="store_true", help="查看待同步变更")
     parser.add_argument("--kb", help="指定知识库 ID")
-    parser.add_argument("--rebuild", action="store_true", help="提交重建任务")
+    parser.add_argument(
+        "--rebuild", action="store_true", help="重建知识库（清空后重新导入）"
+    )
     parser.add_argument(
         "--force-delete", action="store_true", help="同步时处理已删除文件"
     )

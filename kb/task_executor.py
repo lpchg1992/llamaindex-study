@@ -69,8 +69,8 @@ class TaskExecutor:
                 await self._execute_obsidian(task)
             elif task.task_type == "generic":
                 await self._execute_generic(task)
-            elif task.task_type == "rebuild":
-                await self._execute_rebuild(task)
+            elif task.task_type == "initialize":
+                await self._execute_initialize(task)
             else:
                 raise ValueError(f"Unknown task type: {task.task_type}")
 
@@ -639,21 +639,18 @@ class TaskExecutor:
 
         self._update_kb_topics(kb_id, has_new_docs=stats["files"] > 0)
 
-    async def _execute_rebuild(self, task: "Task") -> None:
-        """执行重建知识库"""
+    async def _execute_initialize(self, task: "Task") -> None:
         kb_id = task.kb_id
 
-        self.queue.update_progress(task.task_id, message="清空知识库...")
+        self.queue.update_progress(task.task_id, message="初始化知识库...")
 
-        vs = self._get_vector_store(kb_id)
-        vs.delete_table()
+        from kb.services import KnowledgeBaseService
 
-        from kb.database import init_kb_meta_db
+        KnowledgeBaseService.initialize(kb_id)
 
-        db = init_kb_meta_db()
-        db.update_topics(kb_id, [])
-
-        self.queue.complete_task(task.task_id, result={"message": "知识库已清空"})
+        self.queue.complete_task(
+            task.task_id, result={"message": "知识库已初始化（所有数据已清空）"}
+        )
 
     def cancel_task(self, task_id: str) -> bool:
         """取消任务"""

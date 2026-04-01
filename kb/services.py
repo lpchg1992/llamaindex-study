@@ -573,10 +573,22 @@ class KnowledgeBaseService:
         return True
 
     @staticmethod
-    def rebuild(kb_id: str) -> bool:
-        """重建知识库"""
+    def initialize(kb_id: str) -> bool:
+        """初始化知识库（清空所有数据）
+
+        清除向量存储和去重状态，但保留知识库配置。
+        用于完全重置知识库到初始状态。
+        """
+        from kb.deduplication import DeduplicationManager
+        from kb.registry import get_storage_root
+
         vs = VectorStoreService.get_vector_store(kb_id)
         vs.delete_table()
+
+        persist_dir = get_storage_root() / kb_id
+        dedup_manager = DeduplicationManager(kb_id, persist_dir)
+        dedup_manager.clear()
+
         return True
 
 
@@ -1438,7 +1450,7 @@ class TaskService:
         persist_dir = get_storage_root() / kb_id
         dedup_manager = DeduplicationManager(kb_id, persist_dir)
 
-        if task_type == "rebuild":
+        if task_type == "initialize":
             dedup_manager.clear()
             cleaned["dedup_state"] = True
 

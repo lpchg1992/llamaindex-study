@@ -30,7 +30,7 @@ API 端点:
     POST /kbs/{kb_id}/ingest        - 通用文件导入（异步）
     POST /kbs/{kb_id}/ingest/zotero - Zotero 收藏夹导入（异步）
     POST /kbs/{kb_id}/ingest/obsidian - Obsidian vault 导入（异步）
-    POST /kbs/{kb_id}/rebuild       - 重建知识库（异步）
+    POST /kbs/{kb_id}/initialize    - 初始化知识库（清空数据）
 
     Zotero 接口:
     GET  /zotero/collections         - 列出所有收藏夹
@@ -1088,32 +1088,30 @@ def add_category_rule(
     }
 
 
-@app.post("/kbs/{kb_id}/rebuild")
-def rebuild_kb(kb_id: str, async_mode: bool = True):
-    """重建知识库"""
+@app.post("/kbs/{kb_id}/initialize")
+def initialize_kb(kb_id: str, async_mode: bool = True):
+    """初始化知识库（清空所有数据）"""
     from kb.task_queue import task_queue
     from kb.task_executor import task_executor
 
     if async_mode:
         task_id = task_queue.submit_task(
-            task_type="rebuild",
+            task_type="initialize",
             kb_id=kb_id,
             params={},
-            source=f"rebuild:{kb_id}",
+            source=f"initialize:{kb_id}",
         )
-
-        # 任务由调度器启动
 
         return {
             "status": "pending",
             "task_id": task_id,
-            "message": f"重建任务已提交，ID: {task_id}",
+            "message": f"初始化任务已提交，ID: {task_id}",
         }
     else:
-        KnowledgeBaseService.rebuild(kb_id)
+        KnowledgeBaseService.initialize(kb_id)
         return {
             "status": "success",
-            "message": f"知识库 {kb_id} 已清空",
+            "message": f"知识库 {kb_id} 已初始化（所有数据已清空）",
         }
 
 
