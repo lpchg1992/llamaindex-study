@@ -1,48 +1,27 @@
-"""
-统一 SQLite 数据库模块
-
-管理项目中所有适合用数据库存储的数据：
-1. 同步状态 - 文件哈希、修改时间、doc_id
-2. 去重记录 - 文件哈希、doc_id、chunk_count
-3. 处理进度 - 当前进度、断点信息
-4. 知识库元数据 - 名称、描述、配置
-
-使用方式：
-```python
-from kb.database import get_db, SyncStateDB, DedupStateDB, ProgressDB
-
-# 获取数据库连接
-db = get_db()
-
-# 同步状态管理
-sync_db = SyncStateDB(db)
-sync_db.update_state("kb_id", "/path/file.md", "hash123", "doc_id")
-records = sync_db.get_records("kb_id")
-
-# 去重状态管理
-dedup_db = DedupStateDB(db)
-is_duplicate = dedup_db.check_hash("kb_id", "hash123")
-
-# 进度管理
-progress_db = ProgressDB(db)
-progress_db.update("kb_id", current=5, total=10)
-```
-
-数据库 Schema：
-- sync_states: 文件同步状态
-- dedup_records: 去重记录
-- progress: 处理进度
-- knowledge_bases: 知识库元数据
-"""
-
 import json
-import sqlite3
 import threading
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Set, Generator
+from typing import Any, Dict, Generator, List, Optional, Set
+
+from sqlalchemy import (
+    Float,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    create_engine,
+    delete,
+    event,
+    func,
+    inspect,
+    select,
+    update,
+)
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, scoped_session, sessionmaker
 
 from llamaindex_study.config import get_settings
 from llamaindex_study.logger import get_logger
@@ -50,23 +29,166 @@ from llamaindex_study.logger import get_logger
 logger = get_logger(__name__)
 
 
-# ==================== 数据库路径 ====================
-
-
 def get_db_path() -> Path:
-    """获取数据库路径"""
     settings = get_settings()
     data_dir = Path(settings.data_dir).expanduser()
     data_dir.mkdir(parents=True, exist_ok=True)
     return data_dir / "project.db"
 
 
-# ==================== 连接管理 ====================
+class Base(DeclarativeBase):
+    pass
+
+
+class SyncStateModel(Base):
+    __tablename__ = "sync_states"
+    __table_args__ = (
+        UniqueConstraint("kb_id", "file_path", name="uq_sync_kb_file"),
+        Index("idx_sync_kb_id", "kb_id"),
+        Index("idx_sync_hash", "kb_id", "hash"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    kb_id: Mapped[str] = mapped_column(String, nullable=False)
+    file_path: Mapped[str] = mapped_column(String, nullable=False)
+    hash: Mapped[str] = mapped_column(String, nullable=False)
+    mtime: Mapped[float] = mapped_column(Float, nullable=False)
+    doc_id: Mapped[str] = mapped_column(String, nullable=False)
+    last_synced: Mapped[float] = mapped_column(Float, nullable=False)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+
+class DedupRecordModel(Base):
+    __tablename__ = "dedup_records"
+    __table_args__ = (
+        UniqueConstraint("kb_id", "file_path", name="uq_dedup_kb_file"),
+        Index("idx_dedup_kb_id", "kb_id"),
+        Index("idx_dedup_hash", "kb_id", "hash"),
+        Index("idx_dedup_doc_id", "kb_id", "doc_id"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    kb_id: Mapped[str] = mapped_column(String, nullable=False)
+    file_path: Mapped[str] = mapped_column(String, nullable=False)
+    hash: Mapped[str] = mapped_column(String, nullable=False)
+    doc_id: Mapped[str] = mapped_column(String, nullable=False)
+    chunk_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    mtime: Mapped[float] = mapped_column(Float, nullable=False)
+    last_processed: Mapped[float] = mapped_column(Float, nullable=False)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+
+class ProgressModel(Base):
+    __tablename__ = "progress"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    kb_id: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    task_type: Mapped[str] = mapped_column(String, nullable=False)
+    current: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    processed_items: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    failed_items: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    started_at: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    completed_at: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    last_updated: Mapped[float] = mapped_column(Float, nullable=False)
+
+
+class KnowledgeBaseMetaModel(Base):
+    __tablename__ = "knowledge_bases"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    kb_id: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source_type: Mapped[str] = mapped_column(String, nullable=False)
+    persist_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    tags: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    topics: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    source_paths: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    source_tags: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    config: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    is_active: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+
+class TaskHistoryModel(Base):
+    __tablename__ = "task_history"
+    __table_args__ = (Index("idx_history_kb_id", "kb_id"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    kb_id: Mapped[str] = mapped_column(String, nullable=False)
+    task_id: Mapped[str] = mapped_column(String, nullable=False)
+    task_type: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    result: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    started_at: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    completed_at: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+
+class CategoryRuleModel(Base):
+    __tablename__ = "kb_category_rules"
+    __table_args__ = (
+        UniqueConstraint("kb_id", "rule_type", "pattern", name="uq_rule_key"),
+        Index("idx_rules_kb_id", "kb_id"),
+        Index("idx_rules_type", "rule_type"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    kb_id: Mapped[str] = mapped_column(String, nullable=False)
+    rule_type: Mapped[str] = mapped_column(String, nullable=False)
+    pattern: Mapped[str] = mapped_column(String, nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    priority: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    is_active: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+
+class VendorModel(Base):
+    __tablename__ = "vendors"
+    __table_args__ = (Index("idx_vendors_active", "is_active"),)
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    api_base: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    api_key: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    is_active: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+
+class ModelModel(Base):
+    __tablename__ = "models"
+    __table_args__ = (
+        Index("idx_models_vendor_id", "vendor_id"),
+        Index("idx_models_type", "type"),
+    )
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    vendor_id: Mapped[str] = mapped_column(String, nullable=False)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    type: Mapped[str] = mapped_column(String, nullable=False)
+    is_active: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    is_default: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    config: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+
+def _json_dump(data: Any, default: Any) -> str:
+    if data is None:
+        data = default
+    return json.dumps(data, ensure_ascii=False)
+
+
+def _json_load(data: Optional[str], default: Any) -> Any:
+    if not data:
+        return default
+    try:
+        return json.loads(data)
+    except json.JSONDecodeError:
+        return default
 
 
 class DatabaseManager:
-    """数据库管理器（单例）"""
-
     _instance: Optional["DatabaseManager"] = None
     _lock = threading.Lock()
 
@@ -81,281 +203,111 @@ class DatabaseManager:
         if hasattr(self, "_initialized"):
             return
         self._initialized = True
-
         self.db_path = get_db_path()
-        self._local = threading.local()
+        self.engine = create_engine(
+            f"sqlite:///{self.db_path}",
+            future=True,
+            connect_args={"timeout": 30, "check_same_thread": False},
+        )
+        self._session_factory = scoped_session(
+            sessionmaker(bind=self.engine, autoflush=False, autocommit=False, expire_on_commit=False)
+        )
+        self._register_sqlite_pragmas()
         self._init_database()
 
-    def _init_database(self):
-        """初始化数据库"""
-        conn = sqlite3.connect(str(self.db_path), timeout=30)
-        try:
-            self._create_tables(conn)
-        finally:
-            conn.close()
+    def _register_sqlite_pragmas(self) -> None:
+        @event.listens_for(self.engine, "connect")
+        def _set_sqlite_pragmas(dbapi_connection, connection_record):
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA busy_timeout=30000")
+            cursor.close()
 
-    def _create_tables(self, conn: sqlite3.Connection):
-        """创建所有表"""
-        cursor = conn.cursor()
+    def _init_database(self) -> None:
+        Base.metadata.create_all(self.engine)
+        self._migrate_legacy_models_table()
 
-        # 1. 同步状态表
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS sync_states (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                kb_id TEXT NOT NULL,
-                file_path TEXT NOT NULL,
-                hash TEXT NOT NULL,
-                mtime REAL NOT NULL,
-                doc_id TEXT NOT NULL,
-                last_synced REAL NOT NULL,
-                created_at REAL NOT NULL,
-                updated_at REAL NOT NULL,
-                UNIQUE(kb_id, file_path)
+    def _migrate_legacy_models_table(self) -> None:
+        insp = inspect(self.engine)
+        if "models" not in insp.get_table_names():
+            return
+        columns = {c["name"] for c in insp.get_columns("models")}
+        if "vendor" not in columns or "vendor_id" in columns:
+            return
+        logger.warning("检测到旧版 models 表，正在迁移数据...")
+        with self.engine.begin() as conn:
+            conn.exec_driver_sql("ALTER TABLE models RENAME TO models_old")
+            conn.exec_driver_sql(
+                """
+                CREATE TABLE IF NOT EXISTS models (
+                    id TEXT PRIMARY KEY,
+                    vendor_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    type TEXT NOT NULL,
+                    is_active INTEGER DEFAULT 1,
+                    is_default INTEGER DEFAULT 0,
+                    config TEXT DEFAULT '{}',
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+                """
             )
-        """)
-
-        # 索引
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_sync_kb_id ON sync_states(kb_id)
-        """)
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_sync_hash ON sync_states(kb_id, hash)
-        """)
-
-        # 2. 去重记录表
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS dedup_records (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                kb_id TEXT NOT NULL,
-                file_path TEXT NOT NULL,
-                hash TEXT NOT NULL,
-                doc_id TEXT NOT NULL,
-                chunk_count INTEGER DEFAULT 0,
-                mtime REAL NOT NULL,
-                last_processed REAL NOT NULL,
-                created_at REAL NOT NULL,
-                updated_at REAL NOT NULL,
-                UNIQUE(kb_id, file_path)
+            conn.exec_driver_sql(
+                """
+                INSERT INTO models (id, vendor_id, name, type, is_active, is_default, config, created_at, updated_at)
+                SELECT id, vendor, name, type, is_active, is_default, config, created_at, updated_at FROM models_old
+                """
             )
-        """)
-
-        # 索引
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_dedup_kb_id ON dedup_records(kb_id)
-        """)
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_dedup_hash ON dedup_records(kb_id, hash)
-        """)
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_dedup_doc_id ON dedup_records(kb_id, doc_id)
-        """)
-
-        # 3. 处理进度表
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS progress (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                kb_id TEXT UNIQUE NOT NULL,
-                task_type TEXT NOT NULL,
-                current INTEGER DEFAULT 0,
-                total INTEGER DEFAULT 0,
-                processed_items TEXT DEFAULT '[]',
-                failed_items TEXT DEFAULT '[]',
-                started_at REAL,
-                completed_at REAL,
-                last_updated REAL NOT NULL
-            )
-        """)
-
-        # 4. 知识库元数据表
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS knowledge_bases (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                kb_id TEXT UNIQUE NOT NULL,
-                name TEXT NOT NULL,
-                description TEXT,
-                source_type TEXT NOT NULL,
-                persist_path TEXT,
-                tags TEXT DEFAULT '[]',
-                topics TEXT DEFAULT '[]',
-                source_paths TEXT DEFAULT '[]',
-                source_tags TEXT DEFAULT '[]',
-                config TEXT DEFAULT '{}',
-                is_active INTEGER DEFAULT 1,
-                created_at REAL NOT NULL,
-                updated_at REAL NOT NULL
-            )
-        """)
-
-        # 5. 任务历史表
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS task_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                kb_id TEXT NOT NULL,
-                task_id TEXT NOT NULL,
-                task_type TEXT NOT NULL,
-                status TEXT NOT NULL,
-                message TEXT,
-                result TEXT,
-                error TEXT,
-                started_at REAL,
-                completed_at REAL,
-                created_at REAL NOT NULL
-            )
-        """)
-
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_history_kb_id ON task_history(kb_id)
-        """)
-
-        # 6. 知识库分类规则表
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS kb_category_rules (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                kb_id TEXT NOT NULL,
-                rule_type TEXT NOT NULL,
-                pattern TEXT NOT NULL,
-                description TEXT,
-                priority INTEGER DEFAULT 0,
-                is_active INTEGER DEFAULT 1,
-                created_at REAL NOT NULL,
-                updated_at REAL NOT NULL,
-                UNIQUE(kb_id, rule_type, pattern)
-            )
-        """)
-
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_rules_kb_id ON kb_category_rules(kb_id)
-        """)
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_rules_type ON kb_category_rules(rule_type)
-        """)
-
-        # 7. 模型供应商表
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS vendors (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                api_base TEXT,
-                api_key TEXT,
-                is_active INTEGER DEFAULT 1,
-                created_at REAL NOT NULL,
-                updated_at REAL NOT NULL
-            )
-        """)
-
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_vendors_active ON vendors(is_active)
-        """)
-
-        cursor.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='models'"
-        )
-        old_models_exists = cursor.fetchone() is not None
-
-        if old_models_exists:
-            cursor.execute("PRAGMA table_info(models)")
-            columns = [col[1] for col in cursor.fetchall()]
-            if "vendor" in columns and "vendor_id" not in columns:
-                logger.warning("检测到旧版 models 表，正在迁移数据...")
-                cursor.execute("ALTER TABLE models RENAME TO models_old")
-                cursor.execute("""
-                    CREATE TABLE models (
-                        id TEXT PRIMARY KEY,
-                        vendor_id TEXT NOT NULL,
-                        name TEXT NOT NULL,
-                        type TEXT NOT NULL,
-                        is_active INTEGER DEFAULT 1,
-                        is_default INTEGER DEFAULT 0,
-                        config TEXT DEFAULT '{}',
-                        created_at REAL NOT NULL,
-                        updated_at REAL NOT NULL,
-                        FOREIGN KEY (vendor_id) REFERENCES vendors(id)
-                    )
-                """)
-                cursor.execute("""
-                    INSERT INTO models (id, vendor_id, name, type, is_active, is_default, config, created_at, updated_at)
-                    SELECT id, vendor, name, type, is_active, is_default, config, created_at, updated_at FROM models_old
-                """)
-                cursor.execute("DROP TABLE models_old")
-                logger.warning("models 表迁移完成")
-
-        # 8. 模型配置表
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS models (
-                id TEXT PRIMARY KEY,
-                vendor_id TEXT NOT NULL,
-                name TEXT NOT NULL,
-                type TEXT NOT NULL,
-                is_active INTEGER DEFAULT 1,
-                is_default INTEGER DEFAULT 0,
-                config TEXT DEFAULT '{}',
-                created_at REAL NOT NULL,
-                updated_at REAL NOT NULL,
-                FOREIGN KEY (vendor_id) REFERENCES vendors(id)
-            )
-        """)
-
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_models_vendor_id ON models(vendor_id)
-        """)
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_models_type ON models(type)
-        """)
-
-        conn.commit()
+            conn.exec_driver_sql("DROP TABLE models_old")
+        logger.warning("models 表迁移完成")
 
     @contextmanager
-    def get_connection(self) -> Generator[sqlite3.Connection, None, None]:
-        """获取线程安全的数据库连接"""
-        if not hasattr(self._local, "conn") or self._local.conn is None:
-            self._local.conn = sqlite3.connect(str(self.db_path), timeout=30)
-            self._local.conn.row_factory = sqlite3.Row
+    def session_scope(self) -> Generator[Session, None, None]:
+        session = self._session_factory()
         try:
-            yield self._local.conn
-            self._local.conn.commit()
+            yield session
+            session.commit()
         except Exception:
-            self._local.conn.rollback()
+            session.rollback()
             raise
+        finally:
+            session.close()
 
-    def execute(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
-        """执行 SQL"""
-        with self.get_connection() as conn:
-            return conn.execute(sql, params)
+    @contextmanager
+    def get_connection(self):
+        with self.engine.begin() as conn:
+            yield conn
 
-    def executemany(self, sql: str, params_list: List[tuple]) -> sqlite3.Cursor:
-        """批量执行 SQL"""
-        with self.get_connection() as conn:
-            return conn.executemany(sql, params_list)
+    def execute(self, sql: str, params: tuple | dict = ()):
+        with self.engine.begin() as conn:
+            return conn.exec_driver_sql(sql, params)
+
+    def executemany(self, sql: str, params_list: List[tuple]):
+        with self.engine.begin() as conn:
+            cursor = None
+            for params in params_list:
+                cursor = conn.exec_driver_sql(sql, params)
+            return cursor
 
     def commit(self):
-        """提交事务"""
-        if hasattr(self._local, "conn") and self._local.conn:
-            self._local.conn.commit()
+        return None
 
     def vacuum(self):
-        """整理数据库"""
-        with self.get_connection() as conn:
-            conn.execute("VACUUM")
+        with self.engine.begin() as conn:
+            conn.exec_driver_sql("VACUUM")
 
 
-# 全局实例
 _db_manager: Optional[DatabaseManager] = None
 
 
 def get_db() -> DatabaseManager:
-    """获取数据库管理器实例"""
     global _db_manager
     if _db_manager is None:
         _db_manager = DatabaseManager()
     return _db_manager
 
 
-# ==================== 模型供应商管理 ====================
-
-
 class VendorDB:
-    """模型供应商数据库操作"""
-
     def __init__(self, db: DatabaseManager):
         self.db = db
 
@@ -368,86 +320,80 @@ class VendorDB:
         is_active: bool = True,
     ) -> bool:
         now = time.time()
-        with self.db.get_connection() as conn:
-            cursor = conn.execute(
-                """
-                INSERT INTO vendors 
-                (id, name, api_base, api_key, is_active, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    name = excluded.name,
-                    api_base = excluded.api_base,
-                    api_key = excluded.api_key,
-                    is_active = excluded.is_active,
-                    updated_at = excluded.updated_at
-            """,
-                (
-                    vendor_id,
-                    name,
-                    api_base,
-                    api_key,
-                    1 if is_active else 0,
-                    now,
-                    now,
-                ),
-            )
-            return cursor.rowcount > 0
+        stmt = sqlite_insert(VendorModel).values(
+            id=vendor_id,
+            name=name,
+            api_base=api_base,
+            api_key=api_key,
+            is_active=1 if is_active else 0,
+            created_at=now,
+            updated_at=now,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[VendorModel.id],
+            set_={
+                "name": stmt.excluded.name,
+                "api_base": stmt.excluded.api_base,
+                "api_key": stmt.excluded.api_key,
+                "is_active": stmt.excluded.is_active,
+                "updated_at": now,
+            },
+        )
+        with self.db.session_scope() as session:
+            session.execute(stmt)
+        return True
 
     def get(self, vendor_id: str) -> Optional[Dict[str, Any]]:
-        with self.db.get_connection() as conn:
-            cursor = conn.execute("SELECT * FROM vendors WHERE id = ?", (vendor_id,))
-            row = cursor.fetchone()
-            if row:
-                return self._row_to_dict(row)
-            return None
+        with self.db.session_scope() as session:
+            row = session.get(VendorModel, vendor_id)
+            if not row:
+                return None
+            return {
+                "id": row.id,
+                "name": row.name,
+                "api_base": row.api_base,
+                "api_key": row.api_key,
+                "is_active": bool(row.is_active),
+                "created_at": row.created_at,
+                "updated_at": row.updated_at,
+            }
 
     def get_all(self, active_only: bool = True) -> List[Dict[str, Any]]:
-        with self.db.get_connection() as conn:
+        with self.db.session_scope() as session:
+            stmt = select(VendorModel)
             if active_only:
-                cursor = conn.execute(
-                    "SELECT * FROM vendors WHERE is_active = 1 ORDER BY name"
-                )
-            else:
-                cursor = conn.execute("SELECT * FROM vendors ORDER BY name")
-            return [self._row_to_dict(row) for row in cursor.fetchall()]
+                stmt = stmt.where(VendorModel.is_active == 1)
+            stmt = stmt.order_by(VendorModel.name)
+            rows = session.scalars(stmt).all()
+            return [
+                {
+                    "id": row.id,
+                    "name": row.name,
+                    "api_base": row.api_base,
+                    "api_key": row.api_key,
+                    "is_active": bool(row.is_active),
+                    "created_at": row.created_at,
+                    "updated_at": row.updated_at,
+                }
+                for row in rows
+            ]
 
     def delete(self, vendor_id: str) -> bool:
-        with self.db.get_connection() as conn:
-            cursor = conn.execute("DELETE FROM vendors WHERE id = ?", (vendor_id,))
-            return cursor.rowcount > 0
+        with self.db.session_scope() as session:
+            result = session.execute(delete(VendorModel).where(VendorModel.id == vendor_id))
+            return (result.rowcount or 0) > 0
 
     def set_active(self, vendor_id: str, is_active: bool) -> bool:
-        now = time.time()
-        with self.db.get_connection() as conn:
-            cursor = conn.execute(
-                "UPDATE vendors SET is_active = ?, updated_at = ? WHERE id = ?",
-                (1 if is_active else 0, now, vendor_id),
+        with self.db.session_scope() as session:
+            result = session.execute(
+                update(VendorModel)
+                .where(VendorModel.id == vendor_id)
+                .values(is_active=1 if is_active else 0, updated_at=time.time())
             )
-            return cursor.rowcount > 0
-
-    def _row_to_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
-        return {
-            "id": row["id"],
-            "name": row["name"],
-            "api_base": row["api_base"],
-            "api_key": row["api_key"],
-            "is_active": bool(row["is_active"]),
-            "created_at": row["created_at"],
-            "updated_at": row["updated_at"],
-        }
-
-
-def init_vendor_db() -> VendorDB:
-    """获取供应商数据库实例"""
-    return VendorDB(get_db())
-
-
-# ==================== 模型配置管理 ====================
+            return (result.rowcount or 0) > 0
 
 
 class ModelDB:
-    """模型配置数据库操作"""
-
     def __init__(self, db: DatabaseManager):
         self.db = db
 
@@ -462,653 +408,475 @@ class ModelDB:
         config: dict = None,
     ) -> bool:
         now = time.time()
-        with self.db.get_connection() as conn:
-            cursor = conn.execute(
-                """
-                INSERT INTO models 
-                (id, vendor_id, name, type, is_active, is_default, config, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    vendor_id = excluded.vendor_id,
-                    name = excluded.name,
-                    type = excluded.type,
-                    is_active = excluded.is_active,
-                    is_default = excluded.is_default,
-                    config = excluded.config,
-                    updated_at = excluded.updated_at
-            """,
-                (
-                    model_id,
-                    vendor_id,
-                    name,
-                    type,
-                    1 if is_active else 0,
-                    1 if is_default else 0,
-                    json.dumps(config or {}, ensure_ascii=False),
-                    now,
-                    now,
-                ),
-            )
-            return cursor.rowcount > 0
+        stmt = sqlite_insert(ModelModel).values(
+            id=model_id,
+            vendor_id=vendor_id,
+            name=name,
+            type=type,
+            is_active=1 if is_active else 0,
+            is_default=1 if is_default else 0,
+            config=_json_dump(config, {}),
+            created_at=now,
+            updated_at=now,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[ModelModel.id],
+            set_={
+                "vendor_id": stmt.excluded.vendor_id,
+                "name": stmt.excluded.name,
+                "type": stmt.excluded.type,
+                "is_active": stmt.excluded.is_active,
+                "is_default": stmt.excluded.is_default,
+                "config": stmt.excluded.config,
+                "updated_at": now,
+            },
+        )
+        with self.db.session_scope() as session:
+            session.execute(stmt)
+        return True
 
     def get(self, model_id: str) -> Optional[Dict[str, Any]]:
-        with self.db.get_connection() as conn:
-            cursor = conn.execute("SELECT * FROM models WHERE id = ?", (model_id,))
-            row = cursor.fetchone()
-            if row:
-                return self._row_to_dict(row)
-            return None
+        with self.db.session_scope() as session:
+            row = session.get(ModelModel, model_id)
+            if not row:
+                return None
+            return {
+                "id": row.id,
+                "vendor_id": row.vendor_id,
+                "name": row.name,
+                "type": row.type,
+                "is_active": bool(row.is_active),
+                "is_default": bool(row.is_default),
+                "config": _json_load(row.config, {}),
+                "created_at": row.created_at,
+                "updated_at": row.updated_at,
+            }
 
-    def get_all(
-        self, active_only: bool = True, type: str = None
-    ) -> List[Dict[str, Any]]:
-        with self.db.get_connection() as conn:
-            if active_only and type:
-                cursor = conn.execute(
-                    "SELECT * FROM models WHERE is_active = 1 AND type = ? ORDER BY name",
-                    (type,),
-                )
-            elif active_only:
-                cursor = conn.execute(
-                    "SELECT * FROM models WHERE is_active = 1 ORDER BY type, name"
-                )
-            elif type:
-                cursor = conn.execute(
-                    "SELECT * FROM models WHERE type = ? ORDER BY name", (type,)
-                )
-            else:
-                cursor = conn.execute("SELECT * FROM models ORDER BY type, name")
-            return [self._row_to_dict(row) for row in cursor.fetchall()]
+    def get_all(self, active_only: bool = True, type: str = None) -> List[Dict[str, Any]]:
+        with self.db.session_scope() as session:
+            stmt = select(ModelModel)
+            if active_only:
+                stmt = stmt.where(ModelModel.is_active == 1)
+            if type:
+                stmt = stmt.where(ModelModel.type == type)
+            stmt = stmt.order_by(ModelModel.type, ModelModel.name)
+            rows = session.scalars(stmt).all()
+            return [
+                {
+                    "id": row.id,
+                    "vendor_id": row.vendor_id,
+                    "name": row.name,
+                    "type": row.type,
+                    "is_active": bool(row.is_active),
+                    "is_default": bool(row.is_default),
+                    "config": _json_load(row.config, {}),
+                    "created_at": row.created_at,
+                    "updated_at": row.updated_at,
+                }
+                for row in rows
+            ]
 
     def get_by_type(self, type: str) -> List[Dict[str, Any]]:
         return self.get_all(active_only=True, type=type)
 
     def get_default(self, type: str = None) -> Optional[Dict[str, Any]]:
-        with self.db.get_connection() as conn:
+        with self.db.session_scope() as session:
+            stmt = select(ModelModel).where(ModelModel.is_default == 1)
             if type:
-                cursor = conn.execute(
-                    "SELECT * FROM models WHERE is_default = 1 AND type = ? LIMIT 1",
-                    (type,),
-                )
-            else:
-                cursor = conn.execute(
-                    "SELECT * FROM models WHERE is_default = 1 LIMIT 1"
-                )
-            row = cursor.fetchone()
-            if row:
-                return self._row_to_dict(row)
-            return None
+                stmt = stmt.where(ModelModel.type == type)
+            row = session.scalars(stmt.limit(1)).first()
+            if not row:
+                return None
+            return {
+                "id": row.id,
+                "vendor_id": row.vendor_id,
+                "name": row.name,
+                "type": row.type,
+                "is_active": bool(row.is_active),
+                "is_default": bool(row.is_default),
+                "config": _json_load(row.config, {}),
+                "created_at": row.created_at,
+                "updated_at": row.updated_at,
+            }
 
     def delete(self, model_id: str) -> bool:
-        with self.db.get_connection() as conn:
-            cursor = conn.execute("DELETE FROM models WHERE id = ?", (model_id,))
-            return cursor.rowcount > 0
+        with self.db.session_scope() as session:
+            result = session.execute(delete(ModelModel).where(ModelModel.id == model_id))
+            return (result.rowcount or 0) > 0
 
     def set_default(self, model_id: str) -> bool:
-        with self.db.get_connection() as conn:
-            model = self.get(model_id)
+        with self.db.session_scope() as session:
+            model = session.get(ModelModel, model_id)
             if not model:
                 return False
-            conn.execute(
-                "UPDATE models SET is_default = 0 WHERE type = ?", (model["type"],)
-            )
-            cursor = conn.execute(
-                "UPDATE models SET is_default = 1 WHERE id = ?", (model_id,)
-            )
-            return cursor.rowcount > 0
+            session.execute(update(ModelModel).where(ModelModel.type == model.type).values(is_default=0))
+            result = session.execute(update(ModelModel).where(ModelModel.id == model_id).values(is_default=1))
+            return (result.rowcount or 0) > 0
 
-    def _row_to_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
-        return {
-            "id": row["id"],
-            "vendor_id": row["vendor_id"],
-            "name": row["name"],
-            "type": row["type"],
-            "is_active": bool(row["is_active"]),
-            "is_default": bool(row["is_default"]),
-            "config": json.loads(row["config"] or "{}"),
-            "created_at": row["created_at"],
-            "updated_at": row["updated_at"],
-        }
+
+def init_vendor_db() -> VendorDB:
+    return VendorDB(get_db())
 
 
 def init_model_db() -> ModelDB:
-    """获取模型数据库实例"""
     return ModelDB(get_db())
 
 
 @contextmanager
-def get_cursor() -> Generator[sqlite3.Cursor, None, None]:
-    """获取数据库游标（便捷函数）"""
-    db = get_db()
-    with db.get_connection() as conn:
-        cursor = conn.cursor()
-        try:
-            yield cursor
-        finally:
-            pass
-
-
-# ==================== 同步状态管理 ====================
+def get_cursor():
+    with get_db().get_connection() as conn:
+        yield conn
 
 
 class SyncStateDB:
-    """同步状态数据库操作"""
-
     def __init__(self, db: DatabaseManager):
         self.db = db
 
-    def update_state(
-        self,
-        kb_id: str,
-        file_path: str,
-        hash: str,
-        mtime: float,
-        doc_id: str,
-    ) -> bool:
-        """
-        更新同步状态
+    @staticmethod
+    def _to_dict(row: SyncStateModel) -> Dict[str, Any]:
+        return {
+            "id": row.id,
+            "kb_id": row.kb_id,
+            "file_path": row.file_path,
+            "hash": row.hash,
+            "mtime": row.mtime,
+            "doc_id": row.doc_id,
+            "last_synced": row.last_synced,
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
+        }
 
-        Args:
-            kb_id: 知识库 ID
-            file_path: 文件相对路径
-            hash: 文件哈希
-            mtime: 修改时间
-            doc_id: 文档 ID
-
-        Returns:
-            是否是新插入
-        """
+    def update_state(self, kb_id: str, file_path: str, hash: str, mtime: float, doc_id: str) -> bool:
         now = time.time()
-
-        with self.db.get_connection() as conn:
-            cursor = conn.execute(
-                """
-                INSERT INTO sync_states 
-                (kb_id, file_path, hash, mtime, doc_id, last_synced, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(kb_id, file_path) DO UPDATE SET
-                    hash = excluded.hash,
-                    mtime = excluded.mtime,
-                    doc_id = excluded.doc_id,
-                    last_synced = excluded.last_synced,
-                    updated_at = excluded.updated_at
-            """,
-                (kb_id, file_path, hash, mtime, doc_id, now, now, now),
-            )
-
-            return cursor.rowcount > 0
+        stmt = sqlite_insert(SyncStateModel).values(
+            kb_id=kb_id,
+            file_path=file_path,
+            hash=hash,
+            mtime=mtime,
+            doc_id=doc_id,
+            last_synced=now,
+            created_at=now,
+            updated_at=now,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[SyncStateModel.kb_id, SyncStateModel.file_path],
+            set_={
+                "hash": stmt.excluded.hash,
+                "mtime": stmt.excluded.mtime,
+                "doc_id": stmt.excluded.doc_id,
+                "last_synced": stmt.excluded.last_synced,
+                "updated_at": now,
+            },
+        )
+        with self.db.session_scope() as session:
+            session.execute(stmt)
+        return True
 
     def bulk_update(self, kb_id: str, records: List[Dict[str, Any]]) -> int:
-        """
-        批量更新同步状态
-
-        Args:
-            kb_id: 知识库 ID
-            records: 记录列表
-
-        Returns:
-            更新数量
-        """
         if not records:
             return 0
-
         now = time.time()
-
-        with self.db.get_connection() as conn:
-            cursor = conn.executemany(
-                """
-                INSERT INTO sync_states 
-                (kb_id, file_path, hash, mtime, doc_id, last_synced, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(kb_id, file_path) DO UPDATE SET
-                    hash = excluded.hash,
-                    mtime = excluded.mtime,
-                    doc_id = excluded.doc_id,
-                    last_synced = excluded.last_synced,
-                    updated_at = excluded.updated_at
-            """,
-                [
-                    (
-                        kb_id,
-                        r["file_path"],
-                        r["hash"],
-                        r["mtime"],
-                        r["doc_id"],
-                        now,
-                        now,
-                        now,
-                    )
-                    for r in records
-                ],
-            )
-
-            return cursor.rowcount
+        with self.db.session_scope() as session:
+            for r in records:
+                stmt = sqlite_insert(SyncStateModel).values(
+                    kb_id=kb_id,
+                    file_path=r["file_path"],
+                    hash=r["hash"],
+                    mtime=r["mtime"],
+                    doc_id=r["doc_id"],
+                    last_synced=now,
+                    created_at=now,
+                    updated_at=now,
+                )
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=[SyncStateModel.kb_id, SyncStateModel.file_path],
+                    set_={
+                        "hash": stmt.excluded.hash,
+                        "mtime": stmt.excluded.mtime,
+                        "doc_id": stmt.excluded.doc_id,
+                        "last_synced": stmt.excluded.last_synced,
+                        "updated_at": now,
+                    },
+                )
+                session.execute(stmt)
+        return len(records)
 
     def get_state(self, kb_id: str, file_path: str) -> Optional[Dict[str, Any]]:
-        """获取同步状态"""
-        with self.db.get_connection() as conn:
-            cursor = conn.execute(
-                """
-                SELECT * FROM sync_states WHERE kb_id = ? AND file_path = ?
-            """,
-                (kb_id, file_path),
-            )
-
-            row = cursor.fetchone()
-            if row:
-                return dict(row)
-            return None
+        with self.db.session_scope() as session:
+            row = session.scalars(
+                select(SyncStateModel).where(
+                    SyncStateModel.kb_id == kb_id,
+                    SyncStateModel.file_path == file_path,
+                )
+            ).first()
+            return self._to_dict(row) if row else None
 
     def get_records(self, kb_id: str) -> List[Dict[str, Any]]:
-        """获取知识库的所有同步记录"""
-        with self.db.get_connection() as conn:
-            cursor = conn.execute(
-                """
-                SELECT * FROM sync_states WHERE kb_id = ? ORDER BY updated_at DESC
-            """,
-                (kb_id,),
-            )
-
-            return [dict(row) for row in cursor.fetchall()]
+        with self.db.session_scope() as session:
+            rows = session.scalars(
+                select(SyncStateModel)
+                .where(SyncStateModel.kb_id == kb_id)
+                .order_by(SyncStateModel.updated_at.desc())
+            ).all()
+            return [self._to_dict(row) for row in rows]
 
     def get_hash_map(self, kb_id: str) -> Dict[str, str]:
-        """获取 file_path -> hash 映射"""
-        with self.db.get_connection() as conn:
-            cursor = conn.execute(
-                """
-                SELECT file_path, hash FROM sync_states WHERE kb_id = ?
-            """,
-                (kb_id,),
-            )
-
-            return {row["file_path"]: row["hash"] for row in cursor.fetchall()}
+        with self.db.session_scope() as session:
+            rows = session.execute(
+                select(SyncStateModel.file_path, SyncStateModel.hash).where(SyncStateModel.kb_id == kb_id)
+            ).all()
+            return {file_path: hash_value for file_path, hash_value in rows}
 
     def get_doc_id_map(self, kb_id: str) -> Dict[str, str]:
-        """获取 file_path -> doc_id 映射"""
-        with self.db.get_connection() as conn:
-            cursor = conn.execute(
-                """
-                SELECT file_path, doc_id FROM sync_states WHERE kb_id = ?
-            """,
-                (kb_id,),
-            )
-
-            return {row["file_path"]: row["doc_id"] for row in cursor.fetchall()}
+        with self.db.session_scope() as session:
+            rows = session.execute(
+                select(SyncStateModel.file_path, SyncStateModel.doc_id).where(SyncStateModel.kb_id == kb_id)
+            ).all()
+            return {file_path: doc_id for file_path, doc_id in rows}
 
     def has_hash(self, kb_id: str, hash: str) -> bool:
-        """检查哈希是否存在"""
-        with self.db.get_connection() as conn:
-            cursor = conn.execute(
-                """
-                SELECT 1 FROM sync_states WHERE kb_id = ? AND hash = ? LIMIT 1
-            """,
-                (kb_id, hash),
-            )
-
-            return cursor.fetchone() is not None
+        with self.db.session_scope() as session:
+            return session.scalars(
+                select(SyncStateModel.id).where(SyncStateModel.kb_id == kb_id, SyncStateModel.hash == hash).limit(1)
+            ).first() is not None
 
     def get_by_hash(self, kb_id: str, hash: str) -> Optional[Dict[str, Any]]:
-        """根据哈希获取记录"""
-        with self.db.get_connection() as conn:
-            cursor = conn.execute(
-                """
-                SELECT * FROM sync_states WHERE kb_id = ? AND hash = ? LIMIT 1
-            """,
-                (kb_id, hash),
-            )
-
-            row = cursor.fetchone()
-            if row:
-                return dict(row)
-            return None
+        with self.db.session_scope() as session:
+            row = session.scalars(
+                select(SyncStateModel).where(SyncStateModel.kb_id == kb_id, SyncStateModel.hash == hash).limit(1)
+            ).first()
+            return self._to_dict(row) if row else None
 
     def remove(self, kb_id: str, file_path: str) -> bool:
-        """删除同步状态"""
-        with self.db.get_connection() as conn:
-            cursor = conn.execute(
-                """
-                DELETE FROM sync_states WHERE kb_id = ? AND file_path = ?
-            """,
-                (kb_id, file_path),
+        with self.db.session_scope() as session:
+            result = session.execute(
+                delete(SyncStateModel).where(SyncStateModel.kb_id == kb_id, SyncStateModel.file_path == file_path)
             )
-
-            return cursor.rowcount > 0
+            return (result.rowcount or 0) > 0
 
     def remove_many(self, kb_id: str, file_paths: List[str]) -> int:
-        """批量删除同步状态"""
         if not file_paths:
             return 0
-
-        placeholders = ",".join(["?"] * len(file_paths))
-        with self.db.get_connection() as conn:
-            cursor = conn.execute(
-                f"""
-                DELETE FROM sync_states WHERE kb_id = ? AND file_path IN ({placeholders})
-            """,
-                [kb_id] + file_paths,
+        with self.db.session_scope() as session:
+            result = session.execute(
+                delete(SyncStateModel).where(
+                    SyncStateModel.kb_id == kb_id,
+                    SyncStateModel.file_path.in_(file_paths),
+                )
             )
-
-            return cursor.rowcount
+            return result.rowcount or 0
 
     def clear(self, kb_id: str) -> int:
-        """清空知识库的同步状态"""
-        with self.db.get_connection() as conn:
-            cursor = conn.execute(
-                """
-                DELETE FROM sync_states WHERE kb_id = ?
-            """,
-                (kb_id,),
-            )
-
-            return cursor.rowcount
+        with self.db.session_scope() as session:
+            result = session.execute(delete(SyncStateModel).where(SyncStateModel.kb_id == kb_id))
+            return result.rowcount or 0
 
     def cleanup_orphaned(self, kb_id: str, valid_doc_ids: Set[str]) -> int:
-        """清理孤立的记录"""
-        with self.db.get_connection() as conn:
-            cursor = conn.execute(
-                """
-                DELETE FROM sync_states 
-                WHERE kb_id = ? AND doc_id NOT IN ({})
-            """.format(",".join(["?"] * len(valid_doc_ids))),
-                [kb_id] + list(valid_doc_ids),
-            )
-
-            return cursor.rowcount
+        with self.db.session_scope() as session:
+            stmt = delete(SyncStateModel).where(SyncStateModel.kb_id == kb_id)
+            if valid_doc_ids:
+                stmt = stmt.where(~SyncStateModel.doc_id.in_(list(valid_doc_ids)))
+            result = session.execute(stmt)
+            return result.rowcount or 0
 
     def get_stats(self, kb_id: str) -> Dict[str, int]:
-        """获取统计信息"""
-        with self.db.get_connection() as conn:
-            cursor = conn.execute(
-                """
-                SELECT COUNT(*) as total FROM sync_states WHERE kb_id = ?
-            """,
-                (kb_id,),
-            )
-
-            return {"total": cursor.fetchone()["total"]}
-
-
-# ==================== 去重记录管理 ====================
+        with self.db.session_scope() as session:
+            total = session.scalar(select(func.count()).select_from(SyncStateModel).where(SyncStateModel.kb_id == kb_id)) or 0
+            return {"total": int(total)}
 
 
 class DedupStateDB:
-    """去重记录数据库操作"""
-
     def __init__(self, db: DatabaseManager):
         self.db = db
 
-    def add_record(
-        self,
-        kb_id: str,
-        file_path: str,
-        hash: str,
-        doc_id: str,
-        chunk_count: int = 0,
-    ) -> bool:
-        """
-        添加去重记录
+    @staticmethod
+    def _to_dict(row: DedupRecordModel) -> Dict[str, Any]:
+        return {
+            "id": row.id,
+            "kb_id": row.kb_id,
+            "file_path": row.file_path,
+            "hash": row.hash,
+            "doc_id": row.doc_id,
+            "chunk_count": row.chunk_count,
+            "mtime": row.mtime,
+            "last_processed": row.last_processed,
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
+        }
 
-        Args:
-            kb_id: 知识库 ID
-            file_path: 文件路径
-            hash: 文件哈希
-            doc_id: 文档 ID
-            chunk_count: chunk 数量
-
-        Returns:
-            是否成功
-        """
+    def add_record(self, kb_id: str, file_path: str, hash: str, doc_id: str, chunk_count: int = 0) -> bool:
         now = time.time()
-        mtime = time.time()
-
+        stmt = sqlite_insert(DedupRecordModel).values(
+            kb_id=kb_id,
+            file_path=file_path,
+            hash=hash,
+            doc_id=doc_id,
+            chunk_count=chunk_count,
+            mtime=now,
+            last_processed=now,
+            created_at=now,
+            updated_at=now,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[DedupRecordModel.kb_id, DedupRecordModel.file_path],
+            set_={
+                "hash": stmt.excluded.hash,
+                "doc_id": stmt.excluded.doc_id,
+                "chunk_count": stmt.excluded.chunk_count,
+                "mtime": stmt.excluded.mtime,
+                "last_processed": stmt.excluded.last_processed,
+                "updated_at": now,
+            },
+        )
         try:
-            with self.db.get_connection() as conn:
-                cursor = conn.execute(
-                    """
-                    INSERT OR REPLACE INTO dedup_records 
-                    (kb_id, file_path, hash, doc_id, chunk_count, mtime, last_processed, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                    (kb_id, file_path, hash, doc_id, chunk_count, mtime, now, now, now),
-                )
-
-                conn.commit()
-                return True
+            with self.db.session_scope() as session:
+                session.execute(stmt)
+            return True
         except Exception as e:
             logger.warning(f"add_record 错误: {e}")
             return False
 
     def bulk_add(self, kb_id: str, records: List[Dict[str, Any]]) -> int:
-        """
-        批量添加去重记录
-
-        Args:
-            kb_id: 知识库 ID
-            records: 记录列表
-
-        Returns:
-            添加数量
-        """
         if not records:
             return 0
-
         now = time.time()
-
-        with self.db.get_connection() as conn:
-            cursor = conn.executemany(
-                """
-                INSERT INTO dedup_records 
-                (kb_id, file_path, hash, doc_id, chunk_count, mtime, last_processed, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(kb_id, file_path) DO UPDATE SET
-                    hash = excluded.hash,
-                    doc_id = excluded.doc_id,
-                    chunk_count = excluded.chunk_count,
-                    last_processed = excluded.last_processed,
-                    updated_at = excluded.updated_at
-            """,
-                [
-                    (
-                        kb_id,
-                        r["file_path"],
-                        r["hash"],
-                        r["doc_id"],
-                        r.get("chunk_count", 0),
-                        r.get("mtime", now),
-                        now,
-                        now,
-                        now,
-                    )
-                    for r in records
-                ],
-            )
-
-            return cursor.rowcount
+        with self.db.session_scope() as session:
+            for r in records:
+                stmt = sqlite_insert(DedupRecordModel).values(
+                    kb_id=kb_id,
+                    file_path=r["file_path"],
+                    hash=r["hash"],
+                    doc_id=r["doc_id"],
+                    chunk_count=r.get("chunk_count", 0),
+                    mtime=r.get("mtime", now),
+                    last_processed=now,
+                    created_at=now,
+                    updated_at=now,
+                )
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=[DedupRecordModel.kb_id, DedupRecordModel.file_path],
+                    set_={
+                        "hash": stmt.excluded.hash,
+                        "doc_id": stmt.excluded.doc_id,
+                        "chunk_count": stmt.excluded.chunk_count,
+                        "mtime": stmt.excluded.mtime,
+                        "last_processed": stmt.excluded.last_processed,
+                        "updated_at": now,
+                    },
+                )
+                session.execute(stmt)
+        return len(records)
 
     def check_hash(self, kb_id: str, hash: str) -> bool:
-        """检查哈希是否存在"""
-        with self.db.get_connection() as conn:
-            cursor = conn.execute(
-                """
-                SELECT 1 FROM dedup_records WHERE kb_id = ? AND hash = ? LIMIT 1
-            """,
-                (kb_id, hash),
-            )
-
-            return cursor.fetchone() is not None
+        with self.db.session_scope() as session:
+            return session.scalars(
+                select(DedupRecordModel.id).where(DedupRecordModel.kb_id == kb_id, DedupRecordModel.hash == hash).limit(1)
+            ).first() is not None
 
     def get_by_hash(self, kb_id: str, hash: str) -> Optional[Dict[str, Any]]:
-        """根据哈希获取记录"""
-        with self.db.get_connection() as conn:
-            cursor = conn.execute(
-                """
-                SELECT * FROM dedup_records WHERE kb_id = ? AND hash = ? LIMIT 1
-            """,
-                (kb_id, hash),
-            )
-
-            row = cursor.fetchone()
-            if row:
-                return dict(row)
-            return None
+        with self.db.session_scope() as session:
+            row = session.scalars(
+                select(DedupRecordModel).where(DedupRecordModel.kb_id == kb_id, DedupRecordModel.hash == hash).limit(1)
+            ).first()
+            return self._to_dict(row) if row else None
 
     def get_by_doc_id(self, kb_id: str, doc_id: str) -> Optional[Dict[str, Any]]:
-        """根据 doc_id 获取记录"""
-        with self.db.get_connection() as conn:
-            cursor = conn.execute(
-                """
-                SELECT * FROM dedup_records WHERE kb_id = ? AND doc_id = ? LIMIT 1
-            """,
-                (kb_id, doc_id),
-            )
-
-            row = cursor.fetchone()
-            if row:
-                return dict(row)
-            return None
+        with self.db.session_scope() as session:
+            row = session.scalars(
+                select(DedupRecordModel).where(DedupRecordModel.kb_id == kb_id, DedupRecordModel.doc_id == doc_id).limit(1)
+            ).first()
+            return self._to_dict(row) if row else None
 
     def get_records(self, kb_id: str) -> List[Dict[str, Any]]:
-        """获取知识库的所有去重记录"""
-        with self.db.get_connection() as conn:
-            cursor = conn.execute(
-                """
-                SELECT * FROM dedup_records WHERE kb_id = ? ORDER BY updated_at DESC
-            """,
-                (kb_id,),
-            )
-
-            return [dict(row) for row in cursor.fetchall()]
+        with self.db.session_scope() as session:
+            rows = session.scalars(
+                select(DedupRecordModel).where(DedupRecordModel.kb_id == kb_id).order_by(DedupRecordModel.updated_at.desc())
+            ).all()
+            return [self._to_dict(row) for row in rows]
 
     def get_hash_set(self, kb_id: str) -> Set[str]:
-        """获取知识库的所有哈希集合"""
-        with self.db.get_connection() as conn:
-            cursor = conn.execute(
-                """
-                SELECT hash FROM dedup_records WHERE kb_id = ?
-            """,
-                (kb_id,),
-            )
-
-            return {row["hash"] for row in cursor.fetchall()}
+        with self.db.session_scope() as session:
+            rows = session.execute(select(DedupRecordModel.hash).where(DedupRecordModel.kb_id == kb_id)).all()
+            return {hash_value for (hash_value,) in rows}
 
     def update_chunk_count(self, kb_id: str, doc_id: str, chunk_count: int) -> bool:
-        """更新 chunk 数量"""
-        with self.db.get_connection() as conn:
-            cursor = conn.execute(
-                """
-                UPDATE dedup_records 
-                SET chunk_count = ?, updated_at = ?
-                WHERE kb_id = ? AND doc_id = ?
-            """,
-                (chunk_count, time.time(), kb_id, doc_id),
+        with self.db.session_scope() as session:
+            result = session.execute(
+                update(DedupRecordModel)
+                .where(DedupRecordModel.kb_id == kb_id, DedupRecordModel.doc_id == doc_id)
+                .values(chunk_count=chunk_count, updated_at=time.time())
             )
-
-            return cursor.rowcount > 0
+            return (result.rowcount or 0) > 0
 
     def remove(self, kb_id: str, file_path: str) -> bool:
-        """删除去重记录"""
-        with self.db.get_connection() as conn:
-            cursor = conn.execute(
-                """
-                DELETE FROM dedup_records WHERE kb_id = ? AND file_path = ?
-            """,
-                (kb_id, file_path),
+        with self.db.session_scope() as session:
+            result = session.execute(
+                delete(DedupRecordModel).where(DedupRecordModel.kb_id == kb_id, DedupRecordModel.file_path == file_path)
             )
-
-            return cursor.rowcount > 0
+            return (result.rowcount or 0) > 0
 
     def remove_many(self, kb_id: str, file_paths: List[str]) -> int:
-        """批量删除去重记录"""
         if not file_paths:
             return 0
-
-        placeholders = ",".join(["?"] * len(file_paths))
-        with self.db.get_connection() as conn:
-            cursor = conn.execute(
-                f"""
-                DELETE FROM dedup_records WHERE kb_id = ? AND file_path IN ({placeholders})
-            """,
-                [kb_id] + file_paths,
+        with self.db.session_scope() as session:
+            result = session.execute(
+                delete(DedupRecordModel).where(DedupRecordModel.kb_id == kb_id, DedupRecordModel.file_path.in_(file_paths))
             )
-
-            return cursor.rowcount
+            return result.rowcount or 0
 
     def clear(self, kb_id: str) -> int:
-        """清空知识库的去重记录"""
-        with self.db.get_connection() as conn:
-            cursor = conn.execute(
-                """
-                DELETE FROM dedup_records WHERE kb_id = ?
-            """,
-                (kb_id,),
-            )
-
-            return cursor.rowcount
+        with self.db.session_scope() as session:
+            result = session.execute(delete(DedupRecordModel).where(DedupRecordModel.kb_id == kb_id))
+            return result.rowcount or 0
 
     def get_stats(self, kb_id: str) -> Dict[str, int]:
-        """获取统计信息"""
-        with self.db.get_connection() as conn:
-            cursor = conn.execute(
-                """
-                SELECT 
-                    COUNT(*) as total,
-                    SUM(chunk_count) as total_chunks
-                FROM dedup_records WHERE kb_id = ?
-            """,
-                (kb_id,),
-            )
-
-            row = cursor.fetchone()
+        with self.db.session_scope() as session:
+            row = session.execute(
+                select(func.count(DedupRecordModel.id), func.sum(DedupRecordModel.chunk_count)).where(DedupRecordModel.kb_id == kb_id)
+            ).first()
             return {
-                "total": row["total"] or 0,
-                "total_chunks": row["total_chunks"] or 0,
+                "total": int(row[0] or 0),
+                "total_chunks": int(row[1] or 0),
             }
-
-
-# ==================== 进度管理 ====================
 
 
 class ProgressDB:
-    """处理进度数据库操作"""
-
     def __init__(self, db: DatabaseManager):
         self.db = db
 
+    @staticmethod
+    def _to_dict(row: ProgressModel) -> Dict[str, Any]:
+        return {
+            "id": row.id,
+            "kb_id": row.kb_id,
+            "task_type": row.task_type,
+            "current": row.current,
+            "total": row.total,
+            "processed_items": _json_load(row.processed_items, []),
+            "failed_items": _json_load(row.failed_items, []),
+            "started_at": row.started_at,
+            "completed_at": row.completed_at,
+            "last_updated": row.last_updated,
+        }
+
     def get_or_create(self, kb_id: str, task_type: str = "import") -> Dict[str, Any]:
-        """获取或创建进度记录"""
-        with self.db.get_connection() as conn:
-            cursor = conn.execute(
-                """
-                SELECT * FROM progress WHERE kb_id = ?
-            """,
-                (kb_id,),
-            )
-
-            row = cursor.fetchone()
-
+        with self.db.session_scope() as session:
+            row = session.scalars(select(ProgressModel).where(ProgressModel.kb_id == kb_id)).first()
             if row:
-                return dict(row)
-
-            # 创建新记录
+                return self._to_dict(row)
             now = time.time()
-            conn.execute(
-                """
-                INSERT INTO progress 
-                (kb_id, task_type, current, total, processed_items, failed_items, last_updated)
-                VALUES (?, ?, 0, 0, '[]', '[]', ?)
-            """,
-                (kb_id, task_type, now),
+            row = ProgressModel(
+                kb_id=kb_id,
+                task_type=task_type,
+                current=0,
+                total=0,
+                processed_items="[]",
+                failed_items="[]",
+                last_updated=now,
             )
-
-            return {
-                "kb_id": kb_id,
-                "task_type": task_type,
-                "current": 0,
-                "total": 0,
-                "processed_items": [],
-                "failed_items": [],
-                "last_updated": now,
-            }
+            session.add(row)
+            session.flush()
+            return self._to_dict(row)
 
     def update(
         self,
@@ -1119,267 +887,147 @@ class ProgressDB:
         failed_items: List[str] = None,
         task_type: str = "import",
     ) -> Dict[str, Any]:
-        """
-        更新进度
-
-        Args:
-            kb_id: 知识库 ID
-            current: 当前进度
-            total: 总数
-            processed_items: 已处理项目列表
-            failed_items: 失败项目列表
-            task_type: 任务类型
-
-        Returns:
-            更新后的记录
-        """
         now = time.time()
-
-        with self.db.get_connection() as conn:
-            # 获取现有记录
-            cursor = conn.execute(
-                """
-                SELECT * FROM progress WHERE kb_id = ?
-            """,
-                (kb_id,),
-            )
-
-            row = cursor.fetchone()
-
+        with self.db.session_scope() as session:
+            row = session.scalars(select(ProgressModel).where(ProgressModel.kb_id == kb_id)).first()
             if not row:
-                # 创建新记录
-                conn.execute(
-                    """
-                    INSERT INTO progress 
-                    (kb_id, task_type, current, total, processed_items, failed_items, last_updated)
-                    VALUES (?, ?, ?, ?, '[]', '[]', ?)
-                """,
-                    (kb_id, task_type, current or 0, total or 0, now),
+                row = ProgressModel(
+                    kb_id=kb_id,
+                    task_type=task_type,
+                    current=current or 0,
+                    total=total or 0,
+                    processed_items="[]",
+                    failed_items="[]",
+                    last_updated=now,
                 )
+                session.add(row)
+                session.flush()
+                return self._to_dict(row)
 
-                return {
-                    "kb_id": kb_id,
-                    "current": current or 0,
-                    "total": total or 0,
-                    "processed_items": [],
-                    "failed_items": [],
-                }
-
-            # 更新现有记录
-            current_value = current if current is not None else row["current"]
-            total_value = total if total is not None else row["total"]
-
-            # 合并已处理项目
-            existing_processed = json.loads(row["processed_items"] or "[]")
-            existing_failed = json.loads(row["failed_items"] or "[]")
-
+            row.current = current if current is not None else row.current
+            row.total = total if total is not None else row.total
+            merged_processed = _json_load(row.processed_items, [])
+            merged_failed = _json_load(row.failed_items, [])
             if processed_items is not None:
-                existing_processed.extend(processed_items)
+                merged_processed.extend(processed_items)
             if failed_items is not None:
-                existing_failed.extend(failed_items)
-
-            conn.execute(
-                """
-                UPDATE progress SET
-                    current = ?,
-                    total = ?,
-                    processed_items = ?,
-                    failed_items = ?,
-                    last_updated = ?
-                WHERE kb_id = ?
-            """,
-                (
-                    current_value,
-                    total_value,
-                    json.dumps(existing_processed, ensure_ascii=False),
-                    json.dumps(existing_failed, ensure_ascii=False),
-                    now,
-                    kb_id,
-                ),
-            )
-
-            return {
-                "kb_id": kb_id,
-                "current": current_value,
-                "total": total_value,
-                "processed_items": existing_processed,
-                "failed_items": existing_failed,
-                "last_updated": now,
-            }
+                merged_failed.extend(failed_items)
+            row.processed_items = _json_dump(merged_processed, [])
+            row.failed_items = _json_dump(merged_failed, [])
+            row.last_updated = now
+            return self._to_dict(row)
 
     def add_processed(self, kb_id: str, item_id: str) -> int:
-        """添加已处理项目"""
-        with self.db.get_connection() as conn:
-            cursor = conn.execute(
-                """
-                SELECT processed_items FROM progress WHERE kb_id = ?
-            """,
-                (kb_id,),
-            )
-
-            row = cursor.fetchone()
+        with self.db.session_scope() as session:
+            row = session.scalars(select(ProgressModel).where(ProgressModel.kb_id == kb_id)).first()
             if not row:
                 return 0
-
-            items = json.loads(row["processed_items"] or "[]")
-            if item_id not in items:
-                items.append(item_id)
-                conn.execute(
-                    """
-                    UPDATE progress SET processed_items = ?, last_updated = ? WHERE kb_id = ?
-                """,
-                    (json.dumps(items), time.time(), kb_id),
-                )
-                return 1
-            return 0
+            items = _json_load(row.processed_items, [])
+            if item_id in items:
+                return 0
+            items.append(item_id)
+            row.processed_items = _json_dump(items, [])
+            row.last_updated = time.time()
+            return 1
 
     def add_failed(self, kb_id: str, item_id: str) -> int:
-        """添加失败项目"""
-        with self.db.get_connection() as conn:
-            cursor = conn.execute(
-                """
-                SELECT failed_items FROM progress WHERE kb_id = ?
-            """,
-                (kb_id,),
-            )
-
-            row = cursor.fetchone()
+        with self.db.session_scope() as session:
+            row = session.scalars(select(ProgressModel).where(ProgressModel.kb_id == kb_id)).first()
             if not row:
                 return 0
-
-            items = json.loads(row["failed_items"] or "[]")
-            if item_id not in items:
-                items.append(item_id)
-                conn.execute(
-                    """
-                    UPDATE progress SET failed_items = ?, last_updated = ? WHERE kb_id = ?
-                """,
-                    (json.dumps(items), time.time(), kb_id),
-                )
-                return 1
-            return 0
+            items = _json_load(row.failed_items, [])
+            if item_id in items:
+                return 0
+            items.append(item_id)
+            row.failed_items = _json_dump(items, [])
+            row.last_updated = time.time()
+            return 1
 
     def increment(self, kb_id: str, delta: int = 1) -> int:
-        """增加当前进度"""
-        with self.db.get_connection() as conn:
-            cursor = conn.execute(
-                """
-                UPDATE progress SET current = current + ?, last_updated = ? WHERE kb_id = ?
-            """,
-                (delta, time.time(), kb_id),
+        with self.db.session_scope() as session:
+            result = session.execute(
+                update(ProgressModel).where(ProgressModel.kb_id == kb_id).values(
+                    current=ProgressModel.current + delta,
+                    last_updated=time.time(),
+                )
             )
-
-            return cursor.rowcount
+            return result.rowcount or 0
 
     def mark_started(self, kb_id: str, total: int = 0) -> Dict[str, Any]:
-        """标记任务开始"""
         now = time.time()
-
-        with self.db.get_connection() as conn:
-            cursor = conn.execute(
-                """
-                SELECT * FROM progress WHERE kb_id = ?
-            """,
-                (kb_id,),
-            )
-
-            row = cursor.fetchone()
-
+        with self.db.session_scope() as session:
+            row = session.scalars(select(ProgressModel).where(ProgressModel.kb_id == kb_id)).first()
             if row:
-                conn.execute(
-                    """
-                    UPDATE progress SET 
-                        started_at = ?,
-                        current = 0,
-                        total = ?,
-                        processed_items = '[]',
-                        failed_items = '[]',
-                        last_updated = ?
-                    WHERE kb_id = ?
-                """,
-                    (now, total, now, kb_id),
-                )
+                row.started_at = now
+                row.current = 0
+                row.total = total
+                row.processed_items = "[]"
+                row.failed_items = "[]"
+                row.last_updated = now
+                row.completed_at = None
             else:
-                conn.execute(
-                    """
-                    INSERT INTO progress 
-                    (kb_id, task_type, current, total, processed_items, failed_items, started_at, last_updated)
-                    VALUES (?, 'import', 0, ?, '[]', '[]', ?, ?)
-                """,
-                    (kb_id, total, now, now),
+                row = ProgressModel(
+                    kb_id=kb_id,
+                    task_type="import",
+                    current=0,
+                    total=total,
+                    processed_items="[]",
+                    failed_items="[]",
+                    started_at=now,
+                    last_updated=now,
                 )
-
-            return self.get_or_create(kb_id)
+                session.add(row)
+                session.flush()
+            return self._to_dict(row)
 
     def mark_completed(self, kb_id: str) -> Dict[str, Any]:
-        """标记任务完成"""
         now = time.time()
-
-        with self.db.get_connection() as conn:
-            conn.execute(
-                """
-                UPDATE progress SET completed_at = ?, last_updated = ? WHERE kb_id = ?
-            """,
-                (now, now, kb_id),
-            )
-
-            cursor = conn.execute(
-                """
-                SELECT * FROM progress WHERE kb_id = ?
-            """,
-                (kb_id,),
-            )
-
-            row = cursor.fetchone()
-            if row:
-                return dict(row)
-            return {}
+        with self.db.session_scope() as session:
+            row = session.scalars(select(ProgressModel).where(ProgressModel.kb_id == kb_id)).first()
+            if not row:
+                return {}
+            row.completed_at = now
+            row.last_updated = now
+            return self._to_dict(row)
 
     def reset(self, kb_id: str) -> bool:
-        """重置进度"""
-        with self.db.get_connection() as conn:
-            cursor = conn.execute(
-                """
-                DELETE FROM progress WHERE kb_id = ?
-            """,
-                (kb_id,),
-            )
-
-            return cursor.rowcount > 0
+        with self.db.session_scope() as session:
+            result = session.execute(delete(ProgressModel).where(ProgressModel.kb_id == kb_id))
+            return (result.rowcount or 0) > 0
 
     def get(self, kb_id: str) -> Optional[Dict[str, Any]]:
-        """获取进度记录"""
-        with self.db.get_connection() as conn:
-            cursor = conn.execute(
-                """
-                SELECT * FROM progress WHERE kb_id = ?
-            """,
-                (kb_id,),
-            )
-
-            row = cursor.fetchone()
-            if row:
-                return dict(row)
-            return None
+        with self.db.session_scope() as session:
+            row = session.scalars(select(ProgressModel).where(ProgressModel.kb_id == kb_id)).first()
+            return self._to_dict(row) if row else None
 
     def get_all(self) -> List[Dict[str, Any]]:
-        """获取所有进度记录"""
-        with self.db.get_connection() as conn:
-            cursor = conn.execute("""
-                SELECT * FROM progress ORDER BY last_updated DESC
-            """)
-
-            return [dict(row) for row in cursor.fetchall()]
-
-
-# ==================== 知识库元数据管理 ====================
+        with self.db.session_scope() as session:
+            rows = session.scalars(select(ProgressModel).order_by(ProgressModel.last_updated.desc())).all()
+            return [self._to_dict(row) for row in rows]
 
 
 class KnowledgeBaseMetaDB:
-    """知识库元数据数据库操作"""
-
     def __init__(self, db: DatabaseManager):
         self.db = db
+
+    @staticmethod
+    def _to_dict(row: KnowledgeBaseMetaModel) -> Dict[str, Any]:
+        return {
+            "id": row.id,
+            "kb_id": row.kb_id,
+            "name": row.name,
+            "description": row.description or "",
+            "source_type": row.source_type,
+            "persist_path": row.persist_path or "",
+            "tags": _json_load(row.tags, []),
+            "topics": _json_load(row.topics, []),
+            "source_paths": _json_load(row.source_paths, []),
+            "source_tags": _json_load(row.source_tags, []),
+            "config": _json_load(row.config, {}),
+            "is_active": row.is_active,
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
+        }
 
     def upsert(
         self,
@@ -1394,179 +1042,85 @@ class KnowledgeBaseMetaDB:
         source_tags: List[str] = None,
         config: Dict[str, Any] = None,
     ) -> bool:
-        """创建或更新知识库元数据"""
         now = time.time()
-
-        with self.db.get_connection() as conn:
-            cursor = conn.execute(
-                """
-                INSERT INTO knowledge_bases 
-                (kb_id, name, description, source_type, persist_path, tags, topics, source_paths, source_tags, config, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(kb_id) DO UPDATE SET
-                    name = excluded.name,
-                    description = excluded.description,
-                    source_type = excluded.source_type,
-                    persist_path = excluded.persist_path,
-                    tags = excluded.tags,
-                    topics = excluded.topics,
-                    source_paths = excluded.source_paths,
-                    source_tags = excluded.source_tags,
-                    config = excluded.config,
-                    updated_at = excluded.updated_at
-            """,
-                (
-                    kb_id,
-                    name,
-                    description,
-                    source_type,
-                    persist_path,
-                    json.dumps(tags or [], ensure_ascii=False),
-                    json.dumps(topics or [], ensure_ascii=False),
-                    json.dumps(source_paths or [], ensure_ascii=False),
-                    json.dumps(source_tags or [], ensure_ascii=False),
-                    json.dumps(config or {}, ensure_ascii=False),
-                    now,
-                    now,
-                ),
-            )
-
-            return cursor.rowcount > 0
+        stmt = sqlite_insert(KnowledgeBaseMetaModel).values(
+            kb_id=kb_id,
+            name=name,
+            description=description,
+            source_type=source_type,
+            persist_path=persist_path,
+            tags=_json_dump(tags, []),
+            topics=_json_dump(topics, []),
+            source_paths=_json_dump(source_paths, []),
+            source_tags=_json_dump(source_tags, []),
+            config=_json_dump(config, {}),
+            created_at=now,
+            updated_at=now,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[KnowledgeBaseMetaModel.kb_id],
+            set_={
+                "name": stmt.excluded.name,
+                "description": stmt.excluded.description,
+                "source_type": stmt.excluded.source_type,
+                "persist_path": stmt.excluded.persist_path,
+                "tags": stmt.excluded.tags,
+                "topics": stmt.excluded.topics,
+                "source_paths": stmt.excluded.source_paths,
+                "source_tags": stmt.excluded.source_tags,
+                "config": stmt.excluded.config,
+                "updated_at": now,
+            },
+        )
+        with self.db.session_scope() as session:
+            session.execute(stmt)
+        return True
 
     def get(self, kb_id: str) -> Optional[Dict[str, Any]]:
-        """获取知识库元数据"""
-        with self.db.get_connection() as conn:
-            cursor = conn.execute(
-                """
-                SELECT * FROM knowledge_bases WHERE kb_id = ?
-            """,
-                (kb_id,),
-            )
-
-            row = cursor.fetchone()
-            if row:
-                return self._row_to_dict(row)
-            return None
+        with self.db.session_scope() as session:
+            row = session.scalars(select(KnowledgeBaseMetaModel).where(KnowledgeBaseMetaModel.kb_id == kb_id)).first()
+            return self._to_dict(row) if row else None
 
     def get_all(self, active_only: bool = True) -> List[Dict[str, Any]]:
-        """获取所有知识库元数据"""
-        with self.db.get_connection() as conn:
+        with self.db.session_scope() as session:
+            stmt = select(KnowledgeBaseMetaModel)
             if active_only:
-                cursor = conn.execute("""
-                    SELECT * FROM knowledge_bases WHERE is_active = 1 ORDER BY updated_at DESC
-                """)
-            else:
-                cursor = conn.execute("""
-                    SELECT * FROM knowledge_bases ORDER BY updated_at DESC
-                """)
-
-            return [self._row_to_dict(row) for row in cursor.fetchall()]
+                stmt = stmt.where(KnowledgeBaseMetaModel.is_active == 1)
+            stmt = stmt.order_by(KnowledgeBaseMetaModel.updated_at.desc())
+            rows = session.scalars(stmt).all()
+            return [self._to_dict(row) for row in rows]
 
     def set_active(self, kb_id: str, is_active: bool) -> bool:
-        """设置知识库激活状态"""
-        with self.db.get_connection() as conn:
-            cursor = conn.execute(
-                """
-                UPDATE knowledge_bases SET is_active = ?, updated_at = ? WHERE kb_id = ?
-            """,
-                (1 if is_active else 0, time.time(), kb_id),
+        with self.db.session_scope() as session:
+            result = session.execute(
+                update(KnowledgeBaseMetaModel)
+                .where(KnowledgeBaseMetaModel.kb_id == kb_id)
+                .values(is_active=1 if is_active else 0, updated_at=time.time())
             )
-
-            return cursor.rowcount > 0
+            return (result.rowcount or 0) > 0
 
     def delete(self, kb_id: str) -> bool:
-        """删除知识库元数据"""
-        with self.db.get_connection() as conn:
-            cursor = conn.execute(
-                """
-                DELETE FROM knowledge_bases WHERE kb_id = ?
-            """,
-                (kb_id,),
-            )
-
-            return cursor.rowcount > 0
-
-    def _row_to_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
-        """行转字典"""
-        data = dict(row)
-
-        # 解析 JSON 字段
-        if "tags" in data and isinstance(data["tags"], str):
-            try:
-                data["tags"] = json.loads(data["tags"])
-            except json.JSONDecodeError:
-                data["tags"] = []
-
-        if "topics" in data and isinstance(data["topics"], str):
-            try:
-                data["topics"] = json.loads(data["topics"])
-            except json.JSONDecodeError:
-                data["topics"] = []
-
-        if "config" in data and isinstance(data["config"], str):
-            try:
-                data["config"] = json.loads(data["config"])
-            except json.JSONDecodeError:
-                data["config"] = {}
-
-        if "source_paths" in data and isinstance(data["source_paths"], str):
-            try:
-                data["source_paths"] = json.loads(data["source_paths"])
-            except json.JSONDecodeError:
-                data["source_paths"] = []
-
-        if "source_tags" in data and isinstance(data["source_tags"], str):
-            try:
-                data["source_tags"] = json.loads(data["source_tags"])
-            except json.JSONDecodeError:
-                data["source_tags"] = []
-
-        return data
+        with self.db.session_scope() as session:
+            result = session.execute(delete(KnowledgeBaseMetaModel).where(KnowledgeBaseMetaModel.kb_id == kb_id))
+            return (result.rowcount or 0) > 0
 
     def update_topics(self, kb_id: str, topics: List[str]) -> bool:
-        """更新知识库主题关键词"""
-        now = time.time()
-
-        with self.db.get_connection() as conn:
-            cursor = conn.execute(
-                """
-                UPDATE knowledge_bases SET topics = ?, updated_at = ? WHERE kb_id = ?
-            """,
-                (json.dumps(topics, ensure_ascii=False), now, kb_id),
+        with self.db.session_scope() as session:
+            result = session.execute(
+                update(KnowledgeBaseMetaModel)
+                .where(KnowledgeBaseMetaModel.kb_id == kb_id)
+                .values(topics=_json_dump(topics, []), updated_at=time.time())
             )
-
-            return cursor.rowcount > 0
+            return (result.rowcount or 0) > 0
 
     def get_topics(self, kb_id: str) -> List[str]:
-        """获取知识库主题关键词"""
-        with self.db.get_connection() as conn:
-            cursor = conn.execute(
-                """
-                SELECT topics FROM knowledge_bases WHERE kb_id = ?
-            """,
-                (kb_id,),
+        with self.db.session_scope() as session:
+            topics = session.scalar(
+                select(KnowledgeBaseMetaModel.topics).where(KnowledgeBaseMetaModel.kb_id == kb_id).limit(1)
             )
+            return _json_load(topics, [])
 
-            row = cursor.fetchone()
-            if row and row["topics"]:
-                try:
-                    return json.loads(row["topics"])
-                except json.JSONDecodeError:
-                    return []
-            return []
-
-    def seed_from_registry(
-        self, kb_configs: List[Dict[str, Any]], source_type: str = "obsidian"
-    ) -> int:
-        """从注册配置迁移知识库到数据库
-
-        Args:
-            kb_configs: 知识库配置列表
-            source_type: 来源类型
-
-        Returns:
-            迁移的知识库数量
-        """
+    def seed_from_registry(self, kb_configs: List[Dict[str, Any]], source_type: str = "obsidian") -> int:
         count = 0
         for kb in kb_configs:
             persist_path = kb.get("persist_path") or kb.get("persist_name", "")
@@ -1585,150 +1139,111 @@ class KnowledgeBaseMetaDB:
         return count
 
 
-# ==================== 知识库分类规则数据库 ====================
-
-
 class CategoryRuleDB:
-    """知识库分类规则数据库操作"""
-
     def __init__(self, db: DatabaseManager):
         self.db = db
 
-    def add_rule(
-        self,
-        kb_id: str,
-        rule_type: str,
-        pattern: str,
-        description: str = "",
-        priority: int = 0,
-    ) -> bool:
-        """
-        添加分类规则
+    @staticmethod
+    def _to_dict(row: CategoryRuleModel) -> Dict[str, Any]:
+        return {
+            "id": row.id,
+            "kb_id": row.kb_id,
+            "rule_type": row.rule_type,
+            "pattern": row.pattern,
+            "description": row.description or "",
+            "priority": row.priority,
+            "is_active": row.is_active,
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
+        }
 
-        Args:
-            kb_id: 知识库 ID
-            rule_type: 规则类型 (folder_path, tag, keyword)
-            pattern: 匹配模式
-            description: 规则描述
-            priority: 优先级（数字越大优先级越高）
-
-        Returns:
-            是否成功
-        """
+    def add_rule(self, kb_id: str, rule_type: str, pattern: str, description: str = "", priority: int = 0) -> bool:
         now = time.time()
-
+        stmt = sqlite_insert(CategoryRuleModel).values(
+            kb_id=kb_id,
+            rule_type=rule_type,
+            pattern=pattern,
+            description=description,
+            priority=priority,
+            is_active=1,
+            created_at=now,
+            updated_at=now,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[CategoryRuleModel.kb_id, CategoryRuleModel.rule_type, CategoryRuleModel.pattern],
+            set_={
+                "description": stmt.excluded.description,
+                "priority": stmt.excluded.priority,
+                "is_active": 1,
+                "updated_at": now,
+            },
+        )
         try:
-            with self.db.get_connection() as conn:
-                conn.execute(
-                    """
-                    INSERT OR REPLACE INTO kb_category_rules 
-                    (kb_id, rule_type, pattern, description, priority, is_active, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, 1, ?, ?)
-                """,
-                    (kb_id, rule_type, pattern, description, priority, now, now),
-                )
-
-                conn.commit()
-                return True
+            with self.db.session_scope() as session:
+                session.execute(stmt)
+            return True
         except Exception as e:
             logger.warning(f"添加分类规则失败: {e}")
             return False
 
     def get_rules_for_kb(self, kb_id: str) -> List[Dict[str, Any]]:
-        """获取知识库的所有规则"""
-        with self.db.get_connection() as conn:
-            cursor = conn.execute(
-                """
-                SELECT * FROM kb_category_rules 
-                WHERE kb_id = ? AND is_active = 1
-                ORDER BY priority DESC
-            """,
-                (kb_id,),
-            )
-
-            return [dict(row) for row in cursor.fetchall()]
+        with self.db.session_scope() as session:
+            rows = session.scalars(
+                select(CategoryRuleModel)
+                .where(CategoryRuleModel.kb_id == kb_id, CategoryRuleModel.is_active == 1)
+                .order_by(CategoryRuleModel.priority.desc())
+            ).all()
+            return [self._to_dict(row) for row in rows]
 
     def get_rules_by_type(self, rule_type: str) -> List[Dict[str, Any]]:
-        """获取指定类型的所有规则"""
-        with self.db.get_connection() as conn:
-            cursor = conn.execute(
-                """
-                SELECT * FROM kb_category_rules 
-                WHERE rule_type = ? AND is_active = 1
-                ORDER BY kb_id, priority DESC
-            """,
-                (rule_type,),
-            )
-
-            return [dict(row) for row in cursor.fetchall()]
+        with self.db.session_scope() as session:
+            rows = session.scalars(
+                select(CategoryRuleModel)
+                .where(CategoryRuleModel.rule_type == rule_type, CategoryRuleModel.is_active == 1)
+                .order_by(CategoryRuleModel.kb_id, CategoryRuleModel.priority.desc())
+            ).all()
+            return [self._to_dict(row) for row in rows]
 
     def get_all_rules(self) -> List[Dict[str, Any]]:
-        """获取所有规则"""
-        with self.db.get_connection() as conn:
-            cursor = conn.execute("""
-                SELECT * FROM kb_category_rules 
-                WHERE is_active = 1
-                ORDER BY kb_id, priority DESC
-            """)
-
-            return [dict(row) for row in cursor.fetchall()]
+        with self.db.session_scope() as session:
+            rows = session.scalars(
+                select(CategoryRuleModel)
+                .where(CategoryRuleModel.is_active == 1)
+                .order_by(CategoryRuleModel.kb_id, CategoryRuleModel.priority.desc())
+            ).all()
+            return [self._to_dict(row) for row in rows]
 
     def delete_rule(self, kb_id: str, rule_type: str, pattern: str) -> bool:
-        """删除规则"""
-        with self.db.get_connection() as conn:
-            cursor = conn.execute(
-                """
-                DELETE FROM kb_category_rules 
-                WHERE kb_id = ? AND rule_type = ? AND pattern = ?
-            """,
-                (kb_id, rule_type, pattern),
+        with self.db.session_scope() as session:
+            result = session.execute(
+                delete(CategoryRuleModel).where(
+                    CategoryRuleModel.kb_id == kb_id,
+                    CategoryRuleModel.rule_type == rule_type,
+                    CategoryRuleModel.pattern == pattern,
+                )
             )
-
-            conn.commit()
-            return cursor.rowcount > 0
+            return (result.rowcount or 0) > 0
 
     def delete_rules_for_kb(self, kb_id: str) -> int:
-        """删除知识库的所有规则"""
-        with self.db.get_connection() as conn:
-            cursor = conn.execute(
-                """
-                DELETE FROM kb_category_rules WHERE kb_id = ?
-            """,
-                (kb_id,),
-            )
-
-            conn.commit()
-            return cursor.rowcount
+        with self.db.session_scope() as session:
+            result = session.execute(delete(CategoryRuleModel).where(CategoryRuleModel.kb_id == kb_id))
+            return result.rowcount or 0
 
     def seed_initial_rules(self, knowledge_bases: List[Dict[str, Any]]) -> int:
-        """
-        初始化默认规则（从现有的 KnowledgeBase 配置迁移）
-
-        Args:
-            knowledge_bases: 知识库配置列表
-
-        Returns:
-            添加的规则数量
-        """
         count = 0
-
         for kb in knowledge_bases:
             kb_id = kb.get("id")
             source_paths = kb.get("source_paths", [])
             source_tags = kb.get("source_tags", [])
-
-            # 添加文件夹路径规则
             for i, path in enumerate(source_paths):
                 if self.add_rule(
                     kb_id=kb_id,
                     rule_type="folder_path",
                     pattern=path,
                     description=f"文件夹路径匹配: {path}",
-                    priority=100 - i,  # 路径顺序作为优先级
+                    priority=100 - i,
                 ):
                     count += 1
-
-            # 添加标签规则
             for i, tag in enumerate(source_tags):
                 if self.add_rule(
                     kb_id=kb_id,
@@ -1738,33 +1253,24 @@ class CategoryRuleDB:
                     priority=50 - i,
                 ):
                     count += 1
-
         return count
 
 
-# ==================== 便捷函数 ====================
-
-
 def init_sync_db() -> SyncStateDB:
-    """获取同步状态数据库操作实例"""
     return SyncStateDB(get_db())
 
 
 def init_dedup_db() -> DedupStateDB:
-    """获取去重记录数据库操作实例"""
     return DedupStateDB(get_db())
 
 
 def init_progress_db() -> ProgressDB:
-    """获取进度数据库操作实例"""
     return ProgressDB(get_db())
 
 
 def init_kb_meta_db() -> KnowledgeBaseMetaDB:
-    """获取知识库元数据数据库操作实例"""
     return KnowledgeBaseMetaDB(get_db())
 
 
 def init_category_rule_db() -> CategoryRuleDB:
-    """获取分类规则数据库操作实例"""
     return CategoryRuleDB(get_db())

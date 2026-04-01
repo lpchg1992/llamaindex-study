@@ -9,9 +9,9 @@ Zotero 营养饲料理论导入脚本 - 增强版
 - 进度可视化
 
 用法:
-    poetry run python -m kb.ingest_zotero              # 增量导入
-    poetry run python -m kb.ingest_zotero --rebuild   # 强制重建
-    poetry run python -m kb.ingest_zotero --status    # 查看状态
+    uv run python -m kb.ingest_zotero              # 增量导入
+    uv run python -m kb.ingest_zotero --rebuild   # 强制重建
+    uv run python -m kb.ingest_zotero --status    # 查看状态
 """
 
 import argparse

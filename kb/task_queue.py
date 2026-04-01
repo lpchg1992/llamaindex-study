@@ -10,15 +10,17 @@
 
 import asyncio
 import json
-import sqlite3
 import threading
 import time
 import uuid
-from dataclasses import dataclass, asdict, field
-from datetime import datetime
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
+
+from sqlalchemy import Float, Index, Integer, String, Text, create_engine, delete, event, func, select
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, scoped_session, sessionmaker
 
 from llamaindex_study.config import get_settings
 
@@ -92,6 +94,33 @@ class Task:
         }
 
 
+class TaskBase(DeclarativeBase):
+    pass
+
+
+class TaskRecord(TaskBase):
+    __tablename__ = "tasks"
+    __table_args__ = (
+        Index("idx_tasks_status", "status"),
+        Index("idx_tasks_kb_id", "kb_id"),
+    )
+    task_id: Mapped[str] = mapped_column(String, primary_key=True)
+    task_type: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    kb_id: Mapped[str] = mapped_column(String, nullable=False)
+    params: Mapped[str] = mapped_column(Text, nullable=False)
+    progress: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    current: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    message: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    result: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    started_at: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    completed_at: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    source: Mapped[str] = mapped_column(Text, default="", nullable=False)
+
+
 class TaskQueue:
     """
     任务队列管理器
@@ -124,7 +153,22 @@ class TaskQueue:
         self.db_path.mkdir(parents=True, exist_ok=True)
         self.db_path = self.db_path / "tasks.db"
 
-        # 初始化数据库
+        self.engine = create_engine(
+            f"sqlite:///{self.db_path}",
+            future=True,
+            connect_args={"timeout": 30, "check_same_thread": False},
+        )
+        self._session_factory = scoped_session(
+            sessionmaker(bind=self.engine, autoflush=False, autocommit=False, expire_on_commit=False)
+        )
+
+        @event.listens_for(self.engine, "connect")
+        def _set_sqlite_pragmas(dbapi_connection, connection_record):
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA busy_timeout=30000")
+            cursor.close()
+
         self._init_db()
 
         # 活跃任务锁
@@ -132,63 +176,37 @@ class TaskQueue:
         self._task_events: Dict[str, asyncio.Event] = {}
 
     def _init_db(self):
-        """初始化数据库"""
-        conn = sqlite3.connect(str(self.db_path), timeout=30)
-        cursor = conn.cursor()
+        TaskBase.metadata.create_all(self.engine)
 
-        # 启用 WAL 模式以支持并发
-        cursor.execute("PRAGMA journal_mode=WAL")
-        cursor.execute("PRAGMA busy_timeout=30000")
+    @contextmanager
+    def _session_scope(self) -> Session:
+        session = self._session_factory()
+        try:
+            yield session
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
 
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS tasks (
-                task_id TEXT PRIMARY KEY,
-                task_type TEXT NOT NULL,
-                status TEXT NOT NULL,
-                kb_id TEXT NOT NULL,
-                params TEXT NOT NULL,
-                progress INTEGER DEFAULT 0,
-                current INTEGER DEFAULT 0,
-                total INTEGER DEFAULT 0,
-                message TEXT DEFAULT '',
-                result TEXT,
-                error TEXT,
-                created_at REAL NOT NULL,
-                started_at REAL,
-                completed_at REAL,
-                source TEXT DEFAULT ''
-            )
-        """)
-
-        # 创建索引
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)
-        """)
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_tasks_kb_id ON tasks(kb_id)
-        """)
-
-        conn.commit()
-        conn.close()
-
-    def _row_to_task(self, row: tuple) -> Task:
-        """行转任务对象"""
+    def _row_to_task(self, row: TaskRecord) -> Task:
         return Task(
-            task_id=row[0],
-            task_type=row[1],
-            status=row[2],
-            kb_id=row[3],
-            params=json.loads(row[4]),
-            progress=row[5],
-            current=row[6],
-            total=row[7],
-            message=row[8] or "",
-            result=json.loads(row[9]) if row[9] else None,
-            error=row[10],
-            created_at=row[11],
-            started_at=row[12],
-            completed_at=row[13],
-            source=row[14] or "",
+            task_id=row.task_id,
+            task_type=row.task_type,
+            status=row.status,
+            kb_id=row.kb_id,
+            params=json.loads(row.params or "{}"),
+            progress=row.progress,
+            current=row.current,
+            total=row.total,
+            message=row.message or "",
+            result=json.loads(row.result) if row.result else None,
+            error=row.error,
+            created_at=row.created_at,
+            started_at=row.started_at,
+            completed_at=row.completed_at,
+            source=row.source or "",
         )
 
     def submit_task(
@@ -211,49 +229,30 @@ class TaskQueue:
             task_id
         """
         task_id = str(uuid.uuid4())[:8]
-
-        conn = sqlite3.connect(str(self.db_path), timeout=30)
-        cursor = conn.cursor()
-
-        cursor.execute(
-            """
-            INSERT INTO tasks (
-                task_id, task_type, status, kb_id, params, 
-                progress, current, total, message, source, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-            (
-                task_id,
-                task_type,
-                TaskStatus.PENDING.value,
-                kb_id,
-                json.dumps(params, ensure_ascii=False),
-                0,
-                0,
-                0,
-                "任务已提交",
-                source,
-                time.time(),
-            ),
-        )
-
-        conn.commit()
-        conn.close()
+        with self._session_scope() as session:
+            session.add(
+                TaskRecord(
+                    task_id=task_id,
+                    task_type=task_type,
+                    status=TaskStatus.PENDING.value,
+                    kb_id=kb_id,
+                    params=json.dumps(params, ensure_ascii=False),
+                    progress=0,
+                    current=0,
+                    total=0,
+                    message="任务已提交",
+                    source=source,
+                    created_at=time.time(),
+                )
+            )
 
         return task_id
 
     def get_task(self, task_id: str) -> Optional[Task]:
         """获取任务"""
-        conn = sqlite3.connect(str(self.db_path), timeout=30)
-        cursor = conn.cursor()
-
-        cursor.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,))
-        row = cursor.fetchone()
-        conn.close()
-
-        if row:
-            return self._row_to_task(row)
-        return None
+        with self._session_scope() as session:
+            row = session.get(TaskRecord, task_id)
+            return self._row_to_task(row) if row else None
 
     def list_tasks(
         self,
@@ -262,28 +261,14 @@ class TaskQueue:
         limit: int = 50,
     ) -> List[Task]:
         """列出任务"""
-        conn = sqlite3.connect(str(self.db_path), timeout=30)
-        cursor = conn.cursor()
-
-        query = "SELECT * FROM tasks WHERE 1=1"
-        params = []
-
-        if kb_id:
-            query += " AND kb_id = ?"
-            params.append(kb_id)
-
-        if status:
-            query += " AND status = ?"
-            params.append(status)
-
-        query += " ORDER BY created_at DESC LIMIT ?"
-        params.append(limit)
-
-        cursor.execute(query, params)
-        rows = cursor.fetchall()
-        conn.close()
-
-        return [self._row_to_task(row) for row in rows]
+        with self._session_scope() as session:
+            stmt = select(TaskRecord)
+            if kb_id:
+                stmt = stmt.where(TaskRecord.kb_id == kb_id)
+            if status:
+                stmt = stmt.where(TaskRecord.status == status)
+            rows = session.scalars(stmt.order_by(TaskRecord.created_at.desc()).limit(limit)).all()
+            return [self._row_to_task(row) for row in rows]
 
     def update_progress(
         self,
@@ -294,79 +279,42 @@ class TaskQueue:
         message: str = None,
     ):
         """更新进度"""
-        conn = sqlite3.connect(str(self.db_path), timeout=30)
-        cursor = conn.cursor()
-
-        updates = []
-        params = []
-
-        if progress is not None:
-            updates.append("progress = ?")
-            params.append(progress)
-        if current is not None:
-            updates.append("current = ?")
-            params.append(current)
-        if total is not None:
-            updates.append("total = ?")
-            params.append(total)
-        if message is not None:
-            updates.append("message = ?")
-            params.append(message)
-
-        if updates:
-            params.append(task_id)
-            cursor.execute(
-                f"UPDATE tasks SET {', '.join(updates)} WHERE task_id = ?", params
-            )
-
-        conn.commit()
-        conn.close()
+        with self._session_scope() as session:
+            row = session.get(TaskRecord, task_id)
+            if not row:
+                return
+            if progress is not None:
+                row.progress = progress
+            if current is not None:
+                row.current = current
+            if total is not None:
+                row.total = total
+            if message is not None:
+                row.message = message
 
     def start_task(self, task_id: str):
         """开始任务"""
-        conn = sqlite3.connect(str(self.db_path), timeout=30)
-        cursor = conn.cursor()
-
-        cursor.execute(
-            """
-            UPDATE tasks 
-            SET status = ?, started_at = ?, message = ?
-            WHERE task_id = ?
-        """,
-            (TaskStatus.RUNNING.value, time.time(), "开始执行", task_id),
-        )
-
-        conn.commit()
-        conn.close()
+        with self._session_scope() as session:
+            row = session.get(TaskRecord, task_id)
+            if not row:
+                return
+            row.status = TaskStatus.RUNNING.value
+            row.started_at = time.time()
+            row.message = "开始执行"
 
     def complete_task(self, task_id: str, result: Dict = None, error: str = None):
         """完成任务"""
-        conn = sqlite3.connect(str(self.db_path), timeout=30)
-        cursor = conn.cursor()
-
-        status = TaskStatus.FAILED.value if error else TaskStatus.COMPLETED.value
-        message = f"失败: {error}" if error else "已完成"
-
-        cursor.execute(
-            """
-            UPDATE tasks 
-            SET status = ?, completed_at = ?, message = ?, 
-                result = ?, error = ?, progress = ?
-            WHERE task_id = ?
-        """,
-            (
-                status,
-                time.time(),
-                message,
-                json.dumps(result, ensure_ascii=False) if result else None,
-                error,
-                100 if not error else None,
-                task_id,
-            ),
-        )
-
-        conn.commit()
-        conn.close()
+        with self._session_scope() as session:
+            row = session.get(TaskRecord, task_id)
+            if not row:
+                return
+            row.status = TaskStatus.FAILED.value if error else TaskStatus.COMPLETED.value
+            row.completed_at = time.time()
+            row.message = f"失败: {error}" if error else "已完成"
+            row.result = json.dumps(result, ensure_ascii=False) if result else None
+            row.error = error
+            if not error:
+                row.progress = 100
 
         # 通知等待者
         if task_id in self._task_events:
@@ -374,131 +322,66 @@ class TaskQueue:
 
     def cancel_task(self, task_id: str) -> bool:
         """取消任务"""
-        task = self.get_task(task_id)
-        if not task:
-            return False
-
-        # 只能取消等待中的任务
-        if task.status != TaskStatus.PENDING.value:
-            return False
-
-        conn = sqlite3.connect(str(self.db_path), timeout=30)
-        cursor = conn.cursor()
-
-        cursor.execute(
-            """
-            UPDATE tasks 
-            SET status = ?, completed_at = ?, message = ?
-            WHERE task_id = ? AND status = ?
-        """,
-            (
-                TaskStatus.CANCELLED.value,
-                time.time(),
-                "已取消",
-                task_id,
-                TaskStatus.PENDING.value,
-            ),
-        )
-
-        affected = cursor.rowcount
-        conn.commit()
-        conn.close()
-
-        return affected > 0
+        with self._session_scope() as session:
+            row = session.get(TaskRecord, task_id)
+            if not row or row.status != TaskStatus.PENDING.value:
+                return False
+            row.status = TaskStatus.CANCELLED.value
+            row.completed_at = time.time()
+            row.message = "已取消"
+            return True
 
     def update_status(self, task_id: str, status: str, message: str = ""):
         """更新任务状态"""
-        conn = sqlite3.connect(str(self.db_path), timeout=30)
-        cursor = conn.cursor()
-
-        cursor.execute(
-            """
-            UPDATE tasks 
-            SET status = ?, message = ?
-            WHERE task_id = ?
-        """,
-            (status, message, task_id),
-        )
-
-        conn.commit()
-        conn.close()
+        with self._session_scope() as session:
+            row = session.get(TaskRecord, task_id)
+            if not row:
+                return
+            row.status = status
+            row.message = message
 
     def get_pending(self, limit: int = 10) -> List[Task]:
         """获取待处理任务"""
-        conn = sqlite3.connect(str(self.db_path), timeout=30)
-        cursor = conn.cursor()
-
-        cursor.execute(
-            """
-            SELECT * FROM tasks 
-            WHERE status = ?
-            ORDER BY created_at ASC
-            LIMIT ?
-        """,
-            (TaskStatus.PENDING.value, limit),
-        )
-
-        rows = cursor.fetchall()
-        conn.close()
-
-        return [self._row_to_task(row) for row in rows]
+        with self._session_scope() as session:
+            rows = session.scalars(
+                select(TaskRecord)
+                .where(TaskRecord.status == TaskStatus.PENDING.value)
+                .order_by(TaskRecord.created_at.asc())
+                .limit(limit)
+            ).all()
+            return [self._row_to_task(row) for row in rows]
 
     def get_running_count(self) -> int:
         """获取正在运行的任务数量"""
-        conn = sqlite3.connect(str(self.db_path), timeout=30)
-        cursor = conn.cursor()
-
-        cursor.execute(
-            """
-            SELECT COUNT(*) FROM tasks 
-            WHERE status = ?
-        """,
-            (TaskStatus.RUNNING.value,),
-        )
-
-        count = cursor.fetchone()[0]
-        conn.close()
-
-        return count
+        with self._session_scope() as session:
+            count = session.scalar(
+                select(func.count()).select_from(TaskRecord).where(TaskRecord.status == TaskStatus.RUNNING.value)
+            )
+            return int(count or 0)
 
     def delete_task(self, task_id: str) -> bool:
         """删除任务"""
-        conn = sqlite3.connect(str(self.db_path), timeout=30)
-        cursor = conn.cursor()
-
-        cursor.execute("DELETE FROM tasks WHERE task_id = ?", (task_id,))
-        affected = cursor.rowcount
-
-        conn.commit()
-        conn.close()
-
-        return affected > 0
+        with self._session_scope() as session:
+            result = session.execute(delete(TaskRecord).where(TaskRecord.task_id == task_id))
+            return (result.rowcount or 0) > 0
 
     def cleanup_old_tasks(self, days: int = 7):
         """清理旧任务"""
-        conn = sqlite3.connect(str(self.db_path), timeout=30)
-        cursor = conn.cursor()
-
         cutoff = time.time() - (days * 24 * 60 * 60)
-
-        cursor.execute(
-            """
-            DELETE FROM tasks 
-            WHERE completed_at < ? AND status IN (?, ?, ?)
-        """,
-            (
-                cutoff,
-                TaskStatus.COMPLETED.value,
-                TaskStatus.FAILED.value,
-                TaskStatus.CANCELLED.value,
-            ),
-        )
-
-        deleted = cursor.rowcount
-        conn.commit()
-        conn.close()
-
-        return deleted
+        with self._session_scope() as session:
+            result = session.execute(
+                delete(TaskRecord).where(
+                    TaskRecord.completed_at < cutoff,
+                    TaskRecord.status.in_(
+                        [
+                            TaskStatus.COMPLETED.value,
+                            TaskStatus.FAILED.value,
+                            TaskStatus.CANCELLED.value,
+                        ]
+                    ),
+                )
+            )
+            return result.rowcount or 0
 
 
 # 全局实例

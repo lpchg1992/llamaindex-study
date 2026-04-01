@@ -8,7 +8,7 @@ Obsidian 文档分类示例
 3. 混合分类
 
 用法:
-    poetry run python examples/obsidian_classifier_example.py
+    uv run python examples/obsidian_classifier_example.py
 """
 
 import sys

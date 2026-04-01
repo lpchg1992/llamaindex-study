@@ -8,7 +8,7 @@
 3. 自动推荐切分参数
 
 用法:
-    poetry run python examples/document_processing_example.py
+    uv run python examples/document_processing_example.py
 """
 
 import sys

@@ -5,7 +5,8 @@ Zotero 集成示例
 演示如何使用 ZoteroReader 加载文献、标注和笔记。
 
 用法:
-    poetry run python examples/zotero_example.py
+    uv run python examples/zotero_example.py
+
 
 需要配置 ZOTERO_DATA_DIR 环境变量:
     export ZOTERO_DATA_DIR=~/Zotero

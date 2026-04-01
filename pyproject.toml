@@ -36,6 +36,7 @@ dependencies = [
     "markdown>=3.7",
     "uvicorn>=0.42.0,<0.43.0",
     "httpx>=0.28.1,<0.29.0",
+    "sqlalchemy>=2.0.38,<3.0.0",
     "python-dotenv>=1.0.0",
     # Semantic chunking
     "llama-index-packs-node-parser-semantic-chunking>=0.5.1,<0.6.0",

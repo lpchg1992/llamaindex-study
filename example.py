@@ -9,7 +9,7 @@ LlamaIndex Study - 示例脚本
 4. 检索相关文档
 
 使用方法：
-    poetry run python example.py
+    uv run python example.py
 """
 
 import sys
@@ -146,7 +146,7 @@ def main() -> None:
     print_section("示例结束")
     print("\n✅ 所有示例执行完成！")
     print("\n了解更多：")
-    print("   - 运行 'poetry run python main.py' 进入交互式查询")
+    print("   - 运行 'uv run python main.py' 进入交互式查询")
     print("   - 查看 README.md 了解更多使用方法")
     print()
 

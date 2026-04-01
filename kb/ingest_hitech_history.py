@@ -5,9 +5,9 @@
 处理 2022-2024 年研发项目资料
 
 用法:
-    poetry run python -m kb.ingest_hitech_history              # 增量导入
-    poetry run python -m kb.ingest_hitech_history --rebuild   # 强制重建
-    poetry run python -m kb.ingest_hitech_history --status   # 查看状态
+    uv run python -m kb.ingest_hitech_history              # 增量导入
+    uv run python -m kb.ingest_hitech_history --rebuild   # 强制重建
+    uv run python -m kb.ingest_hitech_history --status   # 查看状态
 """
 
 import argparse

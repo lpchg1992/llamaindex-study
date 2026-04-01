@@ -2,7 +2,7 @@
 LlamaIndex RAG API Server v3.1
 
 启动:
-    poetry run python api.py
+    uv run python api.py
 
 API 端点:
     GET  /health                    - 健康检查

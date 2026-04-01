@@ -8,7 +8,7 @@ LlamaIndex Study - 交互式查询入口
 3. 进入交互式查询循环
 
 使用方法：
-    poetry run python main.py
+    uv run python main.py
 """
 
 import sys

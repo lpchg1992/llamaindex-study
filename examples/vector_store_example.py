@@ -8,7 +8,7 @@
 3. Qdrant
 
 用法:
-    poetry run python examples/vector_store_example.py
+    uv run python examples/vector_store_example.py
 """
 
 import sys
