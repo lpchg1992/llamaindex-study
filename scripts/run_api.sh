@@ -24,6 +24,37 @@ get_venv_python() {
     fi
 }
 
+# Find and kill existing API process on port
+kill_existing_on_port() {
+    local existing_pid=$(lsof -ti:$API_PORT 2>/dev/null)
+    if [ -n "$existing_pid" ]; then
+        log "Found existing process on port $API_PORT (PID: $existing_pid), killing..."
+        kill -9 $existing_pid 2>/dev/null
+        sleep 1
+    fi
+}
+
+# Clean up stale PID file and any orphaned processes
+cleanup_stale() {
+    if [ -f "$PID_FILE" ]; then
+        local stale_pid=$(cat "$PID_FILE")
+        if [ -n "$stale_pid" ] && [ "$stale_pid" != "0" ]; then
+            if kill -0 $stale_pid 2>/dev/null; then
+                log "Found stale PID file (PID: $stale_pid), killing orphaned process..."
+                kill -9 $stale_pid 2>/dev/null
+            fi
+        fi
+        rm -f "$PID_FILE"
+    fi
+
+    # Also check for any orphaned api.py processes
+    local orphaned=$(ps aux | grep -E "[a]pi\.py|[u]vicorn.*api:app" | awk '{print $2}')
+    if [ -n "$orphaned" ]; then
+        log "Found orphaned API processes (PIDs: $orphaned), killing..."
+        echo "$orphaned" | xargs kill -9 2>/dev/null
+    fi
+}
+
 start_api() {
     local python_path="$1"
     
@@ -35,17 +66,33 @@ start_api() {
     local pid=$!
     echo $pid > "$PID_FILE"
     
-    log "API server started on port $API_PORT (PID: $pid)"
+    sleep 2
+    
+    # Verify it started
+    if kill -0 $pid 2>/dev/null; then
+        log "API server started on port $API_PORT (PID: $pid)"
+    else
+        log "ERROR: API server failed to start"
+        rm -f "$PID_FILE"
+        return 1
+    fi
 }
 
 stop_api() {
     if [ -f "$PID_FILE" ]; then
         local pid=$(cat "$PID_FILE")
-        if kill -0 $pid 2>/dev/null; then
+        if [ -n "$pid" ] && kill -0 $pid 2>/dev/null; then
             kill $pid 2>/dev/null
             log "API server (PID: $pid) stopped"
         fi
         rm -f "$PID_FILE"
+    fi
+    
+    # Ensure no lingering processes
+    local remaining=$(lsof -ti:$API_PORT 2>/dev/null)
+    if [ -n "$remaining" ]; then
+        log "Killing remaining process on port $API_PORT (PID: $remaining)"
+        kill -9 $remaining 2>/dev/null
     fi
 }
 
@@ -62,6 +109,11 @@ if ! command -v uv &> /dev/null; then
     log "ERROR: uv not found. Please install uv: https://github.com/astral-sh/uv"
     exit 1
 fi
+
+# Pre-flight cleanup - kill any existing processes
+log "Pre-flight cleanup..."
+cleanup_stale
+kill_existing_on_port
 
 # Check if virtualenv exists, create if not
 python_path=$(get_venv_python)
