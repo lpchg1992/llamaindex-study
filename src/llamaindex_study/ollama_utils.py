@@ -99,21 +99,8 @@ def create_ollama_embedding(
     model: Optional[str] = None,
     base_url: Optional[str] = None,
 ) -> OllamaEmbedding:
-    """
-    创建 Ollama Embedding 模型实例
-
-    用法：
-        from llamaindex_study.ollama_utils import create_ollama_embedding
-
-        # 使用默认配置
-        embed_model = create_ollama_embedding()
-
-        # 自定义配置
-        embed_model = create_ollama_embedding(model="bge-large-zh-v1.5")
-    """
     settings = get_settings()
-
-    return OllamaEmbedder(
+    return OllamaEmbedding(
         model_name=model or settings.ollama_embed_model,
         base_url=base_url or settings.ollama_base_url,
     )
