@@ -311,6 +311,7 @@ def api_docs_page(doc: str = None):
         "CLI": "CLI.md",
         "ARCHITECTURE": "ARCHITECTURE.md",
         "QUERY_PARAM_GUIDE": "QUERY_PARAM_GUIDE.md",
+        "SEARCH_PARAM_GUIDE": "SEARCH_PARAM_GUIDE.md",
     }
 
     def render_md_to_html(md_content, title):
