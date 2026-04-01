@@ -17,8 +17,8 @@ uv run llamaindex-study
 | 命令 | 说明 |
 |------|------|
 | `<问题>` | 自动选择知识库进行 RAG 问答 |
-| `/search <kb_id> <query>` | 指定知识库检索 |
-| `/query <kb_id> <question>` | 指定知识库问答 |
+| `/search <query>` | 检索（需配合 --kb-ids 指定知识库） |
+| `/query <question>` | 问答（需配合 --kb-ids 指定知识库） |
 | `/list` | 显示知识库列表 |
 | `/exclude <kb1,kb2,...>` | 设置排除的知识库 |
 | `/excludes` | 查看当前排除设置 |
@@ -235,7 +235,7 @@ uv run python kb/scripts/analyze_kb_topics_local.py <kb_id> [--update]
 ### 向量检索
 
 ```bash
-uv run llamaindex-study search [<kb_id>] "<查询词>" [-k <top_k>] [--auto] [--exclude <kb1,kb2>] [--kb-ids <kb1,kb2>] [--auto-merging]
+uv run llamaindex-study search "<查询词>" [--kb-ids <kb1,kb2>] [-k <top_k>] [--auto] [--exclude <kb1,kb2>] [--auto-merging]
 ```
 
 参数说明：
@@ -270,7 +270,7 @@ uv run llamaindex-study search "赖氨酸配比" --auto --exclude tech_tools,aca
 ### RAG 问答
 
 ```bash
-uv run llamaindex-study query [<kb_id>] "<问题>" [-k <top_k>] [--auto] [--exclude <kb1,kb2>] [--kb-ids <kb1,kb2>] [--hyde] [--multi-query] [--auto-merging] [--response-mode <mode>]
+uv run llamaindex-study query "<问题>" [--kb-ids <kb1,kb2>] [-k <top_k>] [--auto] [--exclude <kb1,kb2>] [--hyde] [--multi-query] [--auto-merging] [--response-mode <mode>]
 ```
 
 参数说明：
