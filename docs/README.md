@@ -194,14 +194,14 @@ curl -X POST "http://localhost:8000/kbs/my_kb/ingest/obsidian" \
 curl http://localhost:8000/tasks/{task_id}
 
 # 搜索
-curl -X POST "http://localhost:8000/kbs/my_kb/search" \
+curl -X POST "http://localhost:8000/search" \
   -H "Content-Type: application/json" \
-  -d '{"query": "猪营养", "top_k": 5}'
+  -d '{"query": "猪营养", "kb_ids": "my_kb", "top_k": 5}'
 
 # RAG 问答
-curl -X POST "http://localhost:8000/kbs/my_kb/query" \
+curl -X POST "http://localhost:8000/query" \
   -H "Content-Type: application/json" \
-  -d '{"query": "如何设计猪饲料配方？", "top_k": 5}'
+  -d '{"query": "如何设计猪饲料配方？", "kb_ids": "my_kb", "top_k": 5}'
 ```
 
 ## 环境变量速查
