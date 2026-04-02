@@ -96,7 +96,13 @@ uv run llamaindex-study query my_kb "..." --multi-query  # 多查询
 uv run llamaindex-study task list
 uv run llamaindex-study task watch <task_id>
 uv run llamaindex-study task cancel <task_id>
+
+# 知识库一致性校验
+uv run llamaindex-study kb consistency <kb_id>      # 校验单个 KB
+uv run llamaindex-study kb consistency              # 校验所有 KB
+uv run llamaindex-study kb consistency <kb_id> --repair  # 校验并修复
 ```
+
 
 ### Python API
 

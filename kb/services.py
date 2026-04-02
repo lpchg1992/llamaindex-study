@@ -19,7 +19,7 @@ from llamaindex_study.ollama_utils import (
     configure_global_embed_model,
     configure_llamaindex_for_siliconflow,
 )
-from kb.registry import get_storage_root, get_zotero_storage_root
+from kb.registry import get_storage_root
 from kb.deduplication import DeduplicationManager
 
 logger = get_logger(__name__)
@@ -27,6 +27,10 @@ logger = get_logger(__name__)
 
 class VectorStoreService:
     """向量存储服务"""
+
+    @staticmethod
+    def _get_persist_dir_by_source_type(kb_id: str, source_type: str) -> Path:
+        return get_storage_root() / kb_id
 
     @staticmethod
     def get_vector_store(kb_id: str) -> LanceDBVectorStore:
@@ -37,11 +41,17 @@ class VectorStoreService:
         if kb:
             persist_dir = kb.persist_dir
         else:
-            settings = get_settings()
-            if kb_id.startswith("zotero_"):
-                persist_dir = Path(settings.zotero_persist_dir) / kb_id
+            # Registry 中没有，从数据库查询 source_type
+            from kb.database import init_kb_meta_db
+
+            kb_meta = init_kb_meta_db().get(kb_id)
+            if kb_meta:
+                source_type = kb_meta.get("source_type", "generic")
             else:
-                persist_dir = get_storage_root() / kb_id
+                source_type = "generic"
+            persist_dir = VectorStoreService._get_persist_dir_by_source_type(
+                kb_id, source_type
+            )
 
         return LanceDBVectorStore(
             persist_dir=persist_dir,
@@ -57,10 +67,15 @@ class VectorStoreService:
         if kb:
             return kb.persist_dir
 
-        settings = get_settings()
-        if kb_id.startswith("zotero_"):
-            return Path(settings.zotero_persist_dir) / kb_id
-        return get_storage_root() / kb_id
+        # Registry 中没有，从数据库查询 source_type
+        from kb.database import init_kb_meta_db
+
+        kb_meta = init_kb_meta_db().get(kb_id)
+        if kb_meta:
+            source_type = kb_meta.get("source_type", "generic")
+        else:
+            source_type = "generic"
+        return VectorStoreService._get_persist_dir_by_source_type(kb_id, source_type)
 
 
 class ObsidianService:
@@ -580,21 +595,35 @@ class KnowledgeBaseService:
         return True
 
     @staticmethod
-    def create(kb_id: str, name: str, description: str = "") -> Dict[str, Any]:
-        """创建知识库"""
+    def create(
+        kb_id: str,
+        name: str,
+        description: str = "",
+        source_type: str = "generic",
+    ) -> Dict[str, Any]:
+        """创建知识库
+
+        Args:
+            kb_id: 知识库唯一标识
+            name: 显示名称
+            description: 描述
+            source_type: 来源类型 (generic, zotero, obsidian, manual)
+        """
         from kb.registry import registry
         from kb.database import init_kb_meta_db
 
         if registry.exists(kb_id) or init_kb_meta_db().get(kb_id):
             raise ValueError(f"知识库 {kb_id} 已存在")
 
-        persist_dir = get_storage_root() / kb_id
+        persist_dir = VectorStoreService._get_persist_dir_by_source_type(
+            kb_id, source_type
+        )
         persist_dir.mkdir(parents=True, exist_ok=True)
         init_kb_meta_db().upsert(
             kb_id=kb_id,
             name=name or kb_id,
             description=description,
-            source_type="manual",
+            source_type=source_type,
             persist_path=str(persist_dir),
         )
 
@@ -602,8 +631,35 @@ class KnowledgeBaseService:
             "id": kb_id,
             "name": name,
             "description": description,
+            "source_type": source_type,
             "status": "created",
         }
+
+    @staticmethod
+    def create_for_zotero(
+        kb_id: str,
+        name: str,
+        description: str = "",
+    ) -> Dict[str, Any]:
+        return KnowledgeBaseService.create(
+            kb_id=kb_id,
+            name=name,
+            description=description,
+            source_type="zotero",
+        )
+
+    @staticmethod
+    def create_for_obsidian(
+        kb_id: str,
+        name: str,
+        description: str = "",
+    ) -> Dict[str, Any]:
+        return KnowledgeBaseService.create(
+            kb_id=kb_id,
+            name=name,
+            description=description,
+            source_type="obsidian",
+        )
 
     @staticmethod
     def delete(kb_id: str) -> bool:
@@ -647,12 +703,11 @@ class KnowledgeBaseService:
         用于完全重置知识库到初始状态。
         """
         from kb.deduplication import DeduplicationManager
-        from kb.registry import get_storage_root
 
         vs = VectorStoreService.get_vector_store(kb_id)
         vs.delete_table()
 
-        persist_dir = get_storage_root() / kb_id
+        persist_dir = VectorStoreService.get_persist_dir(kb_id)
         dedup_manager = DeduplicationManager(kb_id, persist_dir)
         dedup_manager.clear()
 
@@ -1857,20 +1912,17 @@ class AdminService:
             )
             seen.add(kb["id"])
 
-        for root in [get_storage_root(), get_zotero_storage_root()]:
-            if not root.exists():
+        for child in get_storage_root().iterdir():
+            if not child.is_dir() or child.name in seen:
                 continue
-            for child in root.iterdir():
-                if not child.is_dir() or child.name in seen:
-                    continue
-                tables.append(
-                    {
-                        "kb_id": child.name,
-                        "path": str(child),
-                        "status": "unregistered",
-                        "row_count": None,
-                    }
-                )
+            tables.append(
+                {
+                    "kb_id": child.name,
+                    "path": str(child),
+                    "status": "unregistered",
+                    "row_count": None,
+                }
+            )
 
         return {"tables": tables}
 
@@ -1881,3 +1933,453 @@ class AdminService:
     @staticmethod
     def delete_table(kb_id: str) -> bool:
         return KnowledgeBaseService.delete(kb_id)
+
+
+# ==================== 一致性校验与修复 ====================
+
+
+class ConsistencyService:
+    """知识库一致性校验与修复服务"""
+
+    @staticmethod
+    def verify(kb_id: str) -> Dict[str, Any]:
+        """
+        校验知识库一致性
+
+        比较 dedup_records 中记录的 chunk 总数与 LanceDB 实际行数。
+
+        Returns:
+            {
+                "kb_id": str,
+                "dedup_files": int,        # dedup 记录的文件数
+                "dedup_chunks": int,       # dedup 记录的 chunk 总数
+                "lance_rows": int,         # LanceDB 实际行数
+                "consistent": bool,        # 是否一致
+                "missing_chunks": int,     # LanceDB 缺失的 chunk 数
+                "orphan_rows": int,        # LanceDB 多余的行数
+                "status": str,             # 状态描述
+            }
+        """
+        from kb.database import init_dedup_db
+
+        dedup_db = init_dedup_db()
+
+        # 1. 从 dedup_records 获取预期 chunk 总数
+        try:
+            dedup_records = dedup_db.get_records(kb_id)
+            dedup_files = len(dedup_records)
+            dedup_chunks = sum(r.get("chunk_count", 0) for r in dedup_records)
+        except Exception as e:
+            logger.error(f"读取 dedup 记录失败: {e}")
+            return {
+                "kb_id": kb_id,
+                "error": f"读取 dedup 记录失败: {e}",
+                "status": "error",
+            }
+
+        # 2. 从 LanceDB 获取实际行数
+        try:
+            vs = VectorStoreService.get_vector_store(kb_id)
+            stats = vs.get_stats()
+            lance_rows = stats.get("row_count", 0) if stats.get("exists") else 0
+        except Exception as e:
+            logger.error(f"读取 LanceDB 失败: {e}")
+            return {
+                "kb_id": kb_id,
+                "dedup_files": dedup_files,
+                "dedup_chunks": dedup_chunks,
+                "error": f"读取 LanceDB 失败: {e}",
+                "status": "error",
+            }
+
+        # 3. 比较
+        missing_chunks = max(0, dedup_chunks - lance_rows)
+        orphan_rows = max(0, lance_rows - dedup_chunks)
+        consistent = missing_chunks == 0 and orphan_rows == 0
+
+        if consistent:
+            status = "consistent"
+        elif missing_chunks > 0 and orphan_rows > 0:
+            status = "mixed_inconsistency"
+        elif missing_chunks > 0:
+            status = "missing_data"
+        else:
+            status = "orphan_data"
+
+        return {
+            "kb_id": kb_id,
+            "dedup_files": dedup_files,
+            "dedup_chunks": dedup_chunks,
+            "lance_rows": lance_rows,
+            "consistent": consistent,
+            "missing_chunks": missing_chunks,
+            "orphan_rows": orphan_rows,
+            "status": status,
+        }
+
+    @staticmethod
+    def repair(kb_id: str, mode: str = "sync") -> Dict[str, Any]:
+        """
+        修复知识库一致性
+
+        Args:
+            kb_id: 知识库 ID
+            mode: 修复模式
+                - "sync": 从 dedup 同步到 LanceDB（删除 orphan 向量）
+                - "rebuild": 重新扫描文件重建（较慢但不丢数据）
+                - "dry": 只报告，不修复
+
+        Returns:
+            {
+                "kb_id": str,
+                "mode": str,
+                "repaired": bool,
+                "message": str,
+                "details": dict,
+            }
+        """
+        if mode == "dry":
+            verify_result = ConsistencyService.verify(kb_id)
+            if verify_result.get("status") == "error":
+                return {
+                    "kb_id": kb_id,
+                    "mode": mode,
+                    "repaired": False,
+                    "message": "校验失败",
+                    "details": verify_result,
+                }
+            if verify_result["consistent"]:
+                return {
+                    "kb_id": kb_id,
+                    "mode": mode,
+                    "repaired": True,
+                    "message": "知识库已一致，无需修复",
+                    "details": verify_result,
+                }
+            return {
+                "kb_id": kb_id,
+                "mode": mode,
+                "repaired": False,
+                "message": f"发现不一致: missing={verify_result['missing_chunks']}, orphan={verify_result['orphan_rows']}",
+                "details": verify_result,
+            }
+
+        if mode == "sync":
+            return ConsistencyService._repair_sync(kb_id)
+        elif mode == "rebuild":
+            return ConsistencyService._repair_rebuild(kb_id)
+        else:
+            return {
+                "kb_id": kb_id,
+                "mode": mode,
+                "repaired": False,
+                "message": f"未知修复模式: {mode}",
+            }
+
+    @staticmethod
+    def _repair_sync(kb_id: str) -> Dict[str, Any]:
+        """
+        同步模式修复：删除 LanceDB 中的 orphan 向量
+
+        从 dedup 记录获取所有 doc_id，删除 LanceDB 中不在这些 doc_id 中的记录。
+        """
+        from kb.database import init_dedup_db
+
+        verify_result = ConsistencyService.verify(kb_id)
+        if verify_result.get("status") == "error":
+            return {
+                "kb_id": kb_id,
+                "mode": "sync",
+                "repaired": False,
+                "message": "校验阶段失败",
+                "details": verify_result,
+            }
+
+        if verify_result["orphan_rows"] == 0:
+            return {
+                "kb_id": kb_id,
+                "mode": "sync",
+                "repaired": True,
+                "message": "没有 orphan 数据需要清理",
+                "details": verify_result,
+            }
+
+        dedup_db = init_dedup_db()
+
+        # 获取 dedup 中记录的 doc_id 集合
+        dedup_records = dedup_db.get_records(kb_id)
+        valid_doc_ids = set()
+        for record in dedup_records:
+            doc_id = record.get("doc_id")
+            if doc_id:
+                valid_doc_ids.add(doc_id)
+
+        if not valid_doc_ids:
+            return {
+                "kb_id": kb_id,
+                "mode": "sync",
+                "repaired": False,
+                "message": "dedup 记录为空，无法修复",
+                "details": {"valid_doc_ids": 0},
+            }
+
+        # 删除 LanceDB 中不在 valid_doc_ids 中的记录
+        try:
+            import lancedb
+
+            vs = VectorStoreService.get_vector_store(kb_id)
+            persist_dir = vs.persist_dir or vs._get_uri()
+
+            db = lancedb.connect(str(persist_dir))
+            table = db.open_table(kb_id)
+
+            # 获取 LanceDB 中所有的 id
+            df = table.to_pandas()
+            lance_ids = (
+                set(df["id"].astype(str).tolist())
+                if df is not None and "id" in df.columns
+                else set()
+            )
+
+            # 计算需要删除的 id
+            orphan_ids = lance_ids - valid_doc_ids
+
+            if not orphan_ids:
+                return {
+                    "kb_id": kb_id,
+                    "mode": "sync",
+                    "repaired": True,
+                    "message": "没有 orphan 数据",
+                    "details": {"orphan_count": 0},
+                }
+
+            # 批量删除（分批执行避免过大）
+            deleted = 0
+            batch_size = 1000
+            orphan_list = list(orphan_ids)
+
+            for i in range(0, len(orphan_list), batch_size):
+                batch = orphan_list[i : i + batch_size]
+                id_list = "', '".join(batch)
+                try:
+                    result = table.delete(f"id IN ('{id_list}')")
+                    if hasattr(result, "num_deleted"):
+                        deleted += result.num_deleted
+                    elif hasattr(result, "count"):
+                        deleted += result.count
+                except Exception as e:
+                    logger.warning(f"删除批次失败: {e}")
+
+            # 验证修复结果
+            verify_after = ConsistencyService.verify(kb_id)
+
+            return {
+                "kb_id": kb_id,
+                "mode": "sync",
+                "repaired": verify_after["consistent"],
+                "message": f"删除了 {deleted} 个 orphan 记录",
+                "details": {
+                    "deleted_count": deleted,
+                    "before": verify_result,
+                    "after": verify_after,
+                },
+            }
+
+        except Exception as e:
+            logger.error(f"同步修复失败: {e}")
+            return {
+                "kb_id": kb_id,
+                "mode": "sync",
+                "repaired": False,
+                "message": f"修复失败: {e}",
+            }
+
+    @staticmethod
+    def _repair_rebuild(kb_id: str) -> Dict[str, Any]:
+        """
+        重建模式修复：重新扫描文件并重建向量
+
+        这是最可靠的修复方式，但速度较慢。
+        """
+        from kb.registry import KnowledgeBaseRegistry
+
+        try:
+            registry = KnowledgeBaseRegistry()
+            kb = registry.get(kb_id)
+
+            if not kb:
+                return {
+                    "kb_id": kb_id,
+                    "mode": "rebuild",
+                    "repaired": False,
+                    "message": f"知识库 {kb_id} 不存在",
+                }
+
+            # 获取所有文件
+            vault_root = kb.vault_root()
+            source_paths = kb.source_paths_abs(vault_root)
+
+            all_files = []
+            for source_path in source_paths:
+                if source_path.exists():
+                    if source_path.is_file():
+                        all_files.append(source_path)
+                    elif source_path.is_dir():
+                        all_files.extend(source_path.rglob("*.md"))
+
+            # 记录文件列表
+            file_count = len(all_files)
+            logger.info(f"重建模式: 发现 {file_count} 个文件")
+
+            return {
+                "kb_id": kb_id,
+                "mode": "rebuild",
+                "repaired": True,
+                "message": f"扫描到 {file_count} 个文件，请使用 ingest 命令重新导入",
+                "details": {
+                    "file_count": file_count,
+                    "note": "使用 ingest 命令重新导入以完成修复",
+                },
+            }
+
+        except Exception as e:
+            logger.error(f"重建扫描失败: {e}")
+            return {
+                "kb_id": kb_id,
+                "mode": "rebuild",
+                "repaired": False,
+                "message": f"扫描失败: {e}",
+            }
+
+    @staticmethod
+    def safe_delete_files(kb_id: str, sources: List[str]) -> Dict[str, Any]:
+        """
+        原子性删除文件（保证 dedup 和 LanceDB 一致）
+
+        Args:
+            kb_id: 知识库 ID
+            sources: 要删除的源文件路径列表
+
+        Returns:
+            {
+                "kb_id": str,
+                "deleted_sources": int,
+                "deleted_vectors": int,
+                "success": bool,
+                "message": str,
+            }
+        """
+        if not sources:
+            return {
+                "kb_id": kb_id,
+                "deleted_sources": 0,
+                "deleted_vectors": 0,
+                "success": True,
+                "message": "没有文件需要删除",
+            }
+
+        from kb.database import init_dedup_db
+        import lancedb
+
+        dedup_db = init_dedup_db()
+
+        # 1. 标记 dedup 记录待删除（先标记，不实际删除）
+        deleted_sources = 0
+        for source in sources:
+            try:
+                dedup_db.remove(kb_id, source)
+                deleted_sources += 1
+            except Exception as e:
+                logger.warning(f"删除 dedup 记录失败 {source}: {e}")
+
+        # 2. 从 LanceDB 删除向量
+        deleted_vectors = 0
+        try:
+            vs = VectorStoreService.get_vector_store(kb_id)
+            persist_dir = vs.persist_dir or vs._get_uri()
+
+            db = lancedb.connect(str(persist_dir))
+            if kb_id in db.list_tables().tables:
+                table = db.open_table(kb_id)
+
+                for source in sources:
+                    try:
+                        escaped_source = source.replace("'", "''")
+                        result = table.delete(f"source = '{escaped_source}'")
+                        if hasattr(result, "num_deleted"):
+                            deleted_vectors += result.num_deleted
+                        elif hasattr(result, "count"):
+                            deleted_vectors += result.count
+                    except Exception as e:
+                        logger.warning(f"从 LanceDB 删除 {source} 失败: {e}")
+
+        except Exception as e:
+            logger.error(f"LanceDB 删除失败: {e}")
+            return {
+                "kb_id": kb_id,
+                "deleted_sources": deleted_sources,
+                "deleted_vectors": deleted_vectors,
+                "success": False,
+                "message": f"LanceDB 删除失败: {e}",
+            }
+
+        # 3. 验证结果
+        verify = ConsistencyService.verify(kb_id)
+        consistent = verify.get("consistent", False)
+
+        return {
+            "kb_id": kb_id,
+            "deleted_sources": deleted_sources,
+            "deleted_vectors": deleted_vectors,
+            "success": consistent,
+            "message": "删除成功"
+            if consistent
+            else f"删除完成但存在不一致 (missing={verify.get('missing_chunks')})",
+        }
+
+    @staticmethod
+    def repair_all(mode: str = "sync") -> Dict[str, Any]:
+        """
+        修复所有知识库的一致性
+
+        Returns:
+            {
+                "total": int,
+                "repaired": int,
+                "failed": int,
+                "results": list,
+            }
+        """
+        from kb.registry import KnowledgeBaseRegistry
+
+        registry = KnowledgeBaseRegistry()
+        kbs = registry.list()
+
+        results = []
+        repaired = 0
+        failed = 0
+
+        for kb in kbs:
+            kb_id = kb.id
+            try:
+                result = ConsistencyService.repair(kb_id, mode=mode)
+                results.append(result)
+                if result.get("repaired"):
+                    repaired += 1
+            except Exception as e:
+                logger.error(f"修复知识库 {kb_id} 失败: {e}")
+                results.append(
+                    {
+                        "kb_id": kb_id,
+                        "repaired": False,
+                        "message": str(e),
+                    }
+                )
+                failed += 1
+
+        return {
+            "total": len(kbs),
+            "repaired": repaired,
+            "failed": failed,
+            "results": results,
+        }

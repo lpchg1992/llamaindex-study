@@ -54,7 +54,7 @@ from pathlib import Path
 from typing import List, Optional, Dict, Literal
 import markdown
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
@@ -260,6 +260,7 @@ class KBInfo(BaseModel):
     id: str
     name: str = ""
     description: str = ""
+    source_type: str = "generic"
     status: str = "unknown"
     row_count: Optional[int] = None
 
@@ -772,7 +773,12 @@ def list_kbs():
 def create_kb(req: KBInfo):
     """创建知识库"""
     try:
-        result = KnowledgeBaseService.create(req.id, req.name, req.description)
+        result = KnowledgeBaseService.create(
+            kb_id=req.id,
+            name=req.name,
+            description=req.description,
+            source_type=req.source_type,
+        )
         return KBInfo(**result)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -1409,6 +1415,58 @@ def refresh_kb_topics(kb_id: str, req: RefreshTopicsRequest):
         "topics": topics,
         "topic_count": len(topics),
     }
+
+
+# ============== 知识库一致性校验与修复 ==============
+
+
+class RepairMode(str):
+    SYNC = "sync"
+    REBUILD = "rebuild"
+    DRY = "dry"
+
+
+@app.get("/kbs/{kb_id}/consistency")
+def check_consistency(kb_id: str):
+    """校验知识库一致性"""
+    from kb.services import ConsistencyService
+
+    info = KnowledgeBaseService.get_info(kb_id)
+    if not info:
+        raise HTTPException(status_code=404, detail=f"知识库不存在: {kb_id}")
+
+    result = ConsistencyService.verify(kb_id)
+    return result
+
+
+class RepairRequest(BaseModel):
+    mode: str = Field(
+        "sync", description="修复模式: sync(删除orphan), rebuild(重建), dry(只报告)"
+    )
+
+
+@app.post("/kbs/{kb_id}/consistency/repair")
+def repair_consistency(kb_id: str, req: RepairRequest):
+    """修复知识库一致性"""
+    from kb.services import ConsistencyService
+
+    info = KnowledgeBaseService.get_info(kb_id)
+    if not info:
+        raise HTTPException(status_code=404, detail=f"知识库不存在: {kb_id}")
+
+    result = ConsistencyService.repair(kb_id, mode=req.mode)
+    return result
+
+
+@app.post("/consistency/repair-all")
+def repair_all_consistency(
+    mode: str = Query("sync", description="修复模式: sync, rebuild, dry"),
+):
+    """修复所有知识库的一致性"""
+    from kb.services import ConsistencyService
+
+    result = ConsistencyService.repair_all(mode=mode)
+    return result
 
 
 # ============== Obsidian 全库分类导入 ==============

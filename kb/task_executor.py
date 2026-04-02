@@ -22,6 +22,8 @@ CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "512"))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "50"))
 PROGRESS_UPDATE_INTERVAL = int(os.getenv("PROGRESS_UPDATE_INTERVAL", "10"))
 DEFAULT_MAX_CONCURRENT = int(os.getenv("MAX_CONCURRENT_TASKS", "10"))
+HEARTBEAT_INTERVAL = int(os.getenv("HEARTBEAT_INTERVAL", "30"))
+STALE_TASK_TIMEOUT = int(os.getenv("STALE_TASK_TIMEOUT", "300"))  # 任务超时时间（秒）
 
 if TYPE_CHECKING:
     from kb.task_queue import Task, TaskQueue, TaskStatus
@@ -61,6 +63,7 @@ class TaskExecutor:
 
         try:
             self.queue.start_task(task_id)
+            await self._update_heartbeat(task_id)
             await self._notify_progress(task_id)
 
             if task.task_type == "zotero":
@@ -97,6 +100,13 @@ class TaskExecutor:
                 await ws_manager.send_task_update(task_id, task.to_dict())
         except Exception as e:
             logger.debug(f"进度通知失败: {e}")
+
+    async def _update_heartbeat(self, task_id: str) -> None:
+        """更新任务心跳"""
+        try:
+            self.queue.update_heartbeat(task_id)
+        except Exception as e:
+            logger.debug(f"心跳更新失败: {e}")
 
     async def _check_cancelled(self, task_id: str) -> bool:
         """检查是否取消"""
@@ -298,6 +308,7 @@ class TaskExecutor:
 
         processed_files = 0
         processed_chunks = 0
+        last_heartbeat_file_count = 0
 
         self.queue.update_progress(
             task.task_id, message=f"开始处理 {len(all_docs)} 个文件"
@@ -365,6 +376,14 @@ class TaskExecutor:
                         task.task_id,
                         message=f"处理 {processed_files}/{len(all_docs)} ({processed_chunks} chunks)",
                     )
+
+                # 定期更新心跳
+                if (
+                    processed_files - last_heartbeat_file_count
+                    >= PROGRESS_UPDATE_INTERVAL
+                ):
+                    await self._update_heartbeat(task.task_id)
+                    last_heartbeat_file_count = processed_files
 
             except Exception as e:
                 logger.warning(f"处理失败 {rel_path}: {e}")
@@ -481,6 +500,9 @@ class TaskExecutor:
             task.task_id, message=f"开始导入 {collection_name}..."
         )
 
+        # 更新心跳
+        await self._update_heartbeat(task.task_id)
+
         try:
             stats = importer.import_collection(
                 collection_id=collection_id,
@@ -577,6 +599,7 @@ class TaskExecutor:
 
         stats = {"files": 0, "nodes": 0, "failed": 0}
         processed_sources = []
+        last_heartbeat_file_count = 0
 
         for i, file_path in enumerate(all_files):
             if await self._check_cancelled(task.task_id):
@@ -619,6 +642,11 @@ class TaskExecutor:
                 self.queue.update_progress(
                     task.task_id, progress=progress, message=f"处理: {file_path.name}"
                 )
+
+                # 定期更新心跳
+                if i - last_heartbeat_file_count >= PROGRESS_UPDATE_INTERVAL:
+                    await self._update_heartbeat(task.task_id)
+                    last_heartbeat_file_count = i
 
             except Exception as e:
                 logger.warning(f"处理文件失败 {file_path}: {e}")
@@ -725,10 +753,14 @@ class TaskScheduler:
         self.executor: TaskExecutor = task_executor
         self._running: bool = True
         self.max_concurrent: int = max_concurrent
+        self._stale_check_counter: int = 0
 
     async def run(self) -> None:
         """运行调度器"""
         logger.info(f"任务调度器已启动 (最大并发: {self.max_concurrent})")
+
+        # 启动时同步状态
+        self._sync_task_states()
 
         while self._running:
             try:
@@ -755,6 +787,12 @@ class TaskScheduler:
                 # 清理已完成的任务引用
                 self._cleanup_completed_tasks()
 
+                # 定期检查超时任务
+                self._stale_check_counter += 1
+                if self._stale_check_counter >= 10:
+                    self._stale_check_counter = 0
+                    self._check_and_recover_stale_tasks()
+
             except Exception as e:
                 logger.error(f"调度器错误: {e}")
 
@@ -774,6 +812,34 @@ class TaskScheduler:
                 self.executor._running_tasks.pop(tid, None)
         except Exception as e:
             logger.debug(f"清理已完成任务失败: {e}")
+
+    def _sync_task_states(self) -> None:
+        """同步内存与数据库状态，恢复崩溃的任务"""
+        # 恢复没有心跳的 RUNNING 任务（进程崩溃导致）
+        no_heartbeat = self.queue.get_tasks_needing_recovery()
+        for task in no_heartbeat:
+            self.queue.update_status(task.task_id, "pending", "进程崩溃已恢复")
+            logger.info(f"恢复崩溃任务: {task.task_id[:8]}")
+
+        # 恢复超时的 RUNNING 任务
+        recovered = self.queue.recover_stale_tasks(STALE_TASK_TIMEOUT)
+        if recovered > 0:
+            logger.info(f"恢复 {recovered} 个超时任务")
+
+    def _check_and_recover_stale_tasks(self) -> None:
+        """检查并恢复超时任务"""
+        stale = self.queue.get_stale_tasks(STALE_TASK_TIMEOUT)
+        for task in stale:
+            # 如果任务在内存中存在但已完成，从内存清理
+            if task.task_id in self.executor._running_tasks:
+                t = self.executor._running_tasks[task.task_id]
+                if isinstance(t, asyncio.Task) and t.done():
+                    self.executor._running_tasks.pop(task.task_id, None)
+                    logger.debug(f"清理孤立任务引用: {task.task_id[:8]}")
+            else:
+                # 任务不在内存中但数据库仍为 RUNNING，恢复为 PENDING
+                self.queue.update_status(task.task_id, "pending", "任务超时已恢复")
+                logger.info(f"恢复超时任务: {task.task_id[:8]}")
 
     def stop(self) -> None:
         """停止调度器"""
@@ -814,17 +880,27 @@ def cleanup_scheduler_pid() -> None:
     pid_file = get_scheduler_pid_file()
     if pid_file.exists():
         pid_file.unlink()
+    SchedulerStarter.reset_verified()
 
 
 class SchedulerStarter:
     """调度器单例启动器 - 确保只有一个调度器运行"""
 
     _process: Optional[subprocess.Popen] = None
+    _startup_verified: bool = False  # 追踪是否已验证启动
 
     @classmethod
-    def ensure_scheduler_running(cls) -> bool:
-        """确保调度器正在运行，如果不是则启动它"""
+    def ensure_scheduler_running(cls, wait_seconds: float = 3.0) -> bool:
+        """确保调度器正在运行，如果不是则启动它
+
+        Args:
+            wait_seconds: 等待调度器启动的秒数（默认3秒）
+
+        Returns:
+            bool: 调度器是否正在运行
+        """
         if is_scheduler_running():
+            cls._startup_verified = True
             logger.info("调度器已在运行")
             return True
 
@@ -840,13 +916,49 @@ class SchedulerStarter:
             cls._process = subprocess.Popen(
                 cmd,
                 stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 start_new_session=True,
                 env=os.environ.copy(),
             )
             logger.info(f"调度器进程已启动 (PID: {cls._process.pid})")
-            return True
+
+            # 等待调度器初始化完成
+            import time
+
+            start_time = time.time()
+            while time.time() - start_time < wait_seconds:
+                time.sleep(0.5)
+                if is_scheduler_running():
+                    cls._startup_verified = True
+                    logger.info(
+                        f"调度器已就绪 (等待 {(time.time() - start_time):.1f}s)"
+                    )
+                    return True
+                # 检查进程是否崩溃
+                if cls._process.poll() is not None:
+                    stdout, stderr = cls._process.communicate()
+                    logger.error(f"调度器进程异常退出: {cls._process.returncode}")
+                    if stderr:
+                        logger.error(
+                            f"stderr: {stderr.decode('utf-8', errors='replace')}"
+                        )
+                    break
+
+            # 等待后仍未就绪
+            logger.warning(f"调度器启动验证超时 ({wait_seconds}s)，可能仍在初始化")
+            return True  # 返回 True 让任务继续提交，调度器会在下次检查时接管
+
         except Exception as e:
             logger.error(f"启动调度器失败: {e}")
             return False
+
+    @classmethod
+    def is_verified(cls) -> bool:
+        """检查上次启动是否已验证成功"""
+        return cls._startup_verified
+
+    @classmethod
+    def reset_verified(cls):
+        """重置验证状态（调度器停止后调用）"""
+        cls._startup_verified = False

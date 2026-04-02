@@ -429,7 +429,9 @@ def handle_kb_show(args: argparse.Namespace) -> int:
 
 
 def handle_kb_create(args: argparse.Namespace) -> int:
-    result = KnowledgeBaseService.create(args.kb_id, args.name, args.description)
+    result = KnowledgeBaseService.create(
+        args.kb_id, args.name, args.description, args.source_type
+    )
     print_json(result)
     return 0
 
@@ -791,6 +793,78 @@ def handle_kb_topics_local(args: argparse.Namespace) -> int:
 
     print(f"\n{'=' * 50}")
     print("完成!")
+    return 0
+
+
+def handle_kb_consistency(args: argparse.Namespace) -> int:
+    from kb.services import ConsistencyService
+    from kb.registry import registry
+
+    kb_id = args.kb_id
+    repair = args.repair
+    mode = args.mode if hasattr(args, "mode") else "dry"
+
+    if repair:
+        mode = "sync"
+
+    if kb_id:
+        result = ConsistencyService.verify(kb_id)
+        print(f"\n{'=' * 60}")
+        print(f"📊 知识库一致性校验: {kb_id}")
+        print(f"{'=' * 60}")
+
+        if result.get("status") == "error":
+            print(f"❌ 校验失败: {result.get('error')}")
+            return 1
+
+        print(
+            f"  Dedup 记录: {result.get('dedup_files', 0)} 文件, {result.get('dedup_chunks', 0)} chunks"
+        )
+        print(f"  LanceDB:    {result.get('lance_rows', 0)} 行")
+
+        status = result.get("status", "unknown")
+        if status == "consistent":
+            print(f"  状态: ✅ 一致")
+        elif status == "missing_data":
+            print(f"  状态: ⚠️ 缺失数据 (缺少 {result.get('missing_chunks', 0)} chunks)")
+        elif status == "orphan_data":
+            print(f"  状态: ⚠️ 多余数据 (orphan {result.get('orphan_rows', 0)} 行)")
+        else:
+            print(f"  状态: ⚠️ 混合不一致")
+
+        if not result.get("consistent"):
+            if repair or mode == "sync":
+                print(f"\n🔧 尝试修复...")
+                repair_result = ConsistencyService.repair(kb_id, mode=mode)
+                if repair_result.get("repaired"):
+                    print(f"✅ 修复成功: {repair_result.get('message')}")
+                else:
+                    print(f"❌ 修复失败: {repair_result.get('message')}")
+            elif mode == "dry":
+                print(f"\n💡 使用 --repair 参数尝试自动修复")
+
+        print(f"{'=' * 60}\n")
+    else:
+        print(f"\n{'=' * 60}")
+        print("📊 所有知识库一致性校验")
+        print(f"{'=' * 60}")
+
+        kbs = registry.list()
+        for kb in kbs:
+            result = ConsistencyService.verify(kb.id)
+            status = result.get("status", "unknown")
+            if status == "consistent":
+                icon = "✅"
+            elif status == "error":
+                icon = "❌"
+            else:
+                icon = "⚠️"
+            print(
+                f"  {icon} {kb.id}: dedup={result.get('dedup_chunks', 0)} chunks, lance={result.get('lance_rows', 0)} rows"
+            )
+
+        print(f"{'=' * 60}\n")
+
     return 0
 
 
@@ -1628,6 +1702,12 @@ def build_parser() -> argparse.ArgumentParser:
     kb_create.add_argument("kb_id")
     kb_create.add_argument("--name", required=True)
     kb_create.add_argument("--description", default="")
+    kb_create.add_argument(
+        "--source-type",
+        default="generic",
+        choices=["generic", "zotero", "obsidian", "manual"],
+        help="知识库来源类型 (default: generic)",
+    )
     kb_create.set_defaults(handler=handle_kb_create)
 
     kb_delete = kb_sub.add_parser("delete", help="删除知识库")
@@ -1652,6 +1732,19 @@ def build_parser() -> argparse.ArgumentParser:
     kb_topics_local.add_argument("--all", action="store_true", help="分析所有知识库")
     kb_topics_local.add_argument("--update", action="store_true", help="更新到数据库")
     kb_topics_local.set_defaults(handler=handle_kb_topics_local)
+
+    kb_consistency = kb_sub.add_parser("consistency", help="校验知识库一致性")
+    kb_consistency.add_argument(
+        "kb_id", nargs="?", default=None, help="知识库ID，不指定则检查所有"
+    )
+    kb_consistency.add_argument("--repair", action="store_true", help="自动修复不一致")
+    kb_consistency.add_argument(
+        "--mode",
+        choices=["sync", "rebuild", "dry"],
+        default="dry",
+        help="修复模式: sync(删除orphan), rebuild(重建), dry(只报告)",
+    )
+    kb_consistency.set_defaults(handler=handle_kb_consistency)
 
     vendor_parser = subparsers.add_parser("vendor", help="供应商管理")
     vendor_sub = vendor_parser.add_subparsers(dest="vendor_command", required=True)

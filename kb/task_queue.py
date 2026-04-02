@@ -19,8 +19,27 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import Float, Index, Integer, String, Text, create_engine, delete, event, func, select
-from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, scoped_session, sessionmaker
+from sqlalchemy import (
+    Float,
+    Index,
+    Integer,
+    String,
+    Text,
+    update,
+    create_engine,
+    delete,
+    event,
+    func,
+    select,
+)
+from sqlalchemy.orm import (
+    DeclarativeBase,
+    Mapped,
+    Session,
+    mapped_column,
+    scoped_session,
+    sessionmaker,
+)
 
 from llamaindex_study.config import get_settings
 
@@ -69,6 +88,7 @@ class Task:
     created_at: float = field(default_factory=time.time)
     started_at: Optional[float] = None
     completed_at: Optional[float] = None
+    last_heartbeat: Optional[float] = None  # 心跳时间
 
     # 来源
     source: str = ""  # 来源描述
@@ -90,6 +110,7 @@ class Task:
             "created_at": self.created_at,
             "started_at": self.started_at,
             "completed_at": self.completed_at,
+            "last_heartbeat": self.last_heartbeat,
             "source": self.source,
         }
 
@@ -118,6 +139,9 @@ class TaskRecord(TaskBase):
     created_at: Mapped[float] = mapped_column(Float, nullable=False)
     started_at: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     completed_at: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    last_heartbeat: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True
+    )  # 心跳时间
     source: Mapped[str] = mapped_column(Text, default="", nullable=False)
 
 
@@ -159,7 +183,12 @@ class TaskQueue:
             connect_args={"timeout": 30, "check_same_thread": False},
         )
         self._session_factory = scoped_session(
-            sessionmaker(bind=self.engine, autoflush=False, autocommit=False, expire_on_commit=False)
+            sessionmaker(
+                bind=self.engine,
+                autoflush=False,
+                autocommit=False,
+                expire_on_commit=False,
+            )
         )
 
         @event.listens_for(self.engine, "connect")
@@ -177,6 +206,17 @@ class TaskQueue:
 
     def _init_db(self):
         TaskBase.metadata.create_all(self.engine)
+        self._migrate_add_last_heartbeat()
+
+    def _migrate_add_last_heartbeat(self):
+        """迁移：添加 last_heartbeat 列（如果不存在）"""
+        from sqlalchemy import inspect
+
+        inspector = inspect(self.engine)
+        columns = [c["name"] for c in inspector.get_columns("tasks")]
+        if "last_heartbeat" not in columns:
+            with self.engine.begin() as conn:
+                conn.exec_driver_sql("ALTER TABLE tasks ADD COLUMN last_heartbeat REAL")
 
     @contextmanager
     def _session_scope(self) -> Session:
@@ -206,6 +246,7 @@ class TaskQueue:
             created_at=row.created_at,
             started_at=row.started_at,
             completed_at=row.completed_at,
+            last_heartbeat=row.last_heartbeat,
             source=row.source or "",
         )
 
@@ -267,7 +308,9 @@ class TaskQueue:
                 stmt = stmt.where(TaskRecord.kb_id == kb_id)
             if status:
                 stmt = stmt.where(TaskRecord.status == status)
-            rows = session.scalars(stmt.order_by(TaskRecord.created_at.desc()).limit(limit)).all()
+            rows = session.scalars(
+                stmt.order_by(TaskRecord.created_at.desc()).limit(limit)
+            ).all()
             return [self._row_to_task(row) for row in rows]
 
     def update_progress(
@@ -308,7 +351,9 @@ class TaskQueue:
             row = session.get(TaskRecord, task_id)
             if not row:
                 return
-            row.status = TaskStatus.FAILED.value if error else TaskStatus.COMPLETED.value
+            row.status = (
+                TaskStatus.FAILED.value if error else TaskStatus.COMPLETED.value
+            )
             row.completed_at = time.time()
             row.message = f"失败: {error}" if error else "已完成"
             row.result = json.dumps(result, ensure_ascii=False) if result else None
@@ -355,14 +400,18 @@ class TaskQueue:
         """获取正在运行的任务数量"""
         with self._session_scope() as session:
             count = session.scalar(
-                select(func.count()).select_from(TaskRecord).where(TaskRecord.status == TaskStatus.RUNNING.value)
+                select(func.count())
+                .select_from(TaskRecord)
+                .where(TaskRecord.status == TaskStatus.RUNNING.value)
             )
             return int(count or 0)
 
     def delete_task(self, task_id: str) -> bool:
         """删除任务"""
         with self._session_scope() as session:
-            result = session.execute(delete(TaskRecord).where(TaskRecord.task_id == task_id))
+            result = session.execute(
+                delete(TaskRecord).where(TaskRecord.task_id == task_id)
+            )
             return (result.rowcount or 0) > 0
 
     def cleanup_old_tasks(self, days: int = 7):
@@ -382,6 +431,58 @@ class TaskQueue:
                 )
             )
             return result.rowcount or 0
+
+    def update_heartbeat(self, task_id: str):
+        """更新任务心跳"""
+        with self._session_scope() as session:
+            row = session.get(TaskRecord, task_id)
+            if not row:
+                return
+            row.last_heartbeat = time.time()
+
+    def get_stale_tasks(self, timeout_seconds: float = 300) -> List["Task"]:
+        """获取超时任务（RUNNING 但心跳过期的任务）"""
+        cutoff = time.time() - timeout_seconds
+        with self._session_scope() as session:
+            rows = session.scalars(
+                select(TaskRecord)
+                .where(
+                    TaskRecord.status == TaskStatus.RUNNING.value,
+                    TaskRecord.last_heartbeat < cutoff,
+                )
+                .order_by(TaskRecord.started_at.asc())
+            ).all()
+            return [self._row_to_task(row) for row in rows]
+
+    def recover_stale_tasks(self, timeout_seconds: float = 300) -> int:
+        """恢复超时任务为 PENDING 状态，返回恢复的任务数量"""
+        cutoff = time.time() - timeout_seconds
+        with self._session_scope() as session:
+            result = session.execute(
+                update(TaskRecord)
+                .where(
+                    TaskRecord.status == TaskStatus.RUNNING.value,
+                    TaskRecord.last_heartbeat < cutoff,
+                )
+                .values(
+                    status=TaskStatus.PENDING.value,
+                    message="任务超时已恢复",
+                )
+            )
+            return result.rowcount or 0
+
+    def get_tasks_needing_recovery(self) -> List["Task"]:
+        """获取需要恢复的任务（数据库是 RUNNING 但没有心跳的）"""
+        with self._session_scope() as session:
+            rows = session.scalars(
+                select(TaskRecord)
+                .where(
+                    TaskRecord.status == TaskStatus.RUNNING.value,
+                    TaskRecord.last_heartbeat.is_(None),
+                )
+                .order_by(TaskRecord.started_at.asc())
+            ).all()
+            return [self._row_to_task(row) for row in rows]
 
 
 # 全局实例

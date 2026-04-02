@@ -131,13 +131,30 @@ uv run llamaindex-study kb show tech_tools
 ### 创建知识库
 
 ```bash
-uv run llamaindex-study kb create <kb_id> --name <名称> [--description <描述>]
+uv run llamaindex-study kb create <kb_id> --name <名称> [--description <描述>] [--source-type <类型>]
 ```
+
+参数说明：
+- `kb_id`: 知识库唯一标识
+- `--name`: 知识库显示名称（必填）
+- `--description`: 知识库描述（可选）
+- `--source-type`: 知识库来源类型（可选，默认 `generic`）
+  - `generic`: 通用知识库
+  - `zotero`: Zotero 文献库（数据存储到 Zotero 专用目录）
+  - `obsidian`: Obsidian 笔记库
+  - `manual`: 手动创建
 
 示例：
 
 ```bash
+# 创建通用知识库
 uv run llamaindex-study kb create my_kb --name "我的知识库" --description "个人文档"
+
+# 创建 Zotero 文献库
+uv run llamaindex-study kb create my_zotero --name "我的文献库" --source-type zotero
+
+# 创建 Obsidian 笔记库
+uv run llamaindex-study kb create my_obsidian --name "我的笔记库" --source-type obsidian
 ```
 
 ### 删除知识库
@@ -175,6 +192,50 @@ uv run llamaindex-study kb initialize tech_tools
 
 # 之后再手动导入
 uv run llamaindex-study ingest obsidian tech_tools
+```
+
+### 知识库一致性校验
+
+校验知识库数据一致性，确保 dedup 记录与 LanceDB 实际向量数据匹配。
+
+```bash
+# 校验单个知识库
+uv run llamaindex-study kb consistency <kb_id>
+
+# 校验所有知识库
+uv run llamaindex-study kb consistency
+
+# 校验并自动修复
+uv run llamaindex-study kb consistency <kb_id> --repair
+
+# 指定修复模式
+uv run llamaindex-study kb consistency <kb_id> --mode sync
+```
+
+| 参数 | 说明 |
+|------|------|
+| `kb_id` | 知识库 ID（省略则检查所有） |
+| `--repair` | 自动修复不一致（等同于 `--mode sync`） |
+| `--mode` | 修复模式：`sync`（删除orphan）、`rebuild`（重建）、`dry`（只报告，默认） |
+
+**修复模式说明：**
+
+| 模式 | 说明 |
+|------|------|
+| `dry` | 只报告差异，不修复（默认） |
+| `sync` | 删除 LanceDB 中的 orphan 向量（多余数据） |
+| `rebuild` | 重新扫描文件，需要重新导入 |
+
+**示例输出：**
+
+```
+============================================================
+📊 知识库一致性校验: animal_nutrition_breeding
+============================================================
+  Dedup 记录: 221 文件, 1247 chunks
+  LanceDB:    1247 行
+  状态: ✅ 一致
+============================================================
 ```
 
 ### 知识库主题分析

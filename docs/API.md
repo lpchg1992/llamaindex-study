@@ -125,6 +125,46 @@ curl "http://localhost:37241/tasks/abc12345"
 | GET | `/kbs/{kb_id}` | 获取知识库详情 |
 | DELETE | `/kbs/{kb_id}` | 删除知识库 |
 
+#### POST /kbs - 创建知识库
+
+```bash
+curl -X POST http://localhost:37241/kbs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": "my_kb",
+    "name": "我的知识库",
+    "description": "个人文档",
+    "source_type": "generic"
+  }'
+```
+
+参数说明：
+- `id`: 知识库唯一标识（必填）
+- `name`: 显示名称（必填）
+- `description`: 描述（可选）
+- `source_type`: 来源类型（可选，默认 `generic`）
+  - `generic`: 通用知识库，存储到 `PERSIST_DIR`
+  - `zotero`: Zotero 文献库，存储到 `ZOTERO_PERSIST_DIR`
+  - `obsidian`: Obsidian 笔记库
+  - `manual`: 手动创建
+
+响应示例：
+
+```json
+{
+  "id": "my_kb",
+  "name": "我的知识库",
+  "description": "个人文档",
+  "source_type": "generic",
+  "status": "created"
+}
+```
+
+**错误响应**（知识库已存在）：
+```json
+{"detail": "知识库 my_kb 已存在"}
+```
+
 ### 文档导入
 
 | 方法 | 端点 | 功能 |
@@ -135,6 +175,14 @@ curl "http://localhost:37241/tasks/abc12345"
 | POST | `/kbs/{kb_id}/initialize` | 初始化知识库（清空数据） |
 | GET | `/kbs/{kb_id}/topics` | 查看知识库 topics |
 | POST | `/kbs/{kb_id}/topics/refresh` | 手动刷新知识库 topics |
+
+### 知识库一致性校验
+
+| 方法 | 端点 | 功能 |
+|------|------|------|
+| GET | `/kbs/{kb_id}/consistency` | 校验知识库一致性 |
+| POST | `/kbs/{kb_id}/consistency/repair` | 修复知识库一致性 |
+| POST | `/consistency/repair-all` | 修复所有知识库的一致性 |
 
 > 导入相关端点统一走 `kb/import_service.py` 的 `ImportApplicationService`。  
 > 同一类导入在 API、CLI、脚本三种入口保持同一业务语义与参数解释。
@@ -463,12 +511,80 @@ curl "http://localhost:37241/kbs/HTE_history/topics"
 
 #### POST /kbs/{kb_id}/topics/refresh
 
-手动刷新知识库 topics（可指定是否按“有新文档”模式刷新）：
+手动刷新知识库 topics（可指定是否按"有新文档"模式刷新）：
 
 ```bash
 curl -X POST "http://localhost:37241/kbs/HTE_history/topics/refresh" \
   -H "Content-Type: application/json" \
   -d '{"has_new_docs": true}'
+```
+
+#### GET /kbs/{kb_id}/consistency
+
+校验知识库一致性，比较 dedup 记录与 LanceDB 实际向量数据：
+
+```bash
+curl "http://localhost:37241/kbs/animal_nutrition_breeding/consistency"
+```
+
+```json
+{
+  "kb_id": "animal_nutrition_breeding",
+  "dedup_files": 221,
+  "dedup_chunks": 1247,
+  "lance_rows": 1247,
+  "consistent": true,
+  "missing_chunks": 0,
+  "orphan_rows": 0,
+  "status": "consistent"
+}
+```
+
+**返回值说明：**
+
+| 字段 | 说明 |
+|------|------|
+| `dedup_files` | dedup 记录的文件数 |
+| `dedup_chunks` | dedup 记录的 chunk 总数 |
+| `lance_rows` | LanceDB 实际行数 |
+| `consistent` | 是否一致 |
+| `missing_chunks` | LanceDB 缺失的 chunk 数 |
+| `orphan_rows` | LanceDB 多余的行数 |
+| `status` | 状态：`consistent`、`missing_data`、`orphan_data`、`mixed_inconsistency` |
+
+#### POST /kbs/{kb_id}/consistency/repair
+
+修复知识库一致性：
+
+```bash
+curl -X POST "http://localhost:37241/kbs/animal_nutrition_breeding/consistency/repair" \
+  -H "Content-Type: application/json" \
+  -d '{"mode": "sync"}'
+```
+
+**mode 参数：**
+
+| 值 | 说明 |
+|----|------|
+| `sync` | 删除 LanceDB 中的 orphan 向量（多余数据） |
+| `rebuild` | 重新扫描文件重建（较慢但不丢数据） |
+| `dry` | 只报告，不修复 |
+
+#### POST /consistency/repair-all
+
+修复所有知识库的一致性：
+
+```bash
+curl -X POST "http://localhost:37241/consistency/repair-all?mode=sync"
+```
+
+```json
+{
+  "total": 5,
+  "repaired": 3,
+  "failed": 0,
+  "results": [...]
+}
 ```
 
 ---
