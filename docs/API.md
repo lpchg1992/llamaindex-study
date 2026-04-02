@@ -489,6 +489,11 @@ curl -X POST "http://localhost:37241/search" \
 curl -X POST "http://localhost:37241/search" \
   -H "Content-Type: application/json" \
   -d '{"query": "Python 异步编程", "route_mode": "auto"}'
+
+# 自动路由 + 指定模型
+curl -X POST "http://localhost:37241/search" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "Python 异步编程", "route_mode": "auto", "model_id": "ollama/lfm2.5-instruct:1.2b"}'
 ```
 
 **请求参数说明：**
@@ -498,6 +503,8 @@ curl -X POST "http://localhost:37241/search" \
 | `query` | string | 必填 | 查询内容 |
 | `route_mode` | enum | `"general"` | 路由模式：`general` 或 `auto` |
 | `top_k` | int | `5` | 返回结果数量 |
+| `model_id` | string | null | 使用的模型ID（如 `siliconflow/DeepSeek-V3.2`, `ollama/lfm2.5-instruct`），不填则使用默认模型（Ollama） |
+| `embed_model_id` | string | null | 使用的 Embedding 模型ID（如 `ollama/bge-m3:latest`） |
 | `kb_ids` | string | null | 指定知识库 ID（逗号分隔，`route_mode=general` 时必填） |
 | `exclude` | string[] | null | 排除的知识库 ID 列表（仅 `route_mode=auto` 时有效） |
 | `use_auto_merging` | bool | null | 启用 Auto-Merging（null=使用配置默认值） |

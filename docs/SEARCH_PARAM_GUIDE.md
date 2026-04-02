@@ -46,6 +46,13 @@ Search 检索有两种路由方式：
 |------|------|--------|------|
 | `use_auto_merging` | bool | null | 启用 Auto-Merging 检索 |
 
+### 模型参数
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `model_id` | string | null | 使用的模型ID（如 `siliconflow/DeepSeek-V3.2`, `ollama/lfm2.5-instruct`），不填则使用默认模型（Ollama） |
+| `embed_model_id` | string | null | 使用的 Embedding 模型ID（如 `ollama/bge-m3:latest`） |
+
 ---
 
 ## 路由模式详解
@@ -632,6 +639,17 @@ POST /search
 }
 ```
 
+### 自动路由 + 指定模型
+
+```json
+POST /search
+{
+  "query": "如何配置 Nginx 反向代理",
+  "route_mode": "auto",
+  "model_id": "ollama/lfm2.5-instruct:1.2b"
+}
+```
+
 ### 多知识库检索
 
 ```json
@@ -680,12 +698,15 @@ POST /search
 |------|--------|-------|
 | **功能** | 纯检索 | RAG 问答 |
 | **返回值** | 检索结果片段 | 答案 + 检索来源 |
-| **LLM 调用** | 无 | 有 |
-| **响应速度** | 快 | 较慢 |
+| **LLM 调用** | 仅自动路由时调用 | 有 |
+| **响应速度** | 快（普通检索） | 较慢 |
 | **适用场景** | 仅需文档片段 | 需要生成答案 |
-| **模型选择** | ❌ 不支持 | ✅ 支持 model_id |
+| **模型选择** | ✅ 支持 `model_id`（用于自动路由和答案生成） | ✅ 支持 `model_id` |
 
-> 💡 **注意**：Search 是纯向量检索，不需要 LLM，因此没有模型选择选项。模型选择仅在 Query（RAG 问答）界面中提供。
+> 💡 **说明**：
+> - Search 在**自动路由模式**下会调用 LLM 选择知识库，此时 `model_id` 控制路由使用的模型
+> - 在**多知识库查询**时，`model_id` 也用于在拼接上下文后生成综合答案
+> - Query 全程使用 LLM 生成答案
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -724,6 +745,7 @@ A: 关闭 `use_auto_merging`，使用较少的 `top_k`。
 | `--auto` | `route_mode="auto"` | 自动路由 |
 | `--kb-ids` | `kb_ids` | 指定知识库（逗号分隔） |
 | `--exclude` | `exclude` | 排除的知识库 |
+| `--model-id` | `model_id` | 指定使用的模型ID（用于自动路由） |
 | `--embed-model-id` | `embed_model_id` | 指定 Embedding 模型 |
 | `--auto-merging` | `use_auto_merging=true` | 显式开启 Auto-Merging |
 | `--no-auto-merging` | `use_auto_merging=false` | 显式关闭 Auto-Merging |

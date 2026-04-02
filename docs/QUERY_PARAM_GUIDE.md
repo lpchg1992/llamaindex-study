@@ -100,6 +100,7 @@ POST /query
 
 **有效参数**：
 - `exclude`：排除的知识库 ID 列表
+- `model_id`：指定路由和答案生成使用的模型（不填则使用默认 Ollama 模型）
 
 **示例**：
 
@@ -108,6 +109,15 @@ POST /query
 {
   "query": "如何配置 Nginx",
   "route_mode": "auto"
+}
+```
+
+```json
+POST /query
+{
+  "query": "如何配置 Nginx",
+  "route_mode": "auto",
+  "model_id": "ollama/lfm2.5-instruct:1.2b"
 }
 ```
 

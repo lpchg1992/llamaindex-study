@@ -157,6 +157,10 @@ class SearchRequest(BaseModel):
         "general",
         description="路由模式: general(用户选择知识库), auto(自动路由)",
     )
+    model_id: Optional[str] = Field(
+        None,
+        description="使用的LLM模型ID (如 siliconflow/DeepSeek-V3.2, ollama/lfm2.5-instruct)，不填则使用默认模型（Ollama）",
+    )
     embed_model_id: Optional[str] = Field(
         None,
         description="使用的 Embedding 模型ID (如 ollama/bge-m3:latest)，不填则使用默认",
@@ -994,6 +998,7 @@ def search(req: SearchRequest):
             exclude=req.exclude,
             use_auto_merging=req.use_auto_merging,
             mode="auto",
+            model_id=req.model_id,
             embed_model_id=req.embed_model_id,
         )
         return [SearchResult(**r) for r in result.get("results", [])]

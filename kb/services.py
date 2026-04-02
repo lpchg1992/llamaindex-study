@@ -859,6 +859,7 @@ class QueryRouter:
         query: str,
         top_k: int = 5,
         exclude: Optional[List[str]] = None,
+        model_id: Optional[str] = None,
     ) -> List[str]:
         """根据查询内容路由到最相关的知识库
 
@@ -866,6 +867,7 @@ class QueryRouter:
             query: 用户查询
             top_k: 返回最相关的 top_k 个知识库
             exclude: 排除的知识库 ID 列表
+            model_id: 使用的LLM模型ID (None=使用默认Ollama模型)
 
         Returns:
             知识库 ID 列表
@@ -881,7 +883,7 @@ class QueryRouter:
         if len(kbs) == 1:
             return [kbs[0]["id"]]
 
-        kb_ids = QueryRouter._llm_route(query, kbs)
+        kb_ids = QueryRouter._llm_route(query, kbs, model_id=model_id)
 
         if not kb_ids:
             kb_ids = QueryRouter._keyword_route(query, kbs)
@@ -892,11 +894,23 @@ class QueryRouter:
         return kb_ids[:top_k]
 
     @staticmethod
-    def _llm_route(query: str, kbs: List[Dict[str, Any]]) -> List[str]:
-        try:
-            import httpx
+    def _llm_route(
+        query: str,
+        kbs: List[Dict[str, Any]],
+        model_id: Optional[str] = None,
+    ) -> List[str]:
+        """使用 LLM 进行知识库路由
 
-            settings = get_settings()
+        Args:
+            query: 用户查询
+            kbs: 知识库列表
+            model_id: 使用的LLM模型ID (None=使用默认Ollama模型)
+
+        Returns:
+            知识库 ID 列表
+        """
+        try:
+            from llamaindex_study.ollama_utils import create_llm
 
             kb_descriptions = []
             for kb in kbs:
@@ -925,23 +939,9 @@ class QueryRouter:
 
 请只返回 ID 列表，不要其他内容。"""
 
-            resp = httpx.post(
-                f"{settings.siliconflow_base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings.siliconflow_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": settings.siliconflow_model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 100,
-                    "temperature": 0.3,
-                },
-                timeout=20.0,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            result = data["choices"][0]["message"]["content"].strip()
+            llm = create_llm(model_id=model_id)
+            response = llm.complete(prompt)
+            result = response.text.strip()
 
             selected = [kb_id.strip() for kb_id in result.split(",")]
 
@@ -1041,6 +1041,7 @@ class QueryRouter:
         mode: str = "auto",
         exclude: Optional[List[str]] = None,
         use_auto_merging: Optional[bool] = None,
+        model_id: Optional[str] = None,
         embed_model_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         if mode == "all":
@@ -1048,7 +1049,7 @@ class QueryRouter:
             exclude = exclude or []
             kb_ids = [kb["id"] for kb in all_kbs if kb["id"] not in exclude]
         else:
-            kb_ids = QueryRouter.route(query, exclude=exclude)
+            kb_ids = QueryRouter.route(query, exclude=exclude, model_id=model_id)
 
         if not kb_ids:
             return {"results": [], "kbs_queried": [], "query": query}

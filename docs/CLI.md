@@ -237,6 +237,7 @@ uv run llamaindex-study search "<查询词>" --auto [-k <top_k>] [--exclude <kb1
 | `--kb-ids` | 指定多个知识库 ID（逗号分隔，general 模式必填） | 无 |
 | `--auto` | 自动选择知识库（auto 模式） | False |
 | `--exclude` | 排除的知识库 ID（逗号分隔，仅 auto 模式有效） | 无 |
+| `--model-id` | 指定使用的模型 ID（如 `ollama/lfm2.5-instruct:1.2b`），用于自动路由和答案生成 | 使用默认模型（Ollama） |
 | `--embed-model-id` | 指定 Embedding 模型 ID | 使用默认模型 |
 | `--auto-merging/--no-auto-merging` | 显式开启/关闭 Auto-Merging（不传则使用配置默认值） | 配置默认值 |
 
@@ -248,6 +249,9 @@ uv run llamaindex-study search "Python 异步编程" --kb-ids tech_tools,academi
 
 # 自动选择知识库检索
 uv run llamaindex-study search "Python 异步编程" --auto -k 5
+
+# 自动路由并指定模型
+uv run llamaindex-study search "如何配置 Nginx" --auto --model-id ollama/lfm2.5-instruct:1.2b
 
 # 指定 Embedding 模型
 uv run llamaindex-study search "Python 异步编程" --kb-ids tech_tools --embed-model-id ollama/bge-m3:latest

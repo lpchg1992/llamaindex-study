@@ -802,6 +802,7 @@ def handle_search(args: argparse.Namespace) -> int:
 
     use_auto_merging = getattr(args, "use_auto_merging", None)
     embed_model_id = getattr(args, "embed_model_id", None)
+    model_id = getattr(args, "model_id", None)
 
     auto_mode = getattr(args, "auto", False)
     kb_ids = getattr(args, "kb_ids", None)
@@ -827,6 +828,7 @@ def handle_search(args: argparse.Namespace) -> int:
             top_k=args.top_k,
             exclude=exclude,
             use_auto_merging=use_auto_merging,
+            model_id=model_id,
             embed_model_id=embed_model_id,
         )
     else:
@@ -1750,6 +1752,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--embed-model-id",
         default=None,
         help="使用的Embedding模型ID (如 ollama/bge-m3:latest)",
+    )
+    search_parser.add_argument(
+        "--model-id",
+        default=None,
+        help="使用的LLM模型ID (如 ollama/lfm2.5-instruct:1.2b)，不填则使用默认Ollama模型",
     )
     search_parser.add_argument(
         "--auto-merging",
