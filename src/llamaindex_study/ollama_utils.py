@@ -10,6 +10,7 @@ import time
 from typing import Any, List, Optional
 
 from llama_index.embeddings.ollama import OllamaEmbedding
+from llama_index.llms.ollama import Ollama
 
 logger = logging.getLogger(__name__)
 
@@ -160,11 +161,11 @@ def configure_llamaindex_for_siliconflow() -> None:
     )
 
 
-class RetryableOllama:
-    """Ollama LLM 包装类，支持 503 错误重试
+class RetryableOllama(Ollama):
+    """Ollama LLM 子类，支持 503 错误重试
 
     当 Ollama 模型未加载时，会返回 503 Service Unavailable。
-    此包装类会自动重试请求，直到模型加载完成。
+    此子类会自动重试请求，直到模型加载完成。
     """
 
     def __init__(
@@ -174,13 +175,13 @@ class RetryableOllama:
         max_retries: int = 5,
         initial_delay: float = 2.0,
         backoff_factor: float = 1.5,
+        **kwargs,
     ):
-        from llama_index.llms.ollama import Ollama
-
-        self._ollama = Ollama(
+        super().__init__(
             model=model,
             base_url=base_url,
             request_timeout=300,
+            **kwargs,
         )
         self._max_retries = max_retries
         self._initial_delay = initial_delay
@@ -197,7 +198,7 @@ class RetryableOllama:
 
         for attempt in range(self._max_retries):
             try:
-                method = getattr(self._ollama, method_name)
+                method = getattr(super(), method_name)
                 return method(*args, **kwargs)
             except Exception as e:
                 last_error = e
@@ -233,8 +234,17 @@ class RetryableOllama:
     def stream_chat(self, messages: Any, **kwargs) -> Any:
         return self._call_with_retry("stream_chat", messages, **kwargs)
 
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._ollama, name)
+    async def acomplete(self, prompt: str, **kwargs) -> Any:
+        return self._call_with_retry("acomplete", prompt, **kwargs)
+
+    async def achat(self, messages: Any, **kwargs) -> Any:
+        return self._call_with_retry("achat", messages, **kwargs)
+
+    async def astream_complete(self, prompt: str, **kwargs) -> Any:
+        return self._call_with_retry("astream_complete", prompt, **kwargs)
+
+    async def astream_chat(self, messages: Any, **kwargs) -> Any:
+        return self._call_with_retry("astream_chat", messages, **kwargs)
 
 
 def create_llm(
