@@ -5,89 +5,66 @@ Ollama 工具模块
 """
 
 import asyncio
+import logging
+import time
 from typing import Any, List, Optional
 
 from llama_index.embeddings.ollama import OllamaEmbedding
 
+logger = logging.getLogger(__name__)
 
-class OllamaEmbedder:
-    """Ollama Embedding 封装类，使用正确的 /api/embed 端点"""
 
-    def __init__(self, model_name: str, base_url: str):
-        self.model_name = model_name
-        self.base_url = base_url
-        self._sync_model = None
+class OllamaEmbedder(OllamaEmbedding):
+    """Ollama Embedding 封装类，继承自 OllamaEmbedding，支持 503 重试"""
 
-    def _get_sync_model(self):
-        """获取同步 embedding 模型（懒加载）"""
-        if self._sync_model is None:
-            self._sync_model = OllamaEmbedding(
-                model_name=self.model_name,
-                base_url=self.base_url,
-            )
-        return self._sync_model
+    def __init__(
+        self,
+        model_name: str,
+        base_url: str,
+        max_retries: int = 5,
+        initial_delay: float = 2.0,
+        backoff_factor: float = 1.5,
+    ):
+        super().__init__(model_name=model_name, base_url=base_url)
+        self._max_retries = max_retries
+        self._initial_delay = initial_delay
+        self._backoff_factor = backoff_factor
+
+    def _call_with_retry(self, method, *args, **kwargs):
+        """带重试的调用"""
+        last_error: BaseException = Exception("Unknown error")
+        delay = self._initial_delay
+
+        for attempt in range(self._max_retries):
+            try:
+                return method(*args, **kwargs)
+            except Exception as e:
+                last_error = e
+                error_str = str(e).lower()
+
+                if "503" in error_str or "service unavailable" in error_str:
+                    logger.warning(
+                        f"Embedding 模型加载中 (尝试 {attempt + 1}/{self._max_retries})，"
+                        f"等待 {delay:.1f}s: {e}"
+                    )
+                    time.sleep(delay)
+                    delay *= self._backoff_factor
+                else:
+                    raise
+
+        raise last_error
 
     def get_text_embedding(self, text: str) -> List[float]:
-        """同步获取单条 embedding"""
-        return self._call_ollama_embed(text)
+        return self._call_with_retry(super().get_text_embedding, text)
 
-    def aget_text_embedding(self, text: str) -> List[float]:
-        """异步获取单条 embedding"""
-        import asyncio
-
-        try:
-            asyncio.get_running_loop()
-            return asyncio.run(self._call_ollama_embed_async(text))
-        except RuntimeError:
-            return self._call_ollama_embed(text)
+    async def aget_text_embedding(self, text: str) -> List[float]:
+        return self._call_with_retry(super().aget_text_embedding, text)
 
     def get_text_embeddings(self, texts: List[str]) -> List[List[float]]:
-        """同步批量获取 embeddings"""
-        return [self._call_ollama_embed(text) for text in texts]
+        return self._call_with_retry(super().get_text_embeddings, texts)
 
     async def aget_text_embeddings(self, texts: List[str]) -> List[List[float]]:
-        """异步批量获取 embeddings"""
-        return [self._call_ollama_embed(text) for text in texts]
-
-    def _call_ollama_embed(self, text: str) -> List[float]:
-        """直接调用 Ollama /api/embed 端点"""
-        import httpx
-
-        model_name = self.model_name
-        if not model_name.endswith(":latest"):
-            model_name = f"{model_name}:latest"
-
-        payload = {
-            "model": model_name,
-            "input": text[:8192],
-        }
-
-        with httpx.Client(timeout=60.0) as client:
-            response = client.post(f"{self.base_url}/api/embed", json=payload)
-            if response.status_code != 200:
-                raise Exception(f"API error: {response.status_code}")
-            result = response.json()
-            return result["embedding"]
-
-    async def _call_ollama_embed_async(self, text: str) -> List[float]:
-        """异步调用 Ollama /api/embed 端点"""
-        import httpx
-
-        model_name = self.model_name
-        if not model_name.endswith(":latest"):
-            model_name = f"{model_name}:latest"
-
-        payload = {
-            "model": model_name,
-            "input": text[:8192],
-        }
-
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(f"{self.base_url}/api/embed", json=payload)
-            if response.status_code != 200:
-                raise Exception(f"API error: {response.status_code}")
-            result = response.json()
-            return result["embedding"]
+        return self._call_with_retry(super().aget_text_embeddings, texts)
 
 
 from llama_index.core import Settings as LlamaSettings
@@ -98,11 +75,14 @@ from llamaindex_study.config import get_settings
 def create_ollama_embedding(
     model: Optional[str] = None,
     base_url: Optional[str] = None,
-) -> OllamaEmbedding:
+) -> OllamaEmbedder:
     settings = get_settings()
-    return OllamaEmbedding(
+    return OllamaEmbedder(
         model_name=model or settings.ollama_embed_model,
         base_url=base_url or settings.ollama_base_url,
+        max_retries=settings.ollama_max_retries,
+        initial_delay=settings.ollama_retry_delay,
+        backoff_factor=1.5,
     )
 
 
@@ -121,6 +101,8 @@ def configure_global_embed_model(
     LlamaSettings.embed_model = embed_model
     LlamaSettings.chunk_size = chunk_size
     LlamaSettings.embed_batch_size = embed_batch_size
+
+    return embed_model
 
     return embed_model
 
@@ -347,15 +329,16 @@ def configure_llm_by_model_id(model_id: str) -> None:
     vendor_info = vendor_db.get(vendor_id) if vendor_id else None
 
     if vendor_id == "ollama":
-        from llama_index.llms.ollama import Ollama
-
+        settings = get_settings()
         base_url = (
             vendor_info.get("api_base") if vendor_info else None
-        ) or get_settings().ollama_base_url
-        llm = Ollama(
+        ) or settings.ollama_base_url
+        llm = RetryableOllama(
             model=model_info["name"],
             base_url=base_url,
-            request_timeout=300,
+            max_retries=settings.ollama_max_retries,
+            initial_delay=settings.ollama_retry_delay,
+            backoff_factor=1.5,
         )
         LlamaSettings.llm = llm
     else:
@@ -397,10 +380,22 @@ def configure_embed_model_by_model_id(model_id: str) -> OllamaEmbedding:
         vendor_info.get("api_base") if vendor_info else None
     ) or get_settings().ollama_base_url
 
-    embed_model = OllamaEmbedding(
-        model_name=model_info["name"],
-        base_url=base_url,
-    )
+    settings = get_settings()
+    is_ollama = vendor_id.startswith("ollama") or model_id.startswith("ollama")
+
+    if is_ollama:
+        embed_model = OllamaEmbedder(
+            model_name=model_info["name"],
+            base_url=base_url,
+            max_retries=settings.ollama_max_retries,
+            initial_delay=settings.ollama_retry_delay,
+            backoff_factor=1.5,
+        )
+    else:
+        embed_model = OllamaEmbedding(
+            model_name=model_info["name"],
+            base_url=base_url,
+        )
 
     LlamaSettings.embed_model = embed_model
     return embed_model
