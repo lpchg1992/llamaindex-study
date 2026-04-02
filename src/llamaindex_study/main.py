@@ -853,6 +853,7 @@ def handle_query(args: argparse.Namespace) -> int:
 
     use_hyde = getattr(args, "use_hyde", None)
     use_multi_query = getattr(args, "use_multi_query", None)
+    num_multi_queries = getattr(args, "num_multi_queries", None)
     use_auto_merging = getattr(args, "use_auto_merging", None)
     response_mode = getattr(args, "response_mode", None)
     model_id = getattr(args, "model_id", None)
@@ -885,6 +886,7 @@ def handle_query(args: argparse.Namespace) -> int:
             exclude=exclude,
             use_hyde=use_hyde,
             use_multi_query=use_multi_query,
+            num_multi_queries=num_multi_queries,
             use_auto_merging=use_auto_merging,
             response_mode=response_mode,
             retrieval_mode=retrieval_mode,
@@ -904,6 +906,7 @@ def handle_query(args: argparse.Namespace) -> int:
             top_k=args.top_k,
             use_hyde=use_hyde,
             use_multi_query=use_multi_query,
+            num_multi_queries=num_multi_queries,
             use_auto_merging=use_auto_merging,
             response_mode=response_mode,
             retrieval_mode=retrieval_mode,
@@ -1786,6 +1789,13 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=None,
         help="启用多查询转换（生成多个查询变体减少遗漏）",
+    )
+    query_parser.add_argument(
+        "--num-multi-queries",
+        dest="num_multi_queries",
+        type=int,
+        default=None,
+        help="多查询变体数量（需配合 --multi-query 使用，默认 3）",
     )
     query_parser.add_argument(
         "--auto-merging",

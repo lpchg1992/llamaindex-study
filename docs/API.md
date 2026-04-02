@@ -935,6 +935,7 @@ curl -X POST "http://localhost:37241/search" \
 | `USE_HYDE` | `false` | 启用 HyDE 查询转换 |
 | `USE_QUERY_REWRITE` | `false` | 启用 Query Rewriting |
 | `USE_MULTI_QUERY` | `false` | 启用多查询转换 |
+| `MULTI_QUERY_NUM` | `3` | 多查询生成变体数量 |
 | `RESPONSE_MODE` | `compact` | 答案生成模式 |
 
 ### Reranker 配置

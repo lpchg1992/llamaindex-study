@@ -130,7 +130,9 @@ POST /query
 
 ### 2. use_multi_query（多查询转换）
 
-**作用**：使用 LLM 生成 N 个查询变体，分别检索后融合结果。
+**作用**：使用 LLM 生成 N 个查询变体，分别检索后通过 RRF（Reciprocal Rank Fusion）融合结果。
+
+**配置**：`MULTI_QUERY_NUM` 环境变量控制生成变体数量（默认 3 个）
 
 **适用场景**：
 - 查询可能涉及多个方面
@@ -460,6 +462,7 @@ A: 关闭 `use_hyde`、`use_auto_merging`，使用默认 `compact` 模式。
 | `--no-hyde` | `use_hyde=false` | 显式关闭 HyDE 查询转换 |
 | `--multi-query` | `use_multi_query=true` | 显式开启多查询转换 |
 | `--no-multi-query` | `use_multi_query=false` | 显式关闭多查询转换 |
+| `--num-multi-queries` | `num_multi_queries=N` | 多查询变体数量 |
 | `--auto-merging` | `use_auto_merging=true` | 显式开启 Auto-Merging |
 | `--no-auto-merging` | `use_auto_merging=false` | 显式关闭 Auto-Merging |
 | `--response-mode` | `response_mode` | 答案生成模式 |
@@ -475,6 +478,7 @@ A: 关闭 `use_hyde`、`use_auto_merging`，使用默认 `compact` 模式。
 ```env
 USE_HYDE=false
 USE_MULTI_QUERY=false
+MULTI_QUERY_NUM=3
 USE_AUTO_MERGING=false
 USE_RERANKER=true
 RESPONSE_MODE=compact

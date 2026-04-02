@@ -32,6 +32,7 @@ class QueryEngineWrapper:
         mode: str = "vector",
         use_hyde: bool = False,
         use_multi_query: bool = False,
+        num_multi_queries: Optional[int] = None,
         response_mode: str = "compact",
         vector_store: Optional[Any] = None,
         model_id: Optional[str] = None,
@@ -48,6 +49,7 @@ class QueryEngineWrapper:
             mode: 检索模式 ("vector", "hybrid")，默认 "vector"
             use_hyde: 是否使用 HyDE（假设文档嵌入）
             use_multi_query: 是否使用多查询转换
+            num_multi_queries: 多查询变体数量（None=使用配置默认值）
             response_mode: Response Synthesizer 模式
             vector_store: 向量存储实例（用于检测 chunk_strategy）
             model_id: 使用的模型ID (None=使用默认模型)
@@ -65,6 +67,7 @@ class QueryEngineWrapper:
         self.mode = mode
         self.use_hyde = use_hyde or self.settings.use_hyde
         self.use_multi_query = use_multi_query or self.settings.use_multi_query
+        self.num_multi_queries = num_multi_queries or self.settings.num_multi_queries
         self.response_mode = response_mode or self.settings.response_mode
         self.model_id = model_id
 
@@ -148,6 +151,27 @@ class QueryEngineWrapper:
 
         retriever = self._create_retriever()
 
+        if self.use_multi_query and not self.use_hyde:
+            try:
+                from llamaindex_study.query_transform import (
+                    MultiQueryFusionRetriever,
+                )
+
+                multi_retriever = MultiQueryFusionRetriever(
+                    base_retriever=retriever,
+                    llm=self._get_llm(),
+                    num_queries=self.num_multi_queries,
+                    top_k=self.top_k,
+                )
+                retriever = multi_retriever
+                logger.info(
+                    f"启用 Multi-Query 多查询变体融合: num_queries={self.num_multi_queries}"
+                )
+            except ImportError as e:
+                logger.warning(f"Multi-Query 功能不可用: {e}")
+            except Exception as e:
+                logger.warning(f"Multi-Query 功能初始化失败: {e}")
+
         kwargs: dict[str, Any] = {
             "response_mode": self.response_mode,
         }
@@ -184,44 +208,6 @@ class QueryEngineWrapper:
                 logger.info("启用 HyDE 查询转换")
             except Exception as e:
                 logger.warning(f"HyDE 查询转换初始化失败: {e}")
-
-        if self.use_multi_query:
-            try:
-                from llama_index.core.indices.query.query_transform import (
-                    StepDecomposeQueryTransform,
-                )
-                from llama_index.core.query_engine import MultiStepQueryEngine
-
-                def _multi_query_stop_fn(stop_dict):
-                    """自定义 stop 函数，避免 LlamaIndex 默认 stop_fn 的问题
-
-                    默认 stop_fn 会检查 query_str 是否包含 "none"，
-                    但这会错误地停止 LLM 生成的包含 "None" 的有效查询。
-                    """
-                    query_bundle = stop_dict.get("query_bundle")
-                    if query_bundle is None:
-                        return True
-                    query_str = query_bundle.query_str.lower().strip()
-                    # 只在明确表示"无结果"时停止
-                    if query_str in ("none", "n/a", "null", "无", "没有", ""):
-                        return True
-                    return False
-
-                step_decompose = StepDecomposeQueryTransform(llm=self._get_llm())
-                multi_engine = MultiStepQueryEngine(
-                    query_engine=base_engine,
-                    query_transform=step_decompose,
-                    num_steps=2,
-                    early_stopping=False,
-                    stop_fn=_multi_query_stop_fn,
-                )
-                logger.info("启用 Multi-Query 查询转换 (优化版 stop_fn)")
-                base_engine = multi_engine
-
-            except ImportError as e:
-                logger.warning(f"Multi-Query 功能不可用: {e}")
-            except Exception as e:
-                logger.warning(f"Multi-Query 功能初始化失败: {e}")
 
         return base_engine
 
@@ -327,6 +313,7 @@ def create_query_engine(
     use_auto_merging: bool = False,
     use_hyde: bool = False,
     use_multi_query: bool = False,
+    num_multi_queries: Optional[int] = None,
     response_mode: str = "compact",
     model_id: Optional[str] = None,
 ) -> Any:
@@ -340,6 +327,7 @@ def create_query_engine(
         use_auto_merging: 是否使用 Auto-Merging Retriever（需要知识库使用 HierarchicalNodeParser 构建）
         use_hyde: 是否使用 HyDE（假设文档嵌入）
         use_multi_query: 是否使用多查询转换
+        num_multi_queries: 多查询变体数量（None=使用配置默认值）
         response_mode: Response Synthesizer 模式
         model_id: 使用的模型ID (None=使用默认模型)
 
@@ -364,6 +352,7 @@ def create_query_engine(
         mode=mode,
         use_hyde=use_hyde,
         use_multi_query=use_multi_query,
+        num_multi_queries=num_multi_queries,
         response_mode=response_mode,
         vector_store=vector_store,
         model_id=model_id,

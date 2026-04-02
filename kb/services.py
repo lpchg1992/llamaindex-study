@@ -782,6 +782,7 @@ class SearchService:
         top_k: int = 5,
         use_hyde: Optional[bool] = None,
         use_multi_query: Optional[bool] = None,
+        num_multi_queries: Optional[int] = None,
         use_auto_merging: Optional[bool] = None,
         response_mode: Optional[str] = None,
         model_id: Optional[str] = None,
@@ -811,11 +812,12 @@ class SearchService:
             use_multi_query=use_multi_query
             if use_multi_query is not None
             else settings.use_multi_query,
+            num_multi_queries=num_multi_queries,
             response_mode=response_mode or settings.response_mode,
             model_id=model_id,
         )
         logger.info(
-            f"[SearchService.query] use_hyde={use_hyde}, use_multi_query={use_multi_query}, query_engine={type(query_engine).__name__}"
+            f"[SearchService.query] use_hyde={use_hyde}, use_multi_query={use_multi_query}, num_multi_queries={num_multi_queries}, query_engine={type(query_engine).__name__}"
         )
         response = query_engine.query(query)
         logger.info(
@@ -1164,6 +1166,7 @@ class QueryRouter:
         exclude: Optional[List[str]] = None,
         use_hyde: Optional[bool] = None,
         use_multi_query: Optional[bool] = None,
+        num_multi_queries: Optional[int] = None,
         use_auto_merging: Optional[bool] = None,
         response_mode: Optional[str] = None,
         retrieval_mode: str = "vector",
@@ -1179,6 +1182,7 @@ class QueryRouter:
             exclude: 排除的知识库 ID 列表
             use_hyde: 启用 HyDE（None=使用配置默认值）
             use_multi_query: 启用多查询转换（None=使用配置默认值）
+            num_multi_queries: 多查询变体数量（None=使用配置默认值）
             use_auto_merging: 启用 Auto-Merging（None=使用配置默认值）
             response_mode: 答案生成模式（None=使用配置默认值）
             retrieval_mode: 检索模式 (vector, hybrid)
@@ -1222,6 +1226,7 @@ class QueryRouter:
                 top_k=top_k,
                 use_hyde=use_hyde,
                 use_multi_query=use_multi_query,
+                num_multi_queries=num_multi_queries,
                 use_auto_merging=use_auto_merging,
                 response_mode=response_mode,
                 model_id=model_id,
@@ -1245,6 +1250,7 @@ class QueryRouter:
         top_k: int = 5,
         use_hyde: Optional[bool] = None,
         use_multi_query: Optional[bool] = None,
+        num_multi_queries: Optional[int] = None,
         use_auto_merging: Optional[bool] = None,
         response_mode: Optional[str] = None,
         retrieval_mode: str = "vector",
@@ -1279,6 +1285,7 @@ class QueryRouter:
                 top_k=top_k,
                 use_hyde=use_hyde,
                 use_multi_query=use_multi_query,
+                num_multi_queries=num_multi_queries,
                 use_auto_merging=use_auto_merging,
                 response_mode=response_mode,
                 model_id=model_id,

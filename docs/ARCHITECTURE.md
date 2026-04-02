@@ -792,6 +792,8 @@ uv run llamaindex-study kb topics --all --update
 用户查询 → LLM 生成 N 个查询变体 → 分别检索 → RRF 融合结果
 ```
 
+**配置**：通过 `MULTI_QUERY_NUM` 环境变量控制生成变体数量（默认 3 个）
+
 ## 数据库 Schema
 
 ### SQLite: 任务队列 (tasks.db)

@@ -213,6 +213,9 @@ class QueryRequest(BaseModel):
     use_multi_query: Optional[bool] = Field(
         None, description="启用多查询转换（None=使用配置默认值）"
     )
+    num_multi_queries: Optional[int] = Field(
+        None, description="多查询变体数量（None=使用配置默认值）"
+    )
     use_auto_merging: Optional[bool] = Field(
         None, description="启用 Auto-Merging（None=使用配置默认值）"
     )
@@ -1039,6 +1042,7 @@ def query(req: QueryRequest):
                 mode="auto",
                 use_hyde=req.use_hyde,
                 use_multi_query=req.use_multi_query,
+                num_multi_queries=req.num_multi_queries,
                 use_auto_merging=req.use_auto_merging,
                 response_mode=req.response_mode,
                 retrieval_mode=req.retrieval_mode,
@@ -1055,6 +1059,7 @@ def query(req: QueryRequest):
             top_k=req.top_k,
             use_hyde=req.use_hyde,
             use_multi_query=req.use_multi_query,
+            num_multi_queries=req.num_multi_queries,
             use_auto_merging=req.use_auto_merging,
             response_mode=req.response_mode,
             retrieval_mode=req.retrieval_mode,

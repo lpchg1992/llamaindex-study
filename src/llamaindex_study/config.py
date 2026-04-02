@@ -145,6 +145,7 @@ class Settings:
         self.use_multi_query: bool = (
             os.getenv("USE_MULTI_QUERY", "false").lower() == "true"
         )
+        self.num_multi_queries: int = int(os.getenv("MULTI_QUERY_NUM", "3"))
 
         # ========== Response Synthesizer 配置 ==========
         self.response_mode: str = os.getenv("RESPONSE_MODE", "compact")

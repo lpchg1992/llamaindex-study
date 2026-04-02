@@ -259,8 +259,8 @@ uv run llamaindex-study search "赖氨酸配比" --auto --exclude tech_tools,aca
 ### RAG 问答
 
 ```bash
-uv run llamaindex-study query "<问题>" --kb-ids <kb1,kb2> [-k <top_k>] [--hyde|--no-hyde] [--multi-query|--no-multi-query] [--auto-merging|--no-auto-merging] [--response-mode <mode>] [--model-id <model_id>] [--embed-model-id <embed_model_id>]
-uv run llamaindex-study query "<问题>" --auto [-k <top_k>] [--exclude <kb1,kb2>] [--hyde|--no-hyde] [--multi-query|--no-multi-query] [--auto-merging|--no-auto-merging] [--response-mode <mode>] [--model-id <model_id>] [--embed-model-id <embed_model_id>]
+uv run llamaindex-study query "<问题>" --kb-ids <kb1,kb2> [-k <top_k>] [--hyde|--no-hyde] [--multi-query|--no-multi-query] [--num-multi-queries <N>] [--auto-merging|--no-auto-merging] [--response-mode <mode>] [--model-id <model_id>] [--embed-model-id <embed_model_id>]
+uv run llamaindex-study query "<问题>" --auto [-k <top_k>] [--exclude <kb1,kb2>] [--hyde|--no-hyde] [--multi-query|--no-multi-query] [--num-multi-queries <N>] [--auto-merging|--no-auto-merging] [--response-mode <mode>] [--model-id <model_id>] [--embed-model-id <embed_model_id>]
 ```
 
 参数说明：
@@ -272,6 +272,7 @@ uv run llamaindex-study query "<问题>" --auto [-k <top_k>] [--exclude <kb1,kb2
 | `--exclude` | 排除的知识库 ID（逗号分隔，仅 auto 模式有效） | 无 |
 | `--hyde/--no-hyde` | 显式开启/关闭 HyDE 查询转换（不传则使用配置默认值） | 配置默认值 |
 | `--multi-query/--no-multi-query` | 显式开启/关闭多查询转换（不传则使用配置默认值） | 配置默认值 |
+| `--num-multi-queries` | 多查询变体数量（需配合 --multi-query 使用） | 3 |
 | `--auto-merging/--no-auto-merging` | 显式开启/关闭 Auto-Merging Retriever（不传则使用配置默认值） | 配置默认值 |
 | `--model-id` | 指定使用的模型 ID (如 `siliconflow/DeepSeek-V3.2`, `ollama/lfm2.5-instruct`) | 使用默认模型 |
 | `--embed-model-id` | 指定使用的 Embedding 模型 ID | 使用默认模型 |
@@ -1180,6 +1181,7 @@ uv run llamaindex-study config set RESPONSE_MODE refine
 | `HYBRID_SEARCH_ALPHA` | 混合搜索权重（1=仅向量） | `0.0`-`1.0` |
 | `USE_HYDE` | 启用 HyDE 查询转换 | `true`/`false` |
 | `USE_MULTI_QUERY` | 启用多查询转换 | `true`/`false` |
+| `MULTI_QUERY_NUM` | 多查询生成变体数量 | 整数（默认 3） |
 | `USE_QUERY_REWRITE` | 启用 Query Rewriting | `true`/`false` |
 | `RESPONSE_MODE` | 答案生成模式 | `compact`/`refine`/`tree_summarize`/`simple`/`no_text`/`accumulate` |
 | `USE_AUTO_MERGING` | 启用 Auto-Merging Retriever | `true`/`false` |
