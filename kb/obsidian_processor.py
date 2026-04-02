@@ -19,7 +19,11 @@ from typing import List, Optional, Set, Any
 
 from llama_index.core.schema import Document as LlamaDocument
 
-from kb.document_processor import DocumentProcessor, DocumentProcessorConfig, ProcessingProgress
+from kb.document_processor import (
+    DocumentProcessor,
+    DocumentProcessorConfig,
+    ProcessingProgress,
+)
 from kb.deduplication import DeduplicationManager
 from llamaindex_study.logger import get_logger
 
@@ -29,6 +33,7 @@ logger = get_logger(__name__)
 @dataclass
 class ObsidianNote:
     """Obsidian 笔记"""
+
     file_path: Path
     title: str
     content: str
@@ -79,7 +84,7 @@ class ObsidianImporter:
         self._dedup_manager: Optional[DeduplicationManager] = None
         if kb_id and persist_dir:
             uri = str(persist_dir)
-            if vector_store and hasattr(vector_store, '_get_lance_vector_store'):
+            if vector_store and hasattr(vector_store, "_get_lance_vector_store"):
                 try:
                     uri = vector_store._get_lance_vector_store().uri
                 except Exception:
@@ -148,15 +153,23 @@ class ObsidianImporter:
                         if value.startswith("["):
                             try:
                                 tags_list = ast.literal_eval(value)
-                                metadata["tags_list"] = tags_list if isinstance(tags_list, list) else [tags_list]
+                                metadata["tags_list"] = (
+                                    tags_list
+                                    if isinstance(tags_list, list)
+                                    else [tags_list]
+                                )
                             except (ValueError, SyntaxError):
-                                metadata["tags_list"] = [v.strip() for v in value.strip("[]").split(",")]
+                                metadata["tags_list"] = [
+                                    v.strip() for v in value.strip("[]").split(",")
+                                ]
                         elif "," in value:
-                            metadata["tags_list"] = [v.strip() for v in value.split(",")]
+                            metadata["tags_list"] = [
+                                v.strip() for v in value.split(",")
+                            ]
                         else:
                             metadata["tags_list"] = [value]
 
-            content = content[match.end():]
+            content = content[match.end() :]
 
         return content, metadata
 
@@ -189,7 +202,9 @@ class ObsidianImporter:
         content = re.sub(r"\n{3,}", "\n\n", content)
 
         # 8. 移除空链接行
-        content = re.sub(r"^\s*[-*]\s*\[\[[^\]]+\]\]\s*$", "", content, flags=re.MULTILINE)
+        content = re.sub(
+            r"^\s*[-*]\s*\[\[[^\]]+\]\]\s*$", "", content, flags=re.MULTILINE
+        )
 
         return content.strip()
 
@@ -224,7 +239,9 @@ class ObsidianImporter:
                 return None
 
             # 获取标题
-            title = fm_metadata.get("title") or fm_metadata.get("alias") or file_path.stem
+            title = (
+                fm_metadata.get("title") or fm_metadata.get("alias") or file_path.stem
+            )
 
             return ObsidianNote(
                 file_path=file_path,
@@ -279,6 +296,7 @@ class ObsidianImporter:
         on_progress: Optional[callable] = None,
         exclude_patterns: Optional[List[str]] = None,
         recursive: bool = True,
+        force_delete: bool = True,
     ) -> dict:
         """
         导入整个目录（支持增量同步）
@@ -319,8 +337,13 @@ class ObsidianImporter:
             to_add, to_update, to_delete, unchanged = dedup_manager.detect_changes(
                 files, self.vault_root
             )
-            logger.info(f"增量同步: 新增 {len(to_add)}, 更新 {len(to_update)}, "
-                        f"删除 {len(to_delete)}, 未变 {len(unchanged)}")
+            logger.info(
+                f"增量同步: 新增 {len(to_add)}, 更新 {len(to_update)}, "
+                f"删除 {len(to_delete)}, 未变 {len(unchanged)}"
+            )
+
+            if to_delete and force_delete:
+                self._process_deletes(vector_store, to_delete, dedup_manager)
 
             # 过滤文件列表，只处理新增和更新的
             files_to_process = []
@@ -371,9 +394,13 @@ class ObsidianImporter:
                 continue
 
             if i % 10 == 0:
-                elapsed = time.time() - (progress.started_at if progress else time.time())
-                logger.info(f"进度: {i+1}/{len(files)} ({100*(i+1)//len(files)}%), "
-                            f"节点: {stats['nodes']}, 耗时: {elapsed:.0f}s")
+                elapsed = time.time() - (
+                    progress.started_at if progress else time.time()
+                )
+                logger.info(
+                    f"进度: {i + 1}/{len(files)} ({100 * (i + 1) // len(files)}%), "
+                    f"节点: {stats['nodes']}, 耗时: {elapsed:.0f}s"
+                )
 
             if on_progress:
                 on_progress(i + 1, len(files), file_path.name)
@@ -475,13 +502,48 @@ class ObsidianImporter:
             logger.debug("去重状态已保存")
 
         # 处理 PDF 附件
-        pdf_stats = self.import_pdf_attachments(directory, vector_store, embed_model, progress)
+        pdf_stats = self.import_pdf_attachments(
+            directory, vector_store, embed_model, progress
+        )
         stats["nodes"] += pdf_stats.get("nodes", 0)
 
         # 恢复原来的排除模式
         self.exclude_patterns = original_exclude
 
         return stats
+
+    def _process_deletes(
+        self,
+        vector_store,
+        to_delete: List[Any],
+        dedup_manager: "DeduplicationManager",
+    ) -> None:
+        import lancedb
+
+        doc_ids = [c.doc_id for c in to_delete if c.doc_id]
+        if not doc_ids:
+            return
+
+        try:
+            lance_store = vector_store._get_lance_vector_store()
+            db = lancedb.connect(str(lance_store.uri))
+            if db.list_table_names():
+                table = db.open_table(self.kb_id)
+                data = table.to_pandas()
+
+                if not data.empty and "_row_id" in data.columns:
+                    to_keep = ~data["_row_id"].astype(str).isin(doc_ids)
+                    remaining = data[to_keep]
+
+                    db.drop_table(self.kb_id)
+                    if not remaining.empty:
+                        db.create_table(self.kb_id, data=remaining)
+                    logger.info(f"已删除 {len(doc_ids)} 个文档")
+        except Exception as e:
+            logger.warning(f"删除处理失败: {e}")
+
+        for change in to_delete:
+            dedup_manager.remove_record(change.rel_path)
 
     def import_pdf_attachments(
         self,

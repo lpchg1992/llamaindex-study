@@ -23,25 +23,56 @@ def list_knowledge_bases() -> None:
 
 
 def ingest_one(kb_id: str, rebuild: bool = False) -> bool:
+    from kb.database import init_kb_meta_db
+
     registry = KnowledgeBaseRegistry()
     kb = registry.get(kb_id)
-    if kb is None:
+    kb_meta = init_kb_meta_db().get(kb_id)
+    if kb is None and kb_meta is None:
         print(f"❌ 知识库不存在: {kb_id}")
         return False
 
-    print(f"\n📚 开始导入: {kb.name}")
+    kb_name = kb.name if kb else kb_meta.get("name", kb_id)
+    source_type = kb_meta.get("source_type", "obsidian") if kb_meta else "obsidian"
+    source_paths = kb_meta.get("source_paths", []) if kb_meta else []
+
+    print(f"\n📚 开始导入: {kb_name}")
     try:
-        stats = ImportApplicationService.run_sync(
-            ImportRequest(
+        if source_type == "zotero":
+            collection_name = source_paths[0] if source_paths else None
+            req = ImportRequest(
+                kind="zotero",
+                kb_id=kb_id,
+                async_mode=False,
+                collection_name=collection_name,
+                rebuild=rebuild,
+                refresh_topics=True,
+            )
+        elif source_type == "generic":
+            paths = source_paths if source_paths else None
+            req = ImportRequest(
+                kind="generic",
+                kb_id=kb_id,
+                async_mode=False,
+                paths=paths,
+                rebuild=rebuild,
+                refresh_topics=True,
+            )
+        else:
+            vault_path = str(get_vault_root())
+            folder_path = source_paths[0] if source_paths else None
+            req = ImportRequest(
                 kind="obsidian",
                 kb_id=kb_id,
                 async_mode=False,
-                vault_path=str(get_vault_root()),
+                vault_path=vault_path,
+                folder_path=folder_path,
                 recursive=True,
                 rebuild=rebuild,
                 refresh_topics=True,
             )
-        )
+
+        stats = ImportApplicationService.run_sync(req)
         print(
             f"✅ 完成: 文件 {stats.get('files', 0)}, 节点 {stats.get('nodes', 0)}, 失败 {stats.get('failed', 0)}"
         )

@@ -69,16 +69,30 @@ class ObsidianService:
     @staticmethod
     def get_vaults() -> List[Dict[str, Any]]:
         """获取可用的 Obsidian Vault 列表"""
+        from kb.registry import get_vault_root
+
+        vault_path = str(get_vault_root())
+
         vaults = [
             {
                 "name": "默认",
-                "path": str(Path.home() / "Documents" / "Obsidian Vault"),
-            },
-            {
-                "name": "坚果云同步",
-                "path": "/Volumes/online/nutsync/Obsidian Vault",
+                "path": vault_path,
             },
         ]
+
+        try:
+            from kb.obsidian_config import OBSIDIAN_KB_MAPPINGS
+
+            configured_paths = set()
+            for mapping in OBSIDIAN_KB_MAPPINGS:
+                if hasattr(mapping, "vault_path") and mapping.vault_path:
+                    configured_paths.add(mapping.vault_path)
+
+            for path in configured_paths:
+                if path != vault_path:
+                    vaults.append({"name": f"配置 ({Path(path).name})", "path": path})
+        except ImportError:
+            pass
 
         result = []
         for v in vaults:
@@ -106,12 +120,28 @@ class ObsidianService:
     @staticmethod
     def get_vault_info(vault_name: str) -> Optional[Dict[str, Any]]:
         """获取 Vault 信息"""
+        from kb.registry import get_vault_root
+
         if vault_name == "默认":
-            vault_path = Path.home() / "Documents" / "Obsidian Vault"
-        elif vault_name == "坚果云同步":
-            vault_path = Path("/Volumes/online/nutsync/Obsidian Vault")
+            vault_path = get_vault_root()
         else:
-            return None
+            try:
+                from kb.obsidian_config import OBSIDIAN_KB_MAPPINGS
+
+                configured_path = None
+                for mapping in OBSIDIAN_KB_MAPPINGS:
+                    if hasattr(mapping, "vault_path") and mapping.vault_path:
+                        expected_name = f"配置 ({Path(mapping.vault_path).name})"
+                        if vault_name == expected_name:
+                            configured_path = mapping.vault_path
+                            break
+
+                if configured_path:
+                    vault_path = Path(configured_path)
+                else:
+                    return None
+            except ImportError:
+                return None
 
         if not vault_path.exists():
             return None
@@ -139,6 +169,7 @@ class ObsidianService:
         exclude_patterns: Optional[List[str]] = None,
         rebuild: bool = False,
         refresh_topics: bool = True,
+        force_delete: bool = True,
         progress_callback: Optional[Callable[[str], None]] = None,
     ) -> Dict[str, Any]:
         """
@@ -202,6 +233,7 @@ class ObsidianService:
                 rebuild=rebuild,
                 exclude_patterns=exclude_patterns,
                 recursive=recursive,
+                force_delete=force_delete,
             )
 
             if progress_callback:

@@ -45,7 +45,9 @@ class ImportApplicationService:
                 params["include_exts"] = req.include_exts
             if req.exclude_exts:
                 params["exclude_exts"] = req.exclude_exts
-            source = req.source or (req.paths[0] if req.paths else (req.path or "generic"))
+            source = req.source or (
+                req.paths[0] if req.paths else (req.path or "generic")
+            )
             return TaskService.submit(
                 task_type="generic",
                 kb_id=req.kb_id,
@@ -79,7 +81,9 @@ class ImportApplicationService:
                 "rebuild": req.rebuild,
                 "refresh_topics": req.refresh_topics,
             }
-            source = req.source or (req.collection_name or req.collection_id or "zotero")
+            source = req.source or (
+                req.collection_name or req.collection_id or "zotero"
+            )
             return TaskService.submit(
                 task_type="zotero",
                 kb_id=req.kb_id,
@@ -131,6 +135,7 @@ class ImportApplicationService:
                 exclude_patterns=req.exclude_patterns,
                 rebuild=req.rebuild,
                 refresh_topics=req.refresh_topics,
+                force_delete=req.force_delete if req.force_delete is not None else True,
             )
 
         if req.kind == "zotero":

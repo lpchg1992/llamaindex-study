@@ -1070,16 +1070,52 @@ def handle_ingest_batch(args: argparse.Namespace) -> int:
 
 
 def handle_ingest_rebuild(args: argparse.Namespace) -> int:
+    from kb.database import init_kb_meta_db
     from kb.import_service import ImportRequest
+    from kb.registry import get_vault_root
 
-    return submit_import_and_handle(
-        ImportRequest(
-            kind="obsidian",
+    kb_meta = init_kb_meta_db().get(args.kb_id)
+    if not kb_meta:
+        raise ValueError(f"知识库不存在: {args.kb_id}")
+
+    source_type = kb_meta.get("source_type", "obsidian")
+    source_paths = kb_meta.get("source_paths", [])
+
+    if source_type == "zotero":
+        collection_name = source_paths[0] if source_paths else None
+        req = ImportRequest(
+            kind="zotero",
             kb_id=args.kb_id,
+            collection_name=collection_name,
             rebuild=True,
             refresh_topics=args.refresh_topics,
             source="cli:ingest:rebuild",
-        ),
+        )
+    elif source_type == "generic":
+        paths = source_paths if source_paths else None
+        req = ImportRequest(
+            kind="generic",
+            kb_id=args.kb_id,
+            paths=paths,
+            rebuild=True,
+            refresh_topics=args.refresh_topics,
+            source="cli:ingest:rebuild",
+        )
+    else:
+        vault_path = str(get_vault_root())
+        folder_path = source_paths[0] if source_paths else None
+        req = ImportRequest(
+            kind="obsidian",
+            kb_id=args.kb_id,
+            vault_path=vault_path,
+            folder_path=folder_path,
+            rebuild=True,
+            refresh_topics=args.refresh_topics,
+            source="cli:ingest:rebuild",
+        )
+
+    return submit_import_and_handle(
+        req,
         wait=args.wait,
         timeout=args.timeout,
     )
@@ -1116,6 +1152,13 @@ def handle_obsidian_mappings(_: argparse.Namespace) -> int:
 def handle_obsidian_import_all(args: argparse.Namespace) -> int:
     from kb.obsidian_config import OBSIDIAN_KB_MAPPINGS
     from kb.import_service import ImportApplicationService, ImportRequest
+    from kb.registry import get_vault_root
+
+    vault_path = args.vault_path or str(get_vault_root())
+    vault_path_obj = Path(vault_path)
+    if not vault_path_obj.exists():
+        print(f"❌ Vault 路径不存在: {vault_path}", file=sys.stderr)
+        return 1
 
     results = []
     for mapping in OBSIDIAN_KB_MAPPINGS:
@@ -1125,7 +1168,7 @@ def handle_obsidian_import_all(args: argparse.Namespace) -> int:
                 ImportRequest(
                     kind="obsidian",
                     kb_id=mapping.kb_id,
-                    vault_path=args.vault_path,
+                    vault_path=vault_path,
                     folder_path=folder_path,
                     recursive=True,
                     rebuild=args.rebuild,
@@ -1475,71 +1518,6 @@ def handle_config_list(_: argparse.Namespace) -> int:
                 value = value[:15] + "..."
             print(f"  {item['key']:<30} {value:<20} {item['description']}")
     print()
-    return 0
-
-
-def handle_config_get(args: argparse.Namespace) -> int:
-    settings = get_settings()
-    key = args.key.upper()
-
-    if key in CONFIG_OPTION_DESCRIPTIONS:
-        category, description = CONFIG_OPTION_DESCRIPTIONS[key]
-        value = getattr(settings, key.lower(), None) or os.getenv(key, "")
-        print(f"配置项: {key}")
-        print(f"类别: {category}")
-        print(f"说明: {description}")
-        print(f"当前值: {value if value else '(未设置)'}")
-    else:
-        value = os.getenv(key, "")
-        if value:
-            print(f"配置项: {key}")
-            print(f"当前值: {value}")
-        else:
-            print(f"错误: 未知配置项 '{key}'")
-            return 1
-    return 0
-
-
-def handle_config_set(args: argparse.Namespace) -> int:
-    key = args.key.upper()
-    value = args.value
-
-    if key not in CONFIG_OPTION_DESCRIPTIONS:
-        print(f"警告: '{key}' 不是已知配置项，但仍会写入 .env")
-
-    env_path = PROJECT_ROOT / ".env"
-    if not env_path.exists():
-        print(f"错误: .env 文件不存在: {env_path}")
-        return 1
-
-    lines = []
-    found = False
-    if env_path.exists():
-        with open(env_path, encoding="utf-8") as f:
-            lines = f.readlines()
-
-    new_lines = []
-    key_pattern = f"{key}="
-    for line in lines:
-        if line.startswith(key_pattern):
-            stripped = line.lstrip()
-            if stripped.startswith(key_pattern):
-                new_lines.append(f"{key}={value}\n")
-                found = True
-            else:
-                new_lines.append(line)
-        else:
-            new_lines.append(line)
-
-    if not found:
-        new_lines.append(f"{key}={value}\n")
-
-    with open(env_path, "w", encoding="utf-8") as f:
-        f.writelines(new_lines)
-
-    print(f"✅ 已设置 {key}={value}")
-    print(f"   (已写入 .env 文件)")
-    print(f"\n⚠️  部分配置需要重启服务才能生效")
     return 0
 
 
