@@ -199,149 +199,458 @@ POST /query
 
 ## UI 设计建议
 
-### 1. 路由模式选择
+### 1. 整体页面布局
 
-建议在 UI 上明确区分两种路由模式：
-
-```
-┌─────────────────────────────────────────────────────┐
-│  知识库选择                                         │
-│                                                     │
-│  ○ 用户选择知识库  ● 自动路由                       │
-│                                                     │
-│  用户选择知识库时：                                 │
-│  ☑ tech_tools                                      │
-│  ☑ programming                                     │
-│  ☑ devops                                         │
-│                                                     │
-│  自动路由时（可选排除）：                           │
-│  排除: [____] (逗号分隔)                          │
-└─────────────────────────────────────────────────────┘
-```
-
-### 2. 参数分组
-
-将参数分为三组，UI 上分区显示：
+建议采用现代化的单页布局，左侧导航 + 右侧内容区：
 
 ```
-┌─────────────────────────────────────────────────────┐
-│  查询内容                                           │
-│  [________________________] [查询按钮]              │
-├─────────────────────────────────────────────────────┤
-│  检索增强 (可选)                                    │
-│  ☐ HyDE 查询转换（适合探索性查询）                 │
-│  ☐ 多查询转换（适合复杂问题）                       │
-│  ☐ Auto-Merging（需层级分块知识库）               │
-├─────────────────────────────────────────────────────┤
-│  答案生成                                           │
-│  模型: [DeepSeek V3.2 (SiliconFlow) ▼]           │
-│  模式: [Compact ▼]                               │
-└─────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│  💬 RAG 问答                                          [⚙️] [❓]     │
+├────────────┬─────────────────────────────────────────────────────────┤
+│            │                                                         │
+│  📊 Dashboard│  ┌─────────────────────────────────────────────────┐ │
+│  📚 知识库  │  │  💡 提示：仅需文档片段用 Search，需要答案用 Query  │ │
+│  🔍 检索   │  └─────────────────────────────────────────────────┘ │
+│  💬 问答   │                                                        │
+│  📥 导入   │  ┌─────────────────────────────────────────────────┐ │
+│  📋 任务   │  │  查询内容                                         │ │
+│  ⚙️ 设置   │  │  ┌───────────────────────────────────────────┐ │ │
+│            │  │  │ 小猪腹泻应该怎么治疗？                     │ │ │
+│            │  │  └───────────────────────────────────────────┘ │ │
+│            │  │                                                   │ │
+│            │  │  知识库: [全部 ▼]   [🔍 检索] [🧠 推理]          │ │
+│            │  └─────────────────────────────────────────────────┘ │
+│            │                                                        │
+│            │  ┌─ 答案 ─────────────────────────────────────────┐  │
+│            │  │ 根据《猪病学》第三章内容，小猪腹泻多为...         │  │
+│            │  │                                                  │  │
+│            │  │ [相关文档 1]  [相关文档 2]  [相关文档 3]        │  │
+│            │  └────────────────────────────────────────────────┘  │
+└────────────┴─────────────────────────────────────────────────────────┘
 ```
 
-### 3. 预设配置
+**技术栈推荐**：
+| 层级 | 推荐方案 | 理由 |
+|------|----------|------|
+| 框架 | React 18 + TypeScript | 生态丰富，类型安全 |
+| 路由 | React Router v6 | 标准 SPA 路由 |
+| 状态 | Zustand / Jotai | 轻量、比 Redux 简单 |
+| UI 库 | shadcn/ui + Tailwind | 现代、可定制、copy-paste 友好 |
+| HTTP | TanStack Query | 请求缓存、自动重试 |
+| 实时 | 原生 WebSocket | 项目已有 WebSocket 支持 |
 
-为简化用户操作，提供预设配置：
+---
 
-| 预设名称 | 参数组合 | 说明 |
-|----------|----------|------|
-| **智能问答**（默认） | retrieval_mode=vector, 其他关闭 | 通用场景 |
-| **深度分析** | use_hyde=true, use_auto_merging=true, response_mode=tree_summarize | 复杂问题 |
-| **全面检索** | retrieval_mode=hybrid | 可能涉及多方面 |
-| **仅检索** | response_mode=no_text | 不生成答案 |
+### 2. 路由模式选择组件
 
-### 4. 模型选择
+建议使用 Segmented Control（分段控制器）明确区分两种路由模式：
 
-模型选择下拉列表应显示所有可用的 LLM 模型，供用户选择：
-
-**获取模型列表**：
-```bash
-GET /models
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  知识库选择                                                          │
+│                                                                      │
+│  ┌─────────────────┐  ┌─────────────────┐                          │
+│  │ ○ 用户选择知识库 │  │ ● 自动路由      │   ← Segmented Control  │
+│  └─────────────────┘  └─────────────────┘                          │
+│                                                                      │
+│  ─────────────────────────────────────────────────────────────────  │
+│                                                                      │
+│  用户选择知识库时：                          自动路由时：            │
+│  ┌──────────────────────────────┐          ┌──────────────────────┐ │
+│  │ 🔍 搜索知识库...            │          │ 排除的知识库:         │ │
+│  │                              │          │ ┌──────────────────┐ │ │
+│  │ ☑ ✅ zotero_nutrition      │          │ │ tech_tools    ×  │ │ │
+│  │     234 篇 · 猪饲料配方     │          │ │ devops        ×  │ │ │
+│  │                              │          │ └──────────────────┘ │ │
+│  │ ☑ 🔲 HTE_history           │          │ [添加排除...]        │ │
+│  │     156 篇 · 历史资料       │          └──────────────────────┘ │
+│  │                              │                                      │
+│  │ ☐ 🔲 programming           │                                      │
+│  │     89 篇 · 编程笔记       │                                      │
+│  └──────────────────────────────┘                                      │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
-**返回示例**：
-```json
-[
-  {
-    "id": "siliconflow/DeepSeek-V3.2",
-    "vendor": "siliconflow",
-    "name": "DeepSeek V3.2",
-    "type": "llm",
-    "is_default": true,
-    "is_active": true
-  },
-  {
-    "id": "ollama/lfm2.5-thinking:latest",
-    "vendor": "ollama",
-    "name": "LFM 2.5 Thinking",
-    "type": "llm",
-    "is_default": false,
-    "is_active": true
-  }
-]
+**设计要点**：
+- 使用 Checkbox 列表供用户多选知识库
+- 显示每个知识库的文档数量和简介
+- 支持搜索过滤
+- 自动路由模式下显示排除的知识库标签（Tag）
+
+**实现示例（React + shadcn/ui）**：
+
+```tsx
+// 路由模式切换
+<SegmentedControl
+  value={routeMode}
+  onValueChange={setRouteMode}
+  options={[
+    { value: 'general', label: '用户选择知识库' },
+    { value: 'auto', label: '自动路由' },
+  ]}
+/>
+
+// 知识库多选列表
+<div className="space-y-2">
+  <Input placeholder="🔍 搜索知识库..." />
+  {filteredKBs.map(kb => (
+    <div key={kb.id} className="flex items-center gap-3 p-3 border rounded-lg hover:bg-accent">
+      <Checkbox
+        checked={selectedKBs.includes(kb.id)}
+        onCheckedChange={(checked) => toggleKB(kb.id, checked)}
+      />
+      <div className="flex-1">
+        <div className="font-medium">{kb.name}</div>
+        <div className="text-sm text-muted-foreground">
+          {kb.doc_count} 篇 · {kb.description}
+        </div>
+      </div>
+    </div>
+  ))}
+</div>
+
+// 排除标签（自动路由模式）
+{token !== 'general' && (
+  <div className="flex flex-wrap gap-2">
+    {excludedKBs.map(kb => (
+      <Badge key={kb.id} variant="secondary" className="gap-1">
+        {kb.name}
+        <X className="w-3 h-3 cursor-pointer" onClick={() => removeExcluded(kb.id)} />
+      </Badge>
+    ))}
+    <Button variant="outline" size="sm">+ 添加排除</Button>
+  </div>
+)}
 ```
 
-**下拉列表设计建议**：
+---
+
+### 3. 参数配置面板
+
+建议使用折叠面板（Accordion）对参数分组，提升界面整洁度：
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  ⚡ 检索增强选项                                             [🔽 展开] │
+│  ─────────────────────────────────────────────────────────────────  │
+│                                                                      │
+│  ┌─────────────────────────────────────────────────────────────┐    │
+│  │ 🧠 HyDE 查询转换                              [ 开关  ]    │    │
+│  │    适合探索性查询，可能增加响应时间                          │    │
+│  └─────────────────────────────────────────────────────────────┘    │
+│                                                                      │
+│  ┌─────────────────────────────────────────────────────────────┐    │
+│  │ 📝 多查询转换                                  [ 开关  ]    │    │
+│  │    生成多个查询变体，减少检索遗漏                            │    │
+│  └─────────────────────────────────────────────────────────────┘    │
+│                                                                      │
+│  ┌─────────────────────────────────────────────────────────────┐    │
+│  │ 🔄 Auto-Merging 检索                          [ 开关  ]    │    │
+│  │    需知识库使用层级分块策略                                  │    │
+│  └─────────────────────────────────────────────────────────────┘    │
+│                                                                      │
+│  📊 检索模式:  ┌────────────┐ ┌────────────┐                     │
+│                │ ● 向量检索  │ │ ○ 混合搜索  │                     │
+│                └────────────┘ └────────────┘                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**设计要点**：
+- 使用 Switch 组件代替 Checkbox，更现代化
+- 每个开关显示描述文字和警告图标
+- 检索模式使用 Radio Group
+
+---
+
+### 4. 模型与生成模式选择
+
+建议将模型选择和答案生成模式放在工具条中：
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  🤖 模型: [DeepSeek V3.2 (SiliconFlow) ▼]                          │
+│                                                                      │
+│  📝 生成模式: [Compact (默认) ▼]                                    │
+│     └─ Compact · Refine · Tree Summarize · Simple · No Text       │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**分组下拉列表设计**：
 
 ```
 ┌────────────────────────────────────────────────────────┐
 │  模型                                                │
 │                                                        │
-│  [DeepSeek V3.2 (SiliconFlow) ▼]                    │
-│                                                        │
-│  ├─ SiliconFlow                                      │
-│  │   └─ DeepSeek V3.2 (默认)                       │
-│  │                                              │
-│  └─ Ollama                                           │
-│      └─ LFM 2.5 Thinking                            │
-│      └─ LFM 2.5 Instruct                           │
+│  [🔍 搜索模型...]                                    │
+│  ─────────────────────────────────────────────────── │
+│  ├─ 💰 SiliconFlow                                  │
+│  │   └─ DeepSeek V3.2                    ✓ 默认     │
+│  │   └─ Qwen2.5 72B                                │
+│  │                                                  │
+│  ├─ 🖥️ Ollama (本地)                               │
+│  │   └─ LFM 2.5 Thinking                          │
+│  │   └─ LFM 2.5 Instruct                          │
+│  │                                                  │
+│  └─ 🏠 Ollama HomePC                               │
+│      └─ bge-m3 (Embedding)                         │
 └────────────────────────────────────────────────────────┘
 ```
 
-**分组显示**：按 vendor 分组显示模型列表，提升用户体验。
+**实现示例**：
 
-**默认值**：以下拉列表应默认选中 `is_default=true` 的模型。
-
-**实现示例（JavaScript）**：
-
-```javascript
-// 获取模型列表
-const response = await fetch('/models');
-const models = await response.json();
-
-// 过滤 LLM 类型且激活的模型
-const llmModels = models.filter(m => m.type === 'llm' && m.is_active);
-
-// 按 vendor 分组
-const grouped = llmModels.reduce((acc, model) => {
-  const vendor = model.vendor;
-  if (!acc[vendor]) acc[vendor] = [];
-  acc[vendor].push(model);
-  return acc;
-}, {});
-
-// 渲染下拉列表
-const select = document.getElementById('model-select');
-Object.entries(grouped).forEach(([vendor, models]) => {
-  const group = document.createElement('optgroup');
-  group.label = vendor === 'siliconflow' ? 'SiliconFlow' : 'Ollama';
-  models.forEach(model => {
-    const option = document.createElement('option');
-    option.value = model.id;
-    option.textContent = `${model.name}${model.is_default ? ' (默认)' : ''}`;
-    group.appendChild(option);
-  });
-  select.appendChild(group);
-});
+```tsx
+// 模型选择分组下拉
+<Popover>
+  <PopoverTrigger asChild>
+    <Button variant="outline" className="w-64 justify-start">
+      {selectedModel ? (
+        <>
+          <Badge className="mr-2">{getVendorIcon(selectedModel.vendor)}</Badge>
+          {selectedModel.name}
+        </>
+      ) : (
+        "选择模型..."
+      )}
+    </Button>
+  </PopoverTrigger>
+  <PopoverContent className="w-80 p-0">
+    <Command>
+      <CommandInput placeholder="搜索模型..." />
+      <CommandList>
+        {Object.entries(groupedModels).map(([vendor, models]) => (
+          <CommandGroup key={vendor} heading={vendor}>
+            {models.map(model => (
+              <CommandItem
+                key={model.id}
+                value={model.id}
+                onSelect={() => setSelectedModel(model)}
+              >
+                <Check
+                  className={cn(
+                    "mr-2 h-4 w-4",
+                    selectedModel?.id === model.id ? "opacity-100" : "opacity-0"
+                  )}
+                />
+                <span>{model.name}</span>
+                {model.is_default && (
+                  <Badge variant="secondary" className="ml-2">默认</Badge>
+                )}
+              </CommandItem>
+            ))}
+          </CommandGroup>
+        ))}
+      </CommandList>
+    </Command>
+  </PopoverContent>
+</Popover>
 ```
 
-### 5. 提示信息
+---
+
+### 5. 预设配置（快捷模式）
+
+提供预设配置卡片，用户可一键切换：
 
 ```
-💡 自动路由：系统根据问题内容自动选择相关知识库
-⚠️ Auto-Merging 仅在知识库使用"层级分块"时有效
-⚠️ 启用 HyDE/多查询会增加响应时间
+┌─────────────────────────────────────────────────────────────────────┐
+│  预设模式                                                            │
+│                                                                      │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌──────────┐ │
+│  │   🚀        │  │   🔬        │  │   📚        │  │   📄     │ │
+│  │  智能问答   │  │   深度分析   │  │   全面检索   │  │   仅检索  │ │
+│  │  (默认)    │  │             │  │             │  │          │ │
+│  │  ⭐⭐⭐    │  │   ⭐⭐⭐⭐  │  │   ⭐⭐⭐    │  │   ⭐⭐   │ │
+│  │  速度优先  │  │   质量优先   │  │   平衡      │  │   快速查看│ │
+│  └─────────────┘  └─────────────┘  └─────────────┘  └──────────┘ │
+│                                                                      │
+│  当前: 智能问答 (默认)                                               │
+│  参数: 向量检索 + Compact 模式                                       │
+└─────────────────────────────────────────────────────────────────────┘
 ```
+
+**预设参数对照**：
+
+| 预设 | retrieval_mode | use_hyde | use_multi_query | use_auto_merging | response_mode |
+|------|----------------|----------|-----------------|-------------------|---------------|
+| **🚀 智能问答** | vector | false | false | false | compact |
+| **🔬 深度分析** | vector | true | false | true | tree_summarize |
+| **📚 全面检索** | hybrid | false | true | false | compact |
+| **📄 仅检索** | vector | false | false | false | no_text |
+
+---
+
+### 6. 查询结果展示
+
+结果区域应包含答案和引用来源：
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  📖 回答                                        [📋 复制] [🔄 重答] │
+│  ─────────────────────────────────────────────────────────────────  │
+│                                                                      │
+│  根据《猪病学》第三章内容，小猪腹泻多为消化不良或病原感染所致...       │
+│                                                                      │
+│  ─────────────────────────────────────────────────────────────────  │
+│                                                                      │
+│  📚 引用来源 (3)                                        [显示设置 ▼]  │
+│                                                                      │
+│  ┌─────────────────────────────────────────────────────────────┐    │
+│  │ 1. 📄 猪病学.pdf                              相关度: 92%   │    │
+│  │    "...小猪腹泻的治疗方法包括：1. 调整饲料配方..."           │    │
+│  │    [查看详情]                                                │    │
+│  └─────────────────────────────────────────────────────────────┘    │
+│                                                                      │
+│  ┌─────────────────────────────────────────────────────────────┐    │
+│  │ 2. 📄 饲料配方.doc                            相关度: 87%   │    │
+│  │    "...腹泻期间应减少蛋白质含量，增加纤维素..."               │    │
+│  │    [查看详情]                                                │    │
+│  └─────────────────────────────────────────────────────────────┘    │
+│                                                                      │
+│  ┌─────────────────────────────────────────────────────────────┐    │
+│  │ 3. 📄 养殖手册.md                              相关度: 81%   │    │
+│  │    "...预防腹泻的关键是保持饲料新鲜..."                       │    │
+│  │    [查看详情]                                                │    │
+│  └─────────────────────────────────────────────────────────────┘    │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**设计要点**：
+- 答案区域使用 Markdown 渲染
+- 引用卡片显示文件类型图标、名称、相关度分数
+- 支持展开查看完整引用片段
+- 提供复制和重新回答按钮
+
+**实现示例**：
+
+```tsx
+// 结果展示
+<div className="space-y-4">
+  {/* 答案区域 */}
+  <Card>
+    <CardHeader className="flex flex-row items-center justify-between">
+      <CardTitle className="text-lg font-medium">📖 回答</CardTitle>
+      <div className="flex gap-2">
+        <Button variant="outline" size="sm" onClick={copyAnswer}>
+          <Copy className="w-4 h-4 mr-1" /> 复制
+        </Button>
+        <Button variant="outline" size="sm" onClick={rerunQuery}>
+          <RefreshCw className="w-4 h-4 mr-1" /> 重答
+        </Button>
+      </div>
+    </CardHeader>
+    <CardContent>
+      <ReactMarkdown className="prose prose-sm max-w-none">
+        {response}
+      </ReactMarkdown>
+    </CardContent>
+  </Card>
+
+  {/* 引用来源 */}
+  <Card>
+    <CardHeader>
+      <CardTitle className="text-lg">
+        📚 引用来源 ({sources.length})
+      </CardTitle>
+    </CardHeader>
+    <CardContent className="space-y-3">
+      {sources.map((source, index) => (
+        <div
+          key={index}
+          className="p-4 border rounded-lg hover:bg-accent/50 transition-colors"
+        >
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <FileIcon className="w-4 h-4 text-muted-foreground" />
+              <span className="font-medium">{source.metadata.file_name}</span>
+            </div>
+            <Badge variant="outline">
+              相关度: {Math.round(source.score * 100)}%
+            </Badge>
+          </div>
+          <p className="text-sm text-muted-foreground line-clamp-2">
+            {source.text}
+          </p>
+          <Button variant="ghost" size="sm" className="mt-2 h-8">
+            查看详情
+          </Button>
+        </div>
+      ))}
+    </CardContent>
+  </Card>
+</div>
+```
+
+---
+
+### 7. 提示信息与帮助
+
+使用 Tooltip 和 Alert 组件提供上下文帮助：
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                                                                      │
+│  💡 提示组件示例                                                     │
+│  ┌─────────────────────────────────────────────────────────────┐    │
+│  │ ℹ️ 自动路由：系统根据问题内容自动选择相关知识库               │    │
+│  └─────────────────────────────────────────────────────────────┘    │
+│                                                                      │
+│  ⚠️ 警告组件示例                                                     │
+│  ┌─────────────────────────────────────────────────────────────┐    │
+│  │ ⚠️ Auto-Merging 仅在知识库使用"层级分块"时有效              │    │
+│  └─────────────────────────────────────────────────────────────┘    │
+│                                                                      │
+│  ❌ 错误组件示例                                                     │
+│  ┌─────────────────────────────────────────────────────────────┐    │
+│  │ ❌ 请求失败，请检查网络连接或重试                             │    │
+│  └─────────────────────────────────────────────────────────────┘    │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**设计要点**：
+- 警告信息使用黄色/橙色标识
+- 错误信息使用红色标识
+- 每个参数旁边使用 `?` 图标触发 Tooltip 解释
+
+---
+
+### 8. 移动端适配
+
+移动端采用底部标签栏替代侧边导航：
+
+```
+┌─────────────────────────────┐
+│  💬 RAG 问答          [⚙️]  │
+├─────────────────────────────┤
+│                             │
+│  ┌───────────────────────┐  │
+│  │ 小猪腹泻应该怎么治疗？ │  │
+│  └───────────────────────┘  │
+│                             │
+│  [🔍 检索] [🧠 推理]        │
+│                             │
+│  ─────────────────────────  │
+│                             │
+│  📖 回答                    │
+│  根据《猪病学》第三章...     │
+│                             │
+│  ┌───────────────────────┐  │
+│  │ 猪病学.pdf  92%   ▶  │  │
+│  └───────────────────────┘  │
+│  ┌───────────────────────┐  │
+│  │ 饲料配方.doc  87% ▶  │  │
+│  └───────────────────────┘  │
+│                             │
+├─────────────────────────────┤
+│ [🏠] [📚] [🔍] [💬] [📋]  │  ← 底部 Tab Bar
+└─────────────────────────────┘
+```
+
+**移动端优化**：
+- 参数面板改为底部抽屉（Bottom Sheet）
+- 结果卡片改为垂直列表
+- 使用原生滑动返回
 
 ---
 
