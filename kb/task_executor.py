@@ -461,49 +461,69 @@ class TaskExecutor:
 
         kb_id = task.kb_id
         params = task.params
+        task_id = task.task_id
 
         collection_id = params.get("collection_id")
         collection_name = params.get("collection_name", "Unknown")
         rebuild = params.get("rebuild", False)
 
-        self.queue.update_progress(
-            task.task_id, message=f"准备导入 Zotero: {collection_name}"
+        logger.info(
+            f"[{task_id}] 开始 Zotero 导入任务: kb_id={kb_id}, collection={collection_name}"
         )
-
-        vs = self._get_vector_store(kb_id)
-        embed_model = create_parallel_ollama_embedding()
-        embed_processor = get_parallel_processor()
-
-        config = DocumentProcessorConfig(
-            chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP
-        )
-        importer = ZoteroImporter(config=config)
-
-        if not collection_id and params.get("collection_name"):
-            result = importer.get_collection_by_name(params["collection_name"])
-            if result and "collectionID" in result:
-                collection_id = result["collectionID"]
-
-        if not collection_id:
-            raise ValueError("未指定收藏夹 ID")
-
-        progress_file = (
-            Path.home() / ".llamaindex" / f"zotero_{collection_id}_progress.json"
-        )
-        progress = ProcessingProgress.load(progress_file)
-
-        if rebuild:
-            vs.delete_table()
-            progress = ProcessingProgress()
 
         self.queue.update_progress(
-            task.task_id, message=f"开始导入 {collection_name}..."
+            task_id, message=f"准备导入 Zotero: {collection_name}"
         )
-
-        # 更新心跳
-        await self._update_heartbeat(task.task_id)
 
         try:
+            vs = self._get_vector_store(kb_id)
+            logger.debug(f"[{task_id}] 向量存储初始化完成: {kb_id}")
+
+            embed_model = create_parallel_ollama_embedding()
+            logger.debug(f"[{task_id}] Embedding 模型创建完成")
+
+            embed_processor = get_parallel_processor()
+            logger.debug(f"[{task_id}] 并行 Embedding 处理器初始化完成")
+
+            config = DocumentProcessorConfig(
+                chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP
+            )
+            importer = ZoteroImporter(config=config)
+            logger.debug(f"[{task_id}] ZoteroImporter 初始化完成")
+
+            if not collection_id and params.get("collection_name"):
+                logger.debug(
+                    f"[{task_id}] 通过名称查找收藏夹 ID: {params['collection_name']}"
+                )
+                result = importer.get_collection_by_name(params["collection_name"])
+                if result and "collectionID" in result:
+                    collection_id = result["collectionID"]
+                    logger.debug(f"[{task_id}] 找到收藏夹 ID: {collection_id}")
+
+            if not collection_id:
+                raise ValueError("未指定收藏夹 ID")
+
+            progress_file = (
+                Path.home() / ".llamaindex" / f"zotero_{collection_id}_progress.json"
+            )
+            progress = ProcessingProgress.load(progress_file)
+            logger.debug(f"[{task_id}] 进度文件加载: {progress_file}")
+
+            if rebuild:
+                logger.info(f"[{task_id}] 重建模式，删除现有数据")
+                vs.delete_table()
+                progress = ProcessingProgress()
+
+            self.queue.update_progress(
+                task_id, message=f"开始导入 {collection_name}..."
+            )
+
+            await self._update_heartbeat(task_id)
+
+            logger.info(
+                f"[{task_id}] 开始导入收藏夹: {collection_name} (ID: {collection_id})"
+            )
+
             stats = importer.import_collection(
                 collection_id=collection_id,
                 collection_name=collection_name,
@@ -511,17 +531,25 @@ class TaskExecutor:
                 embed_model=embed_model,
                 progress=progress,
                 rebuild=rebuild,
+                progress_file=progress_file,
             )
 
             progress_file.unlink(missing_ok=True)
 
+            logger.info(
+                f"[{task_id}] Zotero 导入完成: "
+                f"items={stats.get('items', 0)}, "
+                f"nodes={stats.get('nodes', 0)}, "
+                f"failed={stats.get('failed', 0)}"
+            )
+
             self.queue.update_progress(
-                task.task_id,
+                task_id,
                 progress=100,
                 message=f"完成! {stats.get('items', 0)} 文献, {stats.get('nodes', 0)} 节点",
             )
             self.queue.complete_task(
-                task.task_id,
+                task_id,
                 result={
                     "kb_id": kb_id,
                     "items": stats.get("items", 0),
@@ -530,12 +558,14 @@ class TaskExecutor:
                     "endpoint_stats": embed_processor.get_stats(),
                 },
             )
+            logger.info(f"[{task_id}] 任务完成并标记为已完成")
 
             if self._should_refresh_topics(params):
                 self._update_kb_topics(kb_id, has_new_docs=stats.get("items", 0) > 0)
 
         except Exception as e:
-            self.queue.update_progress(task.task_id, message=f"导入失败: {str(e)}")
+            logger.error(f"[{task_id}] Zotero 导入任务执行失败: {e}", exc_info=True)
+            self.queue.update_progress(task_id, message=f"导入失败: {str(e)}")
             raise
         finally:
             importer.close()

@@ -20,6 +20,9 @@ from typing import List, Optional, Tuple
 from llama_index.core import SimpleDirectoryReader
 from llama_index.core.schema import Document as LlamaDocument
 from llamaindex_study.node_parser import get_node_parser
+from llamaindex_study.logger import get_logger
+
+logger = get_logger(__name__)
 
 from kb.document_processor import (
     DocumentProcessor,
@@ -90,9 +93,30 @@ class ZoteroImporter:
             self._conn = None
 
     def _get_attachment_path(self, item_id: int) -> Optional[str]:
-        """获取附件文件路径"""
+        """获取附件文件路径
+
+        根据 Zotero UI 中修改的附件标题(fieldID=1)来判断是否包含 [kb] 标记，
+        而非检查实际文件名。
+        """
         conn = self.connect()
         cursor = conn.cursor()
+
+        # 首先查询标题 (fieldID = 1) - 这是用户在 Zotero UI 中修改的附件名称
+        cursor.execute(
+            """
+            SELECT v.value
+            FROM itemData d
+            JOIN itemDataValues v ON d.valueID = v.valueID
+            WHERE d.itemID = ? AND d.fieldID = 1
+        """,
+            (item_id,),
+        )
+        title_row = cursor.fetchone()
+        title = title_row["value"] if title_row else ""
+
+        # 如果标题不包含 [kb] 标记，则跳过此附件
+        if "[kb]" not in title:
+            return None
 
         cursor.execute(
             """
@@ -111,7 +135,6 @@ class ZoteroImporter:
         storage_hash = row["storageHash"]
         path = row["path"]
 
-        # 检查是否是 PDF 或其他可读格式
         content_type = row["contentType"] or ""
         supported = any(
             ext in content_type
@@ -121,7 +144,6 @@ class ZoteroImporter:
         if not supported:
             return None
 
-        # 方法1: 如果有 storageHash，用 hash 目录
         if storage_hash:
             hash_dir = self.storage_dir / storage_hash
             if hash_dir.exists():
@@ -129,24 +151,25 @@ class ZoteroImporter:
                     if f.is_file():
                         return str(f)
 
-        # 方法2: 从 path 中提取文件名
         if path.startswith("storage:"):
             filename = path.replace("storage:", "")
+
+            # fallback: search subdirs (data migration may change storage layout)
+            for item_dir in self.storage_dir.iterdir():
+                if not item_dir.is_dir() or item_dir.name.startswith("."):
+                    continue
+
+                check = item_dir / filename
+                if check.exists():
+                    return str(check)
+
+                for f in item_dir.iterdir():
+                    if f.is_file() and filename == f.name:
+                        return str(f)
+
             full_path = self.storage_dir / filename
             if full_path.exists():
                 return str(full_path)
-
-            # 在子目录中查找
-            for item_dir in self.storage_dir.iterdir():
-                if item_dir.is_dir():
-                    full_path = item_dir / filename
-                    if full_path.exists():
-                        return str(full_path)
-
-                    # 也检查子目录下的文件
-                    for f in item_dir.rglob("*"):
-                        if f.is_file() and filename in f.name:
-                            return str(f)
 
         return None
 
@@ -445,34 +468,45 @@ class ZoteroImporter:
                 nodes = node_parser.get_nodes_from_documents([doc])
                 total_nodes += self.processor.save_nodes(vector_store, nodes, progress)
 
-        # 2. 处理附件
+        if item.annotations or item.notes:
+            logger.debug(
+                f"文献包含标注/笔记: {item.title}, 标注数: {len(item.annotations)}, 笔记数: {len(item.notes)}"
+            )
+
         if item.file_path and Path(item.file_path).exists():
             file_path = Path(item.file_path)
             ext = file_path.suffix.lower()
+            file_size_mb = file_path.stat().st_size / 1024 / 1024
 
-            print(
-                f"   📄 {item.title[:40]}... ({file_path.stat().st_size / 1024 / 1024:.1f}MB)"
+            logger.info(
+                f"处理附件: {item.title}, 类型: {ext}, 大小: {file_size_mb:.1f}MB"
             )
 
             if ext == ".pdf":
+                logger.debug(f"使用 process_pdf 处理: {file_path}")
                 docs = self.processor.process_pdf(
                     str(file_path),
                     metadata={**base_metadata, "source": str(file_path)},
                 )
             elif ext in [".docx", ".doc", ".xlsx", ".xls", ".pptx", ".md", ".txt"]:
+                logger.debug(f"使用 process_document 处理: {file_path}")
                 docs = self.processor.process_document(
                     str(file_path),
                     metadata={**base_metadata, "source": str(file_path)},
                 )
             else:
+                logger.warning(f"不支持的文件类型: {ext}, 文件: {file_path}")
                 docs = []
 
             if docs:
+                logger.debug(f"文档处理完成, 文档数: {len(docs)}")
                 for doc in docs:
                     nodes = node_parser.get_nodes_from_documents([doc])
                     total_nodes += self.processor.save_nodes(
                         vector_store, nodes, progress
                     )
+            else:
+                logger.warning(f"文档处理返回空结果: {file_path}")
 
         return total_nodes
 
@@ -484,6 +518,7 @@ class ZoteroImporter:
         embed_model,
         progress: ProcessingProgress = None,
         rebuild: bool = False,
+        progress_file: Path = None,
     ) -> dict:
         """
         导入整个收藏夹
@@ -495,19 +530,18 @@ class ZoteroImporter:
             embed_model: embedding 模型
             progress: 进度记录
             rebuild: 是否重建
+            progress_file: 进度保存路径
 
         Returns:
             导入统计
         """
-        print(f"\n{'=' * 60}")
-        print(f"📚 Zotero: {collection_name}")
-        print(f"{'=' * 60}")
+        logger.info(f"开始导入 Zotero 收藏夹: {collection_name} (ID: {collection_id})")
 
-        # 获取文献列表
         item_ids = self.get_items_in_collection(collection_id)
-        print(f"   共 {len(item_ids)} 篇文献")
+        logger.info(f"收藏夹包含 {len(item_ids)} 篇文献")
 
         if not item_ids:
+            logger.warning(f"收藏夹为空: {collection_name}")
             return {"items": 0, "nodes": 0, "failed": 0}
 
         if progress:
@@ -516,28 +550,34 @@ class ZoteroImporter:
                 progress.started_at = time.time()
 
         processed_set = set(progress.processed_items) if progress else set()
+        logger.debug(f"已有 {len(processed_set)} 篇文献已处理，跳过")
 
         stats = {"items": 0, "nodes": 0, "failed": 0, "processed_sources": []}
 
         for i, item_id in enumerate(item_ids):
-            if str(item_id) in processed_set:
+            item_id_str = str(item_id)
+            if item_id_str in processed_set:
+                logger.debug(f"跳过已处理文献: {item_id}")
                 continue
 
             if i % 5 == 0:
                 elapsed = time.time() - (
                     progress.started_at if progress else time.time()
                 )
-                print(
-                    f"\n   进度: {i + 1}/{len(item_ids)} ({100 * (i + 1) // len(item_ids)}%)"
+                logger.info(
+                    f"进度: {i + 1}/{len(item_ids)} ({100 * (i + 1) // len(item_ids)}%), "
+                    f"节点: {stats['nodes']}, 耗时: {elapsed:.0f}s"
                 )
-                print(f"   节点: {stats['nodes']}, 耗时: {elapsed:.0f}s")
 
             item = self.get_item(item_id)
             if not item:
+                logger.warning(f"文献不存在或已删除: item_id={item_id}")
                 stats["failed"] += 1
                 if progress:
-                    progress.failed_items.append(str(item_id))
+                    progress.failed_items.append(item_id_str)
                 continue
+
+            logger.debug(f"处理文献: {item.title} (item_id={item_id})")
 
             try:
                 nodes = self.import_item(item, vector_store, embed_model, progress)
@@ -545,14 +585,25 @@ class ZoteroImporter:
                 stats["items"] += 1
                 if item.file_path:
                     stats["processed_sources"].append(item.file_path)
+                logger.info(f"文献导入成功: {item.title}, 节点数: {nodes}")
             except Exception as e:
-                print(f"   ⚠️  导入失败: {item.title[:40]} - {e}")
+                logger.error(f"文献导入失败: {item.title}, 错误: {e}")
                 stats["failed"] += 1
                 if progress:
-                    progress.failed_items.append(str(item_id))
+                    progress.failed_items.append(item_id_str)
 
             if progress:
-                progress.processed_items.append(str(item_id))
-                progress.save(Path.home() / ".llamaindex" / "zotero_progress.json")
+                progress.processed_items.append(item_id_str)
+                save_path = (
+                    progress_file
+                    or Path.home() / ".llamaindex" / "zotero_progress.json"
+                )
+                progress.save(save_path)
+
+        logger.info(
+            f"收藏夹导入完成: {collection_name}, "
+            f"成功: {stats['items']}, 失败: {stats['failed']}, "
+            f"节点: {stats['nodes']}"
+        )
 
         return stats

@@ -360,6 +360,7 @@ class ZoteroService:
                 embed_model=create_parallel_ollama_embedding(),
                 progress=progress,
                 rebuild=rebuild,
+                progress_file=progress_file,
             )
 
             progress_file.unlink(missing_ok=True)
@@ -663,9 +664,14 @@ class KnowledgeBaseService:
 
     @staticmethod
     def delete(kb_id: str) -> bool:
-        """删除知识库（软删除 + 清理物理数据）"""
+        """删除知识库（软删除 + 清理物理数据 + 清理去重状态）"""
         from kb.registry import registry
-        from kb.database import init_kb_meta_db
+        from kb.database import (
+            init_kb_meta_db,
+            init_sync_db,
+            init_dedup_db,
+            init_progress_db,
+        )
 
         info = KnowledgeBaseService.get_info(kb_id)
         if not info:
@@ -685,11 +691,16 @@ class KnowledgeBaseService:
         if persist_dir.exists():
             shutil.rmtree(persist_dir)
 
-        # 3. 软删除：设置 is_active = 0（而不是硬删除）
+        # 3. 清理去重状态（SyncState, DedupRecord, Progress）
+        init_sync_db().clear(kb_id)
+        init_dedup_db().clear(kb_id)
+        init_progress_db().reset(kb_id)
+
+        # 4. 软删除：设置 is_active = 0（而不是硬删除）
         # 这样注册表不会从 KNOWLEDGE_BASES 回退加载已删除的 KB
         init_kb_meta_db().set_active(kb_id, is_active=False)
 
-        # 4. 清除注册表缓存，强制重新加载
+        # 5. 清除注册表缓存，强制重新加载
         registry._loaded = False
         registry._bases.clear()
 

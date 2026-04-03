@@ -255,14 +255,25 @@ class ModelRegistry:
                     self._models[row["id"]] = row
                 logger.debug(f"从数据库加载了 {len(self._models)} 个模型")
             else:
-                logger.debug("数据库为空，使用配置默认值")
+                logger.debug("数据库为空，使用配置默认值并填充模型")
                 self._load_defaults_from_config()
+                self._seed_default_models(model_db)
         except Exception as e:
             logger.warning(f"模型数据库加载失败，使用配置默认值: {e}")
             self._load_defaults_from_config()
         self._loaded = True
 
+    def _seed_default_models(self, model_db) -> None:
+        """将默认 embedding 模型填充到数据库"""
+        for model in self._models.values():
+            if model["type"] == "embedding":
+                model_db.upsert(**model)
+        logger.debug(
+            f"已填充 {len([m for m in self._models.values() if m['type'] == 'embedding'])} 个 embedding 模型"
+        )
+
     def _seed_default_vendors(self, vendor_db):
+        """填充默认供应商（支持多端点 Ollama）"""
         settings = get_settings()
         vendors = [
             {
@@ -271,18 +282,40 @@ class ModelRegistry:
                 "api_base": settings.siliconflow_base_url,
                 "api_key": settings.siliconflow_api_key,
             },
-            {
-                "vendor_id": "ollama",
-                "name": "Ollama",
-                "api_base": settings.ollama_base_url,
-                "api_key": None,
-            },
         ]
+
+        # Ollama 端点：ollama = 本地，ollama_home = 远端
+        if settings.ollama_local_url:
+            vendor_db.upsert(
+                vendor_id="ollama",
+                name="Ollama",
+                api_base=settings.ollama_local_url,
+                api_key=None,
+            )
+        if (
+            settings.ollama_remote_url
+            and settings.ollama_remote_url != settings.ollama_local_url
+        ):
+            vendor_db.upsert(
+                vendor_id="ollama_home",
+                name="Ollama Home",
+                api_base=settings.ollama_remote_url,
+                api_key=None,
+            )
+        if not settings.ollama_local_url and not settings.ollama_remote_url:
+            vendor_db.upsert(
+                vendor_id="ollama",
+                name="Ollama",
+                api_base=settings.ollama_base_url,
+                api_key=None,
+            )
+
         for v in vendors:
             vendor_db.upsert(**v)
         logger.debug(f"已填充默认供应商: {[v['vendor_id'] for v in vendors]}")
 
     def _load_defaults_from_config(self):
+        """从配置加载默认模型（支持多端点 embedding）"""
         settings = get_settings()
         defaults = [
             {
@@ -304,15 +337,6 @@ class ModelRegistry:
                 "config": {},
             },
             {
-                "id": settings.ollama_embed_model,
-                "vendor_id": "ollama",
-                "name": settings.ollama_embed_model,
-                "type": "embedding",
-                "is_active": True,
-                "is_default": True,
-                "config": {},
-            },
-            {
                 "id": settings.rerank_model,
                 "vendor_id": "siliconflow",
                 "name": settings.rerank_model.split("/")[-1],
@@ -322,6 +346,34 @@ class ModelRegistry:
                 "config": {},
             },
         ]
+
+        # Ollama embedding 模型：为每个端点创建独立记录
+        embed_model_name = settings.ollama_embed_model
+        vendor_ids = []
+        if settings.ollama_local_url:
+            vendor_ids.append("ollama")
+        if (
+            settings.ollama_remote_url
+            and settings.ollama_remote_url != settings.ollama_local_url
+        ):
+            vendor_ids.append("ollama_home")
+        if not vendor_ids:
+            vendor_ids = ["ollama"]
+
+        for i, vendor_id in enumerate(vendor_ids):
+            model_id = f"{vendor_id}/{embed_model_name}"
+            defaults.append(
+                {
+                    "id": model_id,
+                    "vendor_id": vendor_id,
+                    "name": embed_model_name,
+                    "type": "embedding",
+                    "is_active": True,
+                    "is_default": i == 0,
+                    "config": {},
+                }
+            )
+
         for model in defaults:
             self._models[model["id"]] = model
 
@@ -347,7 +399,7 @@ class ModelRegistry:
                 return m
         return None
 
-    def list_models(self, type: str = None) -> list[dict]:
+    def list_models(self, type: Optional[str] = None) -> list[dict]:
         self._ensure_loaded()
         if type:
             return self.get_by_type(type)

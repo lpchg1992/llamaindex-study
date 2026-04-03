@@ -14,17 +14,15 @@ from concurrent.futures import ThreadPoolExecutor
 from queue import Queue, Empty
 from typing import AsyncIterator, Dict, List, Optional, Tuple
 
-from llama_index.embeddings.ollama import OllamaEmbedding
 from llamaindex_study.config import get_settings
 from llamaindex_study.logger import get_logger
+from llamaindex_study.ollama_utils import OllamaEmbedder, create_ollama_embedding
 
 logger = get_logger(__name__)
 
 settings = get_settings()
 EMBEDDING_MODEL = settings.ollama_embed_model
 EMBEDDING_DIM = 1024
-MAX_RETRIES = settings.ollama_max_retries
-RETRY_DELAY = settings.ollama_retry_delay
 
 
 # Embedding 结果类型
@@ -32,11 +30,20 @@ EmbeddingResult = Tuple[str, List[float], Optional[str]]
 
 
 class EmbeddingEndpoint:
-    """Embedding 端点配置"""
+    """Embedding 端点配置（包含模型信息）"""
 
-    def __init__(self, name: str, url: str) -> None:
+    def __init__(
+        self,
+        name: str,
+        url: str,
+        model_id: Optional[str] = None,
+        model_name: Optional[str] = None,
+    ) -> None:
         self.name = name
         self.url = url
+        self.model_id = model_id
+        self.model_name = model_name
+        self.is_healthy = True
         self.avg_latency = 0.0
         self.inflight = 0
         self.chunks_completed = 0
@@ -66,23 +73,23 @@ class ParallelEmbeddingProcessor:
             return
         self._initialized = True
 
-        endpoint_configs = settings.get_ollama_endpoints()
-        self.endpoints = [
-            EmbeddingEndpoint(name, url) for name, url in endpoint_configs
-        ]
+        self.endpoints = self._load_embedding_endpoints()
         if not self.endpoints:
-            self.endpoints = [EmbeddingEndpoint("本地", settings.ollama_base_url)]
+            endpoint_configs = settings.get_ollama_endpoints()
+            self.endpoints = [
+                EmbeddingEndpoint(name, url) for name, url in endpoint_configs
+            ]
 
-        if (
-            settings.ollama_remote_url
-            and settings.ollama_remote_url == settings.ollama_local_url
-        ):
-            logger.warning(
-                "OLLAMA_REMOTE_URL 与 OLLAMA_LOCAL_URL 相同，并行模式将退化为单端点"
+        if len(self.endpoints) == 1:
+            logger.info(
+                f"单端点模式: {self.endpoints[0].name} ({self.endpoints[0].url})"
             )
+        else:
+            endpoint_info = ", ".join(f"{ep.name}:{ep.url}" for ep in self.endpoints)
+            logger.info(f"多端点并行模式: {endpoint_info}")
 
         self._executor = ThreadPoolExecutor(max_workers=len(self.endpoints))
-        self._models: Dict[str, OllamaEmbedding] = {}
+        self._models: Dict[str, OllamaEmbedder] = {}
         self._stats: Dict[str, int] = {ep.name: 0 for ep in self.endpoints}
         self._failures: Dict[str, int] = {ep.name: 0 for ep in self.endpoints}
         self._lock = threading.Lock()
@@ -91,8 +98,67 @@ class ParallelEmbeddingProcessor:
         self._pending_count = 0
         self._model_name: str = EMBEDDING_MODEL
 
-        endpoint_info = ", ".join(f"{ep.name}:{ep.url}" for ep in self.endpoints)
-        logger.info(f"并行 Embedding 处理器初始化完成，端点: {endpoint_info}")
+    def _load_embedding_endpoints(self) -> List["EmbeddingEndpoint"]:
+        """从数据库加载 embedding 端点（带健康检查）"""
+        from llamaindex_study.config import get_model_registry
+        from kb.database import init_vendor_db
+
+        registry = get_model_registry()
+        vendor_db = init_vendor_db()
+
+        endpoints = []
+        for model_info in registry.get_by_type("embedding"):
+            vendor_id = model_info.get("vendor_id", "")
+            vendor_info = vendor_db.get(vendor_id) if vendor_id else None
+            if not vendor_info:
+                continue
+
+            base_url = vendor_info.get("api_base")
+            if not base_url:
+                continue
+
+            model_name = model_info["name"]
+            if not model_name.endswith(":latest"):
+                model_name = f"{model_name}:latest"
+
+            ep = EmbeddingEndpoint(
+                name=f"{vendor_info['name']}({model_info['id']})",
+                url=base_url,
+                model_id=model_info["id"],
+                model_name=model_name,
+            )
+
+            if self._health_check(base_url, model_name):
+                ep.is_healthy = True
+                logger.debug(f"端点健康检查通过: {ep.name} ({base_url})")
+            else:
+                ep.is_healthy = False
+                logger.warning(
+                    f"端点健康检查失败: {ep.name} ({base_url})，已标记为不健康"
+                )
+
+            endpoints.append(ep)
+
+        healthy_count = sum(1 for ep in endpoints if ep.is_healthy)
+        logger.info(
+            f"从数据库加载了 {len(endpoints)} 个 embedding 端点（{healthy_count} 个健康）"
+        )
+        return endpoints
+
+    def _health_check(self, url: str, model_name: str, timeout: float = 5.0) -> bool:
+        """验证端点是否可用（发送小文本测试）"""
+        import httpx
+
+        try:
+            response = httpx.post(
+                f"{url}/api/embeddings",
+                json={"model": model_name, "prompt": "health check test"},
+                timeout=timeout,
+            )
+            return response.status_code == 200
+        except Exception as e:
+            logger.debug(f"健康检查失败 {url}: {e}")
+            return False
 
     def set_model_by_model_id(self, model_id: str) -> None:
         """根据模型ID设置当前使用的 embedding 模型
@@ -122,106 +188,79 @@ class ParallelEmbeddingProcessor:
 
         self._model_name = model_name
 
-        new_endpoints = []
-        for ep in self.endpoints:
-            if ep.url.rstrip("/") != base_url.rstrip("/"):
-                new_endpoints.append(
-                    EmbeddingEndpoint(f"{ep.name}({model_id})", base_url)
-                )
-            else:
-                new_endpoints.append(ep)
-
-        self.endpoints = (
-            new_endpoints
-            if len(new_endpoints) > len(self.endpoints)
-            else self.endpoints
+        needs_update = any(
+            ep.url.rstrip("/") != base_url.rstrip("/") for ep in self.endpoints
         )
+
+        if needs_update:
+            self.endpoints = [
+                EmbeddingEndpoint(f"{ep.name}({model_id})", base_url)
+                for ep in self.endpoints
+            ]
+            logger.info(f"端点已更新为: {base_url}")
 
         self._models.clear()
         logger.info(f"Embedding 模型已切换为: {model_id} ({self._model_name})")
 
-    def _get_model(self, ep_url: str) -> OllamaEmbedding:
-        """获取或创建 embed 模型"""
-        if ep_url not in self._models:
-            self._models[ep_url] = OllamaEmbedding(
-                model_name=self._model_name, base_url=ep_url
+    def _get_model(self, ep: EmbeddingEndpoint) -> OllamaEmbedder:
+        """获取或创建 embed 模型（使用 OllamaEmbedder 支持 503 重试）"""
+        cache_key = f"{ep.url}:{ep.model_name}"
+        if cache_key not in self._models:
+            self._models[cache_key] = create_ollama_embedding(
+                model=ep.model_name or self._model_name, base_url=ep.url
             )
-        return self._models[ep_url]
+        return self._models[cache_key]
 
     def _get_embedding_with_retry(
         self, text: str, ep: EmbeddingEndpoint
     ) -> EmbeddingResult:
-        """带重试的 embedding 获取"""
-        last_error: Optional[str] = None
+        """获取 embedding（内部重试由 OllamaEmbedder 处理）"""
+        try:
+            start = time.perf_counter()
+            with self._lock:
+                ep.inflight += 1
 
-        for attempt in range(MAX_RETRIES):
-            try:
-                start = time.perf_counter()
-                with self._lock:
-                    ep.inflight += 1
+            embedding = self._call_ollama_embed(ep, text)
 
-                embedding = self._call_ollama_embed(ep.url, text)
+            latency = time.perf_counter() - start
+            with self._lock:
+                self._stats[ep.name] += 1
+                ep.chunks_completed += 1
+                ep.total_time += latency
+                ep.avg_latency = (
+                    latency
+                    if ep.avg_latency == 0
+                    else (ep.avg_latency * 0.7 + latency * 0.3)
+                )
+            return (ep.name, embedding, None)
+        except Exception as e:
+            with self._lock:
+                self._failures[ep.name] += 1
+            logger.warning(f"[{ep.name}] Embedding 失败: {e}")
+            return (ep.name, [0.0] * EMBEDDING_DIM, str(e))
+        finally:
+            with self._lock:
+                ep.inflight = max(0, ep.inflight - 1)
 
-                latency = time.perf_counter() - start
-                with self._lock:
-                    self._stats[ep.name] += 1
-                    ep.chunks_completed += 1
-                    ep.total_time += latency
-                    ep.avg_latency = (
-                        latency
-                        if ep.avg_latency == 0
-                        else (ep.avg_latency * 0.7 + latency * 0.3)
-                    )
-                return (ep.name, embedding, None)
-            except Exception as e:
-                last_error = str(e)
-                if attempt < MAX_RETRIES - 1:
-                    logger.debug(
-                        f"[{ep.name}] Embedding 失败 (尝试 {attempt + 1}/{MAX_RETRIES}): {e}"
-                    )
-                    time.sleep(RETRY_DELAY)
-                else:
-                    with self._lock:
-                        self._failures[ep.name] += 1
-            finally:
-                with self._lock:
-                    ep.inflight = max(0, ep.inflight - 1)
-
-        logger.warning(f"[{ep.name}] Embedding 最终失败: {last_error}")
-        return (
-            ep.name,
-            [0.0] * EMBEDDING_DIM,
-            f"重试{MAX_RETRIES}次后失败: {last_error}",
-        )
-
-    def _call_ollama_embed(self, url: str, text: str) -> List[float]:
-        """直接调用 Ollama /api/embed 端点"""
-        import httpx
-
-        model_name = self._model_name
-
-        payload = {
-            "model": model_name,
-            "input": text[:8192],
-        }
-
-        with httpx.Client(timeout=60.0) as client:
-            response = client.post(f"{url}/api/embed", json=payload)
-            if response.status_code != 200:
-                raise Exception(f"API error: {response.status_code}")
-            result = response.json()
-            return result["embedding"]
+    def _call_ollama_embed(self, ep: EmbeddingEndpoint, text: str) -> List[float]:
+        """通过缓存的 OllamaEmbedder 获取 embedding"""
+        model = self._get_model(ep)
+        return model.get_text_embedding(text[:8192])
 
     def _get_best_endpoint(self) -> EmbeddingEndpoint:
-        """选择当前最优的端点（基于速度和负载）"""
+        """选择当前最优的端点（基于健康状态、速度和负载）"""
         with self._lock:
-            best_ep = self.endpoints[0]
+            healthy_eps = [ep for ep in self.endpoints if ep.is_healthy]
+            if not healthy_eps:
+                raise RuntimeError("无可用的 embedding 端点（所有端点健康检查失败）")
+
+            best_ep = healthy_eps[0]
             best_score = float("inf")
 
-            for ep in self.endpoints:
+            for ep in healthy_eps:
                 if ep.inflight >= 3:
                     continue
-                if len(self.endpoints) > 1 and ep.total_time > 0:
+                if len(healthy_eps) > 1 and ep.total_time > 0:
                     throughput = ep.chunks_completed / ep.total_time
                     score = 1.0 / throughput if throughput > 0 else float("inf")
                     score += ep.inflight * 0.5

@@ -26,6 +26,7 @@ from typing import Optional, List, Callable, Set
 
 from llama_index.core import SimpleDirectoryReader
 from llama_index.core.schema import Document as LlamaDocument
+from llama_index.readers.file import PptxReader, PandasExcelReader
 from llamaindex_study.node_parser import get_node_parser
 
 from llamaindex_study.logger import get_logger
@@ -117,7 +118,9 @@ class DocumentProcessor:
 
             # 获取底层 table
             uri = lance_store.uri
-            table_name = lance_store.table_name
+            table_name = (
+                getattr(lance_store, "table_name", None) or lance_store._table_name
+            )
 
             # 连接并获取 table
             db = lancedb.connect(uri)
@@ -654,20 +657,37 @@ class DocumentProcessor:
         path = Path(file_path)
         ext = path.suffix.lower()
 
-        try:
-            reader = SimpleDirectoryReader(input_files=[str(path)])
-            raw_docs = reader.load_data()
+        source_map = {
+            ".docx": "word",
+            ".doc": "word",
+            ".xlsx": "excel",
+            ".xls": "excel",
+            ".pptx": "pptx",
+            ".md": "markdown",
+            ".txt": "text",
+            ".html": "html",
+        }
 
-            source_map = {
-                ".docx": "word",
-                ".doc": "word",
-                ".xlsx": "excel",
-                ".xls": "excel",
-                ".pptx": "pptx",
-                ".md": "markdown",
-                ".txt": "text",
-                ".html": "html",
-            }
+        try:
+            # Excel 和 PowerPoint 需要使用专门的 Reader
+            if ext in [".xlsx", ".xls"]:
+                reader = PandasExcelReader()
+                raw_docs = reader.load_data(str(path))
+                logger.debug(
+                    f"使用 PandasExcelReader 读取 {path}, 获取 {len(raw_docs)} 个文档"
+                )
+            elif ext == ".pptx":
+                reader = PptxReader()
+                raw_docs = reader.load_data(str(path))
+                logger.debug(
+                    f"使用 PptxReader 读取 {path}, 获取 {len(raw_docs)} 个文档"
+                )
+            else:
+                reader = SimpleDirectoryReader(input_files=[str(path)])
+                raw_docs = reader.load_data()
+                logger.debug(
+                    f"使用 SimpleDirectoryReader 读取 {path}, 获取 {len(raw_docs)} 个文档"
+                )
 
             source = source_map.get(ext, "document")
 
@@ -677,8 +697,10 @@ class DocumentProcessor:
                 doc.metadata.update(metadata or {})
                 docs.append(doc)
 
+            logger.info(f"文档处理成功: {path}, 类型={source}, 文档数={len(docs)}")
+
         except Exception as e:
-            print(f"   ⚠️  文档读取失败: {e}")
+            logger.error(f"文档读取失败: {path}, 错误: {e}")
 
         return docs
 
@@ -752,11 +774,7 @@ class DocumentProcessor:
         saved = 0
         processed_batch = []
 
-        for node in nodes:
-            if self.embed_model:
-                processed_batch.append(node)
-            else:
-                processed_batch.append(node)
+        processed_batch = list(nodes)
 
         # 批量处理
         if processed_batch and self.embed_model:

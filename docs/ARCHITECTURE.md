@@ -103,19 +103,20 @@ class ParallelEmbeddingProcessor:
 ```python
 # kb/parallel_embedding.py
 def _get_embedding_with_retry(self, text: str, ep: EmbeddingEndpoint) -> EmbeddingResult:
-    """带重试的 embedding 获取"""
-    for attempt in range(MAX_RETRIES):  # 默认3次
-        try:
-            embedding = model.get_text_embedding(text)
-            self._stats[ep.name] += 1
-            return (ep.name, embedding, None)
-        except Exception as e:
-            if attempt < MAX_RETRIES - 1:
-                logger.debug(f"[{ep.name}] 重试 {attempt + 1}/{MAX_RETRIES}")
-    
-    self._failures[ep.name] += 1
-    return (ep.name, [0.0] * EMBEDDING_DIM, f"重试{MAX_RETRIES}次后失败")
+    """获取 embedding（内部重试由 OllamaEmbedder 处理）"""
+    try:
+        embedding = self._call_ollama_embed(ep.url, text)
+        self._stats[ep.name] += 1
+        return (ep.name, embedding, None)
+    except Exception as e:
+        self._failures[ep.name] += 1
+        return (ep.name, [0.0] * EMBEDDING_DIM, str(e))
 ```
+
+**重试架构**：
+- `OllamaEmbedder.get_text_embedding()` 内部处理 503 错误重试（指数退避）
+- `ParallelEmbeddingProcessor` 仅负责统计和错误返回，不做额外重试
+- 模型通过 `create_ollama_embedding()` 工厂函数创建，自动使用 `OllamaEmbedder`
 
 ## 架构分层
 
@@ -190,37 +191,77 @@ async def _execute_obsidian(self, task):
         dedup_manager._save()
 ```
 
-### 2. 并行 Embedding 处理器（自适应负载均衡）
+### 2. 并行 Embedding 处理器（自适应负载均衡 + 数据库驱动）
 
 ```python
 # kb/parallel_embedding.py
 
 class ParallelEmbeddingProcessor:
-    """真正的自适应负载均衡 - 所有端点同时请求，先完成的返回"""
-    
-    # 配置常量
-    EMBEDDING_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "bge-m3")
-    EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "1024"))
-    MAX_RETRIES = 3
-    RETRY_DELAY = 1.0
-    
-    async def process_batch(self, texts: List[str]) -> List[EmbeddingResult]:
-        """批量处理，自适应负载均衡"""
-        async def get_embedding_from_any_endpoint(text: str) -> EmbeddingResult:
-            # 同时向所有端点发送请求
-            tasks = [try_endpoint(ep) for ep in self.endpoints]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            
-            # 找出最快成功的
-            for r in results:
-                if isinstance(r, tuple) and r[2] is None:
-                    return r
-            
-            # 所有端点都失败
-            return (self.endpoints[0].name, [0.0] * EMBEDDING_DIM, "所有端点都失败")
-        
-        return await asyncio.gather(*[get_embedding_from_any_endpoint(t) for t in texts])
+    """并行 Embedding 处理器（自适应负载均衡 + DB 驱动端点发现）"""
+
+    def __init__(self):
+        self.endpoints = self._load_embedding_endpoints()
+        self._models: Dict[str, OllamaEmbedder] = {}  # 端点模型缓存
+
+    def _load_embedding_endpoints(self) -> List[EmbeddingEndpoint]:
+        """从数据库加载 embedding 端点（带健康检查）"""
+        from llamaindex_study.config import get_model_registry
+        from kb.database import init_vendor_db
+
+        registry = get_model_registry()
+        vendor_db = init_vendor_db()
+        endpoints = []
+
+        for model_info in registry.get_by_type("embedding"):
+            vendor_info = vendor_db.get(model_info["vendor_id"])
+            if not vendor_info:
+                continue
+
+            ep = EmbeddingEndpoint(
+                name=f"{vendor_info['name']}({model_info['id']})",
+                url=vendor_info["api_base"],
+                model_id=model_info["id"],
+                model_name=model_info["name"],
+            )
+
+            if self._health_check(ep.url, ep.model_name):
+                ep.is_healthy = True
+            else:
+                ep.is_healthy = False
+
+            endpoints.append(ep)
+        return endpoints
+
+    def _health_check(self, url: str, model_name: str) -> bool:
+        """验证端点是否可用"""
+        import httpx
+        try:
+            response = httpx.post(f"{url}/api/embeddings",
+                                  json={"model": model_name, "prompt": "test"},
+                                  timeout=5.0)
+            return response.status_code == 200
+        except Exception:
+            return False
+
+    def _get_best_endpoint(self) -> EmbeddingEndpoint:
+        """选择健康且负载最低的端点"""
+        healthy = [ep for ep in self.endpoints if ep.is_healthy]
+        if not healthy:
+            raise RuntimeError("无可用的 embedding 端点")
+        return min(healthy, key=lambda ep: ep.avg_latency)
 ```
+
+**端点发现流程**：
+1. 从 `ModelRegistry` 获取所有 `embedding` 类型模型
+2. 查询每个模型关联的 `Vendor`，获取 `api_base`（端点 URL）
+3. 对每个端点执行健康检查（`/api/embeddings`）
+4. 标记健康/不健康状态，供任务分发参考
+
+**组件关系**：
+- `ModelRegistry`: 从 DB 加载 embedding 模型配置
+- `VendorDB`: 提供 vendor 的 api_base 等配置
+- `OllamaEmbedder`: 继承自 `OllamaEmbedding`，内置 503 重试（指数退避）
+- `ParallelEmbeddingProcessor`: 多端点负载均衡，调用缓存的 `OllamaEmbedder`
 
 ### 3. 去重数据库锁
 
@@ -444,8 +485,25 @@ parser = get_hierarchical_node_parser()
 
 #### ID规范
 
-- **供应商ID**：如 `siliconflow`, `ollama`, `ollama_homepc`
-- **模型ID**：格式 `{vendor_id}/{model-name}`，如 `siliconflow/DeepSeek-V3.2`, `ollama/bge-m3:latest`
+- **供应商ID**：如 `siliconflow`, `ollama`, `ollama_home`, `ollama_homepc`
+- **模型ID**：格式 `{vendor_id}/{model-name}`，如 `siliconflow/DeepSeek-V3.2`, `ollama/bge-m3`, `ollama_home/bge-m3`
+
+#### 多端点 Ollama 支持
+
+Embedding 模型支持多端点并行处理：
+
+```
+vendors 表:
+├── siliconflow (api_base: https://api.siliconflow.cn/v1)
+├── ollama (api_base: http://localhost:11434)
+└── ollama_home (api_base: http://192.168.1.100:11434)
+
+models 表 (embedding 类型):
+├── ollama/bge-m3 (vendor_id: ollama, name: bge-m3)
+└── ollama_home/bge-m3 (vendor_id: ollama_home, name: bge-m3)
+```
+
+启动时 `ParallelEmbeddingProcessor` 从数据库加载所有 embedding 模型，对每个端点执行健康检查，只有健康的端点才会被用于任务分发。
 
 #### 核心方法
 
@@ -473,9 +531,12 @@ parser = get_hierarchical_node_parser()
 - `reload()`: 重新从数据库加载
 
 **ollama_utils** (`src/llamaindex_study/ollama_utils.py`):
+- `OllamaEmbedder`: Ollama Embedding 封装类，继承自 `OllamaEmbedding`，内置 503 重试（指数退避）
+- `create_ollama_embedding()`: 工厂函数，创建配置好重试参数的 `OllamaEmbedder`
 - `create_llm()`: 创建 LLM 实例（支持 model_id 参数，自动从供应商获取配置）
 - `configure_llm_by_model_id()`: 根据 model_id 配置全局 LLM
 - `configure_global_embed_model()`: 配置全局 Embedding 模型
+- `create_parallel_ollama_embedding()`: 创建 `ParallelEmbeddingProcessor` 单例
 
 #### API 端点
 
