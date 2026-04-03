@@ -11,11 +11,12 @@ Zotero 文档导入处理器
 import os
 import re
 import sqlite3
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 from llama_index.core import SimpleDirectoryReader
 from llama_index.core.schema import Document as LlamaDocument
@@ -524,6 +525,8 @@ class ZoteroImporter:
         progress: ProcessingProgress = None,
         rebuild: bool = False,
         progress_file: Path = None,
+        progress_callback: Optional[Callable[[int, int, str, str], None]] = None,
+        cancel_event: Optional["threading.Event"] = None,
     ) -> dict:
         """
         导入整个收藏夹
@@ -536,6 +539,8 @@ class ZoteroImporter:
             progress: 进度记录
             rebuild: 是否重建
             progress_file: 进度保存路径
+            progress_callback: 进度回调 (current, total, message, level)
+            cancel_event: 取消事件，用于主动终止
 
         Returns:
             导入统计
@@ -564,6 +569,10 @@ class ZoteroImporter:
         stats = {"items": 0, "nodes": 0, "failed": 0, "processed_sources": []}
 
         for i, item_id in enumerate(item_ids):
+            if cancel_event and cancel_event.is_set():
+                logger.info(f"导入被取消，已处理 {stats['items']} 篇文献")
+                break
+
             item_id_str = str(item_id)
             if item_id_str in processed_set:
                 logger.debug(f"跳过已处理文献: {item_id}")
@@ -580,10 +589,10 @@ class ZoteroImporter:
                 elapsed = time.time() - (
                     progress.started_at if progress else time.time()
                 )
-                logger.info(
-                    f"进度: {i + 1}/{len(item_ids)} ({100 * (i + 1) // len(item_ids)}%), "
-                    f"节点: {stats['nodes']}, 耗时: {elapsed:.0f}s"
-                )
+                msg = f"进度: {i + 1}/{len(item_ids)} ({100 * (i + 1) // len(item_ids)}%), 节点: {stats['nodes']}, 耗时: {elapsed:.0f}s"
+                logger.info(msg)
+                if progress_callback:
+                    progress_callback(i + 1, len(item_ids), msg, "info")
 
             item = self.get_item(item_id)
             if not item:

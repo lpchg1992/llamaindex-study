@@ -6,6 +6,7 @@
 
 import asyncio
 import os
+import queue
 import subprocess
 import sys
 import threading
@@ -454,6 +455,8 @@ class TaskExecutor:
 
     async def _execute_zotero(self, task: "Task") -> None:
         """执行 Zotero 导入"""
+        import threading
+
         from kb.zotero_processor import ZoteroImporter
         from kb.document_processor import DocumentProcessorConfig, ProcessingProgress
         from kb.parallel_embedding import get_parallel_processor
@@ -476,6 +479,10 @@ class TaskExecutor:
             task_id, message=f"准备导入 Zotero: {collection_name}"
         )
 
+        vs = None
+        embed_processor = None
+        importer = None
+
         try:
             vs = self._get_vector_store(kb_id)
             logger.debug(f"[{task_id}] 向量存储初始化完成: {kb_id}")
@@ -486,7 +493,7 @@ class TaskExecutor:
             embed_processor = get_parallel_processor()
             logger.debug(f"[{task_id}] 并行 Embedding 处理器初始化完成")
 
-            persist_dir = self._get_vector_store(kb_id).persist_dir
+            persist_dir = vs.persist_dir
             dedup_manager = DeduplicationManager(
                 kb_id=kb_id,
                 persist_dir=persist_dir,
@@ -509,6 +516,10 @@ class TaskExecutor:
                 if result and "collectionID" in result:
                     collection_id = result["collectionID"]
                     logger.debug(f"[{task_id}] 找到收藏夹 ID: {collection_id}")
+                elif result and "multiple" in result:
+                    raise ValueError(
+                        f"名称模糊，存在多个匹配: {[m['collectionName'] for m in result.get('matches', [])]}"
+                    )
 
             if not collection_id:
                 raise ValueError("未指定收藏夹 ID")
@@ -525,25 +536,113 @@ class TaskExecutor:
                 dedup_manager.clear()
                 progress = ProcessingProgress()
 
-            self.queue.update_progress(
-                task_id, message=f"开始导入 {collection_name}..."
-            )
+            item_ids = importer.get_items_in_collection(collection_id)
+            total_items = len(item_ids)
+            logger.info(f"[{task_id}] 收藏夹包含 {total_items} 篇文献")
 
+            self.queue.update_progress(
+                task_id,
+                total=total_items,
+                message=f"开始导入 {collection_name} ({total_items} 篇文献)",
+            )
             await self._update_heartbeat(task_id)
 
-            logger.info(
-                f"[{task_id}] 开始导入收藏夹: {collection_name} (ID: {collection_id})"
-            )
+            if total_items == 0:
+                self.queue.update_progress(task_id, progress=100, message="收藏夹为空")
+                self.queue.complete_task(
+                    task_id, result={"items": 0, "nodes": 0, "failed": 0}
+                )
+                return
 
-            stats = importer.import_collection(
-                collection_id=collection_id,
-                collection_name=collection_name,
-                vector_store=vs,
-                embed_model=embed_model,
-                progress=progress,
-                rebuild=rebuild,
-                progress_file=progress_file,
-            )
+            cancel_event = threading.Event()
+            import_done = threading.Event()
+            import_error = [None]
+            stats_result = [None]
+            progress_queue: "queue.Queue" = queue.Queue()
+
+            def progress_callback(
+                current: int, total: int, message: str, level: str
+            ) -> None:
+                progress_queue.put_nowait((current, total, message))
+
+            def run_import():
+                thread_importer = ZoteroImporter(
+                    config=config, dedup_manager=dedup_manager
+                )
+                try:
+                    stats_result[0] = thread_importer.import_collection(
+                        collection_id=collection_id,
+                        collection_name=collection_name,
+                        vector_store=vs,
+                        embed_model=embed_model,
+                        progress=progress,
+                        rebuild=rebuild,
+                        progress_file=progress_file,
+                        progress_callback=progress_callback,
+                        cancel_event=cancel_event,
+                    )
+                except Exception as e:
+                    import_error[0] = e
+                finally:
+                    import_done.set()
+                    thread_importer.close()
+
+            import_thread = threading.Thread(target=run_import, daemon=True)
+            import_thread.start()
+
+            last_heartbeat_count = 0
+            while import_thread.is_alive():
+                await asyncio.sleep(1)
+                while not progress_queue.empty():
+                    try:
+                        current, total, message = progress_queue.get_nowait()
+                        self.queue.update_progress(
+                            task_id,
+                            current=current,
+                            total=total,
+                            progress=int(current / total * 100) if total > 0 else 0,
+                            message=message,
+                        )
+                    except Exception:
+                        pass
+                if await self._check_cancelled(task_id):
+                    cancel_event.set()
+                    import_thread.join(timeout=5)
+                    processed = (
+                        stats_result[0].get("items", 0) if stats_result[0] else 0
+                    )
+                    self.queue.update_progress(
+                        task_id,
+                        message=f"导入已取消 (已处理 {processed} 篇)",
+                    )
+                    self.queue.complete_task(task_id, error="任务被取消")
+                    return
+                current_items = (
+                    stats_result[0].get("items", 0) if stats_result[0] else 0
+                )
+                if current_items - last_heartbeat_count >= PROGRESS_UPDATE_INTERVAL:
+                    await self._update_heartbeat(task_id)
+                    last_heartbeat_count = current_items
+
+            import_thread.join()
+
+            while not progress_queue.empty():
+                try:
+                    current, total, message = progress_queue.get_nowait()
+                    self.queue.update_progress(
+                        task_id,
+                        current=current,
+                        total=total,
+                        progress=int(current / total * 100) if total > 0 else 0,
+                        message=message,
+                    )
+                except Exception:
+                    pass
+
+            if import_error[0]:
+                raise import_error[0]
+
+            stats = stats_result[0]
 
             progress_file.unlink(missing_ok=True)
 
@@ -579,7 +678,8 @@ class TaskExecutor:
             self.queue.update_progress(task_id, message=f"导入失败: {str(e)}")
             raise
         finally:
-            importer.close()
+            if importer is not None:
+                importer.close()
 
     async def _execute_generic(self, task: "Task") -> None:
         """执行通用文件导入"""

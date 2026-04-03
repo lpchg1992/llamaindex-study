@@ -7,6 +7,7 @@
 """
 
 import asyncio
+import logging
 import os
 import sys
 from pathlib import Path
@@ -14,6 +15,7 @@ from pathlib import Path
 # 添加项目根目录到 path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from llamaindex_study.logger import configure_all_loggers, get_log_dir
 from kb.task_executor import (
     TaskScheduler,
     write_scheduler_pid,
@@ -25,11 +27,11 @@ from kb.task_executor import (
 def main():
     print(f"调度器启动 (PID: {os.getpid()})")
 
-    # 写入 PID 文件
+    configure_all_loggers(get_log_dir(), level=logging.INFO)
+
     write_scheduler_pid()
 
     try:
-        # 运行调度器
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         scheduler = TaskScheduler()
@@ -37,12 +39,9 @@ def main():
     except KeyboardInterrupt:
         print("调度器收到停止信号")
     finally:
-        # 清理 PID 文件
         cleanup_scheduler_pid()
         print("调度器已停止")
 
 
 if __name__ == "__main__":
-    import os
-
     main()
