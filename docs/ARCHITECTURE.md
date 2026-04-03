@@ -67,55 +67,93 @@ class LanceDBWriteQueue:
             self._queue.task_done()
 ```
 
-### 3. 并行 Embedding 处理器（自适应负载均衡）
+### 3. 并行 Embedding 处理器（自适应负载均衡 + 动态健康检查）
 
 ```python
 # kb/parallel_embedding.py
 class ParallelEmbeddingProcessor:
     def __init__(self):
-        self.endpoints = [
-            EmbeddingEndpoint("本地", DEFAULT_LOCAL_URL),
-            EmbeddingEndpoint("远程", DEFAULT_REMOTE_URL),
-        ]
+        self.endpoints = self._load_embedding_endpoints()
         self._executor = ThreadPoolExecutor(max_workers=len(self.endpoints))
-        self._chunk_queue = deque()
-    
-    async def process_batch(self, texts):
-        """自适应负载均衡：所有 chunk 入队，快的端点处理更多"""
-        # 1. 所有 chunk 入队
-        self._chunk_queue = deque(range(len(texts)))
-        
-        # 2. 每个端点的 worker 不断从队列取任务
-        def worker(ep):
-            while True:
-                chunk_idx = self._chunk_queue.popleft() if self._chunk_queue else None
-                if chunk_idx is None:
-                    return
-                result = ep.process(texts[chunk_idx])
-                results[chunk_idx] = result
-        
-        # 3. 快的端点自然处理更多 chunk
-        return results
+        self._consecutive_failures: Dict[str, int] = {}  # 连续失败计数
+        self._health_check_task: Optional[asyncio.Task] = None
+        self._health_check_interval: float = 30.0  # 每30秒检查一次
+        self._failure_threshold: int = 3  # 连续3次失败才标记不健康
+
+    def start_health_checks(self) -> None:
+        """启动持续健康检查循环（由 TaskScheduler 调用）"""
+        if self._health_check_task is not None:
+            return
+        loop = asyncio.get_running_loop()
+        self._health_check_task = loop.create_task(self._health_check_loop())
+
+    async def _health_check_loop(self):
+        """持续健康检查循环 - 定期检查所有端点的健康状态"""
+        while True:
+            for ep in self.endpoints:
+                is_healthy = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: self._sync_health_check(ep)
+                )
+                with self._lock:
+                    if is_healthy:
+                        if not ep.is_healthy:
+                            logger.info(f"[{ep.name}] 端点恢复，已标记为健康")
+                        ep.is_healthy = True
+                        ep.last_error = None
+                        self._consecutive_failures[ep.name] = 0
+            await asyncio.sleep(self._health_check_interval)
+
+    def _get_best_endpoint(self) -> EmbeddingEndpoint:
+        """选择健康且负载最低的端点"""
+        healthy_eps = [ep for ep in self.endpoints if ep.is_healthy]
+        if not healthy_eps:
+            # 积极恢复：复活所有端点
+            for ep in self.endpoints:
+                ep.is_healthy = True
+                self._consecutive_failures[ep.name] = 0
+            healthy_eps = self.endpoints.copy()
+        return min(healthy_eps, key=lambda ep: ep.avg_latency)
 ```
 
-### 4. 失败重试机制
+**端点发现流程**：
+1. 从 `ModelRegistry` 获取所有 `embedding` 类型模型
+2. 查询每个模型关联的 `Vendor`，获取 `api_base`（端点 URL）
+3. 对每个端点执行健康检查（`/api/embeddings`）
+4. 标记健康/不健康状态，供任务分发参考
 
-```python
-# kb/parallel_embedding.py
-def _get_embedding_with_retry(self, text: str, ep: EmbeddingEndpoint) -> EmbeddingResult:
-    """获取 embedding（内部重试由 OllamaEmbedder 处理）"""
-    try:
-        embedding = self._call_ollama_embed(ep.url, text)
-        self._stats[ep.name] += 1
-        return (ep.name, embedding, None)
-    except Exception as e:
-        self._failures[ep.name] += 1
-        return (ep.name, [0.0] * EMBEDDING_DIM, str(e))
+### 4. 动态健康检查与恢复机制
+
+**健康检查架构**：
+
 ```
+TaskScheduler.run()
+    │
+    └── start_health_checks()
+            │
+            └── _health_check_loop()  ← 每30秒检查所有端点
+                    │
+                    ├── _sync_health_check(ep) → 成功 → is_healthy=True
+                    │
+                    └── 失败不立即标记（让实际调用处理）
+```
+
+**端点状态转换**：
+
+| 状态 | 触发条件 | 后果 |
+|------|---------|------|
+| `is_healthy=True` | 健康检查成功 / 成功调用 | 可被 `_get_best_endpoint()` 选中 |
+| `is_healthy=False` | 连续3次 embedding 调用失败 | 被跳过，等待恢复 |
+
+**端点恢复机制**：
+
+| 机制 | 触发条件 | 特点 |
+|------|---------|------|
+| **被动恢复** | `_health_check_loop()` 检测成功 | 最多延迟30秒，更保守 |
+| **积极恢复** | `_get_best_endpoint()` 无健康端点 | 立即尝试所有端点 |
 
 **重试架构**：
 - `OllamaEmbedder.get_text_embedding()` 内部处理 503 错误重试（指数退避）
-- `ParallelEmbeddingProcessor` 仅负责统计和错误返回，不做额外重试
+- `ParallelEmbeddingProcessor` 处理端点级故障：连续失败3次标记为不健康
 - 模型通过 `create_ollama_embedding()` 工厂函数创建，自动使用 `OllamaEmbedder`
 
 ## 架构分层
@@ -244,10 +282,14 @@ class ParallelEmbeddingProcessor:
             return False
 
     def _get_best_endpoint(self) -> EmbeddingEndpoint:
-        """选择健康且负载最低的端点"""
+        """选择健康且负载最低的端点，无健康端点时尝试复活"""
         healthy = [ep for ep in self.endpoints if ep.is_healthy]
         if not healthy:
-            raise RuntimeError("无可用的 embedding 端点")
+            # 积极恢复：复活所有端点
+            for ep in self.endpoints:
+                ep.is_healthy = True
+                self._consecutive_failures[ep.name] = 0
+            healthy = self.endpoints.copy()
         return min(healthy, key=lambda ep: ep.avg_latency)
 ```
 
@@ -262,6 +304,11 @@ class ParallelEmbeddingProcessor:
 - `VendorDB`: 提供 vendor 的 api_base 等配置
 - `OllamaEmbedder`: 继承自 `OllamaEmbedding`，内置 503 重试（指数退避）
 - `ParallelEmbeddingProcessor`: 多端点负载均衡，调用缓存的 `OllamaEmbedder`
+
+**动态健康检查**：
+- 由 `TaskScheduler` 启动时调用 `start_health_checks()`
+- `_health_check_loop()` 每30秒检查所有端点
+- 成功时标记 `is_healthy=True`，失败不立即标记（由实际调用处理）
 
 ### 3. 去重数据库锁
 

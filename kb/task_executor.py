@@ -792,6 +792,11 @@ class TaskScheduler:
         # 启动时同步状态
         self._sync_task_states()
 
+        # 启动 embedding 端点健康检查
+        from kb.parallel_embedding import get_parallel_processor
+
+        get_parallel_processor().start_health_checks()
+
         while self._running:
             try:
                 # 获取当前运行中的任务数
@@ -829,6 +834,14 @@ class TaskScheduler:
             await asyncio.sleep(1)
 
         logger.info("任务调度器已停止")
+
+        # 清理 embedding 端点健康检查
+        from kb.parallel_embedding import get_parallel_processor
+
+        processor = get_parallel_processor()
+        if processor._health_check_task is not None:
+            processor._health_check_task.cancel()
+            logger.info("Embedding 健康检查循环已停止")
 
     def _cleanup_completed_tasks(self) -> None:
         """清理已完成的任务引用"""

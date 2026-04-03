@@ -14,6 +14,8 @@ from concurrent.futures import ThreadPoolExecutor
 from queue import Queue, Empty
 from typing import AsyncIterator, Dict, List, Optional, Tuple
 
+import httpx
+
 from llamaindex_study.config import get_settings
 from llamaindex_study.logger import get_logger
 from llamaindex_study.ollama_utils import OllamaEmbedder, create_ollama_embedding
@@ -48,6 +50,7 @@ class EmbeddingEndpoint:
         self.inflight = 0
         self.chunks_completed = 0
         self.total_time = 0.0
+        self.last_error: Optional[str] = None
 
 
 class ParallelEmbeddingProcessor:
@@ -92,11 +95,31 @@ class ParallelEmbeddingProcessor:
         self._models: Dict[str, OllamaEmbedder] = {}
         self._stats: Dict[str, int] = {ep.name: 0 for ep in self.endpoints}
         self._failures: Dict[str, int] = {ep.name: 0 for ep in self.endpoints}
+        self._consecutive_failures: Dict[str, int] = {
+            ep.name: 0 for ep in self.endpoints
+        }
         self._lock = threading.Lock()
         self._chunk_queue: deque = deque()
         self._results: Dict[int, EmbeddingResult] = {}
         self._pending_count = 0
         self._model_name: str = EMBEDDING_MODEL
+
+        # 健康检查任务
+        self._health_check_task: Optional[asyncio.Task] = None
+        self._health_check_interval: float = 30.0  # 每30秒检查一次
+        self._failure_threshold: int = 3  # 连续3次失败才标记为不健康
+
+    def start_health_checks(self) -> None:
+        """启动持续健康检查循环（在有事件循环的环境中调用）"""
+        if self._health_check_task is not None:
+            return
+
+        try:
+            loop = asyncio.get_running_loop()
+            self._health_check_task = loop.create_task(self._health_check_loop())
+            logger.info("健康检查循环已启动")
+        except RuntimeError:
+            logger.warning("无法启动健康检查循环：没有运行中的事件循环")
 
     def _load_embedding_endpoints(self) -> List["EmbeddingEndpoint"]:
         """从数据库加载 embedding 端点（带健康检查）"""
@@ -158,6 +181,42 @@ class ParallelEmbeddingProcessor:
             return response.status_code == 200
         except Exception as e:
             logger.debug(f"健康检查失败 {url}: {e}")
+            return False
+
+    async def _health_check_loop(self):
+        """持续健康检查循环 - 定期检查所有端点的健康状态"""
+        while True:
+            try:
+                for ep in self.endpoints:
+                    is_healthy = await asyncio.get_event_loop().run_in_executor(
+                        None, lambda: self._sync_health_check(ep)
+                    )
+
+                    with self._lock:
+                        if is_healthy:
+                            if not ep.is_healthy:
+                                logger.info(f"[{ep.name}] 端点恢复，已标记为健康")
+                            ep.is_healthy = True
+                            ep.last_error = None
+                            self._consecutive_failures[ep.name] = 0
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"健康检查循环异常: {e}")
+
+            await asyncio.sleep(self._health_check_interval)
+
+    def _sync_health_check(self, ep: EmbeddingEndpoint) -> bool:
+        """同步健康检查（在线程池中运行）"""
+        try:
+            response = httpx.post(
+                f"{ep.url}/api/embeddings",
+                json={"model": ep.model_name or self._model_name, "prompt": "health"},
+                timeout=10.0,
+            )
+            return response.status_code == 200
+        except Exception:
             return False
 
     def set_model_by_model_id(self, model_id: str) -> None:
@@ -225,6 +284,7 @@ class ParallelEmbeddingProcessor:
             latency = time.perf_counter() - start
             with self._lock:
                 self._stats[ep.name] += 1
+                self._consecutive_failures[ep.name] = 0
                 ep.chunks_completed += 1
                 ep.total_time += latency
                 ep.avg_latency = (
@@ -236,6 +296,16 @@ class ParallelEmbeddingProcessor:
         except Exception as e:
             with self._lock:
                 self._failures[ep.name] += 1
+                self._consecutive_failures[ep.name] += 1
+
+                if self._consecutive_failures[ep.name] >= self._failure_threshold:
+                    ep.is_healthy = False
+                    ep.last_error = str(e)
+                    logger.warning(
+                        f"[{ep.name}] 连续 {self._consecutive_failures[ep.name]} 次失败，"
+                        f"已标记为不健康: {e}"
+                    )
+
             logger.warning(f"[{ep.name}] Embedding 失败: {e}")
             return (ep.name, [0.0] * EMBEDDING_DIM, str(e))
         finally:
@@ -252,7 +322,11 @@ class ParallelEmbeddingProcessor:
         with self._lock:
             healthy_eps = [ep for ep in self.endpoints if ep.is_healthy]
             if not healthy_eps:
-                raise RuntimeError("无可用的 embedding 端点（所有端点健康检查失败）")
+                logger.warning("无可用健康端点，尝试复活所有端点")
+                for ep in self.endpoints:
+                    ep.is_healthy = True
+                    self._consecutive_failures[ep.name] = 0
+                healthy_eps = self.endpoints.copy()
 
             best_ep = healthy_eps[0]
             best_score = float("inf")
@@ -472,6 +546,17 @@ class ParallelEmbeddingProcessor:
 
     def shutdown(self) -> None:
         """关闭线程池"""
+        self._executor.shutdown(wait=True)
+
+    async def async_shutdown(self) -> None:
+        """异步关闭（取消健康检查循环）"""
+        if self._health_check_task:
+            self._health_check_task.cancel()
+            try:
+                await self._health_check_task
+            except asyncio.CancelledError:
+                pass
+            self._health_check_task = None
         self._executor.shutdown(wait=True)
 
 
