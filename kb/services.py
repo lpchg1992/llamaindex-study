@@ -720,9 +720,10 @@ class KnowledgeBaseService:
     def initialize(kb_id: str) -> bool:
         """初始化知识库（清空所有数据）
 
-        清除向量存储和去重状态，但保留知识库配置。
+        清除向量存储、去重状态、进度、同步状态，但保留知识库配置。
         用于完全重置知识库到初始状态。
         """
+        from kb.database import init_progress_db, init_sync_db
         from kb.deduplication import DeduplicationManager
 
         vs = VectorStoreService.get_vector_store(kb_id)
@@ -731,6 +732,9 @@ class KnowledgeBaseService:
         persist_dir = VectorStoreService.get_persist_dir(kb_id)
         dedup_manager = DeduplicationManager(kb_id, persist_dir)
         dedup_manager.clear()
+
+        init_progress_db().reset(kb_id)
+        init_sync_db().clear(kb_id)
 
         return True
 
