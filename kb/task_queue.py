@@ -355,7 +355,18 @@ class TaskQueue:
                 TaskStatus.FAILED.value if error else TaskStatus.COMPLETED.value
             )
             row.completed_at = time.time()
-            row.message = f"失败: {error}" if error else "已完成"
+
+            last_message = row.message
+
+            if result is None:
+                result = {}
+            result["last_message"] = last_message
+
+            if error:
+                row.message = f"失败: {error}"
+            else:
+                row.message = "已完成"
+
             row.result = json.dumps(result, ensure_ascii=False) if result else None
             row.error = error
             if not error:

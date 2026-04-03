@@ -589,7 +589,7 @@ class ZoteroImporter:
                 elapsed = time.time() - (
                     progress.started_at if progress else time.time()
                 )
-                msg = f"进度: {i + 1}/{len(item_ids)} ({100 * (i + 1) // len(item_ids)}%), 节点: {stats['nodes']}, 耗时: {elapsed:.0f}s"
+                msg = f"进度: {i + 1}/{len(item_ids)}, 节点: {stats['nodes']}, 耗时: {elapsed:.0f}s"
                 logger.info(msg)
                 if progress_callback:
                     progress_callback(i + 1, len(item_ids), msg, "info")

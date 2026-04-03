@@ -1271,7 +1271,114 @@ def handle_task_show(args: argparse.Namespace) -> int:
     task = TaskService.get_task(args.task_id)
     if task is None:
         raise ValueError(f"任务不存在: {args.task_id}")
-    print_json(task)
+
+    result = task if isinstance(task, dict) else task.to_dict()
+    params = result.get("params", {}) or {}
+
+    print("=== 任务信息 ===")
+    print(f"  task_id:   {result['task_id']}")
+    print(f"  类型:       {result['task_type']}")
+    print(f"  知识库:     {result['kb_id']}")
+    print(f"  状态:       {result['status']}")
+    print(
+        f"  进度:       {result.get('current', 0)}/{result.get('total', 0)} ({result.get('progress', 0)}%)"
+    )
+    print(f"  消息:       {result.get('message', '')}")
+    if result.get("last_heartbeat"):
+        from datetime import datetime
+
+        hb = datetime.fromtimestamp(result["last_heartbeat"])
+        print(f"  心跳:       {hb.strftime('%H:%M:%S')}")
+
+    print()
+    print("=== 筛选规则 ===")
+    task_type = result.get("task_type", "")
+    if task_type == "zotero":
+        print("  [Zotero] 附件标题必须包含 [kb] 前缀")
+        if params.get("collection_name"):
+            print(f"  [Zotero] 收藏夹: {params['collection_name']}")
+        if params.get("collection_id"):
+            print(f"  [Zotero] 收藏夹ID: {params['collection_id']}")
+        print(f"  [Zotero] 子收藏夹: {'是' if params.get('recursive', True) else '否'}")
+        print("  [Zotero] rebuild: ", params.get("rebuild", False))
+    elif task_type == "obsidian":
+        print("  [Obsidian] 只处理 .md 文件")
+        if params.get("vault_path"):
+            print(f"  [Obsidian] Vault: {params['vault_path']}")
+    elif task_type == "file":
+        print("  [File] 文件/目录导入")
+        if params.get("include_exts"):
+            print(f"  [File] 包含扩展名: {params['include_exts']}")
+        if params.get("exclude_exts"):
+            print(f"  [File] 排除扩展名: {params['exclude_exts']}")
+        if params.get("paths"):
+            print(f"  [File] 路径: {params['paths']}")
+
+    print()
+    print("=== 详细信息 ===")
+    print_json(result)
+
+    return 0
+
+
+def handle_task_preview(args: argparse.Namespace) -> int:
+    from kb.preview_service import PreviewService
+
+    svc = PreviewService()
+    kind = args.kind or "zotero"
+
+    if kind == "zotero":
+        result = svc.preview_zotero(
+            collection_id=args.collection_id,
+            collection_name=args.collection_name,
+            kb_id=args.kb_id,
+            limit=args.limit,
+        )
+    elif kind == "file":
+        result = svc.preview_file(
+            paths=args.paths or [],
+            kb_id=args.kb_id,
+            include_exts=args.include_exts,
+            exclude_exts=args.exclude_exts,
+            limit=args.limit,
+        )
+    elif kind == "obsidian":
+        result = svc.preview_obsidian(
+            vault_path=args.vault_path,
+            kb_id=args.kb_id,
+            limit=args.limit,
+        )
+    else:
+        raise ValueError(f"未知 kind: {kind}")
+
+    print(f"=== {kind.upper()} 导入预览 ===")
+    print()
+    print("【筛选规则】")
+    for rule in result.filtering_rules:
+        print(f"  {rule}")
+
+    if result.preview_items:
+        print()
+        print(f"【预览 (前 {len(result.preview_items)} 项)】")
+        for item in result.preview_items:
+            if kind == "zotero":
+                creators = ", ".join(item.get("creators", []))
+                print(f"  • {item['title']}" + (f" ({creators})" if creators else ""))
+            else:
+                size = item.get("size", 0)
+                size_str = (
+                    f"{size / 1024:.1f}KB"
+                    if size < 1024 * 1024
+                    else f"{size / 1024 / 1024:.1f}MB"
+                )
+                print(f"  • {item['path']} ({size_str})")
+
+    if result.warnings:
+        print()
+        print("【警告】")
+        for w in result.warnings:
+            print(f"  ⚠️  {w}")
+
     return 0
 
 
@@ -2108,6 +2215,58 @@ def build_parser() -> argparse.ArgumentParser:
         help="任务ID，从 task list 获取",
     )
     task_show.set_defaults(handler=handle_task_show)
+
+    task_preview = task_sub.add_parser(
+        "preview",
+        help="预览导入范围（不执行）",
+        description="在提交任务前预览将要处理的文件/文献和筛选规则，帮助确认范围是否符合预期",
+    )
+    task_preview.add_argument(
+        "--kind",
+        choices=["zotero", "file", "obsidian"],
+        default="zotero",
+        help="导入类型，默认 zotero",
+    )
+    task_preview.add_argument(
+        "--collection-id",
+        type=int,
+        help="Zotero 收藏夹 ID",
+    )
+    task_preview.add_argument(
+        "--collection-name",
+        help="Zotero 收藏夹名称",
+    )
+    task_preview.add_argument(
+        "--kb-id",
+        default="default",
+        help="知识库 ID",
+    )
+    task_preview.add_argument(
+        "--paths",
+        nargs="+",
+        help="文件或目录路径（file 类型用）",
+    )
+    task_preview.add_argument(
+        "--include-exts",
+        nargs="+",
+        help="只包含指定的扩展名，如 pdf md",
+    )
+    task_preview.add_argument(
+        "--exclude-exts",
+        nargs="+",
+        help="排除指定的扩展名，如 xlsx png",
+    )
+    task_preview.add_argument(
+        "--vault-path",
+        help="Obsidian Vault 路径",
+    )
+    task_preview.add_argument(
+        "--limit",
+        type=int,
+        default=10,
+        help="预览条数，默认 10",
+    )
+    task_preview.set_defaults(handler=handle_task_preview)
 
     task_cancel = task_sub.add_parser(
         "cancel",
