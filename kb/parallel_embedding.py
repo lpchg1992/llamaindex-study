@@ -474,6 +474,8 @@ class ParallelEmbeddingProcessor:
 
         threads = []
         for ep in self.endpoints:
+            if not ep.is_healthy:
+                continue
             for _ in range(2):
                 t = threading.Thread(target=worker, args=(ep,), daemon=True)
                 t.start()
