@@ -571,7 +571,7 @@ class ZoteroImporter:
 
             if self.dedup_manager:
                 doc_id = f"zotero_{item_id}"
-                existing = self.dedup_manager.get_record(doc_id)
+                existing = self.dedup_manager.get_record_by_doc_id(doc_id)
                 if existing and not rebuild:
                     logger.debug(f"跳过已处理文献(dedup): {item_id}")
                     continue

@@ -52,7 +52,8 @@ logger = get_logger(__name__)
 
 class ChangeType(Enum):
     """变更类型"""
-    ADD = "add"      # 新增
+
+    ADD = "add"  # 新增
     UPDATE = "update"  # 更新
     DELETE = "delete"  # 删除
     UNCHANGED = "unchanged"  # 未变更
@@ -61,11 +62,12 @@ class ChangeType(Enum):
 @dataclass
 class FileChange:
     """文件变更记录"""
-    rel_path: str           # 相对路径
-    abs_path: Path          # 绝对路径
+
+    rel_path: str  # 相对路径
+    abs_path: Path  # 绝对路径
     change_type: ChangeType  # 变更类型
     content: Optional[str] = None  # 文件内容（延迟加载）
-    doc_id: Optional[str] = None   # 文档 ID
+    doc_id: Optional[str] = None  # 文档 ID
     old_doc_id: Optional[str] = None  # 旧的文档 ID（用于更新）
     hash: Optional[str] = None  # 当前哈希
     old_hash: Optional[str] = None  # 旧哈希
@@ -74,6 +76,7 @@ class FileChange:
 @dataclass
 class ProcessingRecord:
     """处理记录"""
+
     rel_path: str
     abs_path: str
     hash: str
@@ -173,6 +176,7 @@ class DeduplicationManager:
     def _init_sqlite(self):
         """初始化 SQLite 数据库"""
         from kb.database import init_dedup_db
+
         self._dedup_db = init_dedup_db()
 
     def _load(self):
@@ -280,6 +284,25 @@ class DeduplicationManager:
     def get_record(self, rel_path: str) -> Optional[ProcessingRecord]:
         """获取处理记录"""
         return self._records.get(rel_path)
+
+    def get_record_by_doc_id(self, doc_id: str) -> Optional[ProcessingRecord]:
+        """通过 doc_id 获取处理记录（用于 Zotero 等非文件系统场景）"""
+        if self.use_sqlite and self._dedup_db:
+            record_dict = self._dedup_db.get_by_doc_id(self.kb_id, doc_id)
+            if record_dict:
+                return ProcessingRecord(
+                    rel_path=record_dict["file_path"],
+                    abs_path="",
+                    hash=record_dict["hash"],
+                    doc_id=record_dict["doc_id"],
+                    mtime=record_dict["mtime"],
+                    last_processed=record_dict["last_processed"],
+                    chunk_count=record_dict["chunk_count"],
+                )
+        for record in self._records.values():
+            if record.doc_id == doc_id:
+                return record
+        return None
 
     def is_duplicate(
         self,
@@ -488,7 +511,7 @@ class DeduplicationManager:
         """
         if rel_path in self._records:
             del self._records[rel_path]
-        
+
         # 从 SQLite 删除
         if self.use_sqlite and self._dedup_db:
             self._dedup_db.remove(self.kb_id, rel_path)
@@ -496,7 +519,7 @@ class DeduplicationManager:
     def remove_record(self, rel_path: str):
         """移除处理记录"""
         self._records.pop(rel_path, None)
-        
+
         # 从 SQLite 删除
         if self.use_sqlite and self._dedup_db:
             self._dedup_db.remove(self.kb_id, rel_path)
@@ -504,7 +527,7 @@ class DeduplicationManager:
     def clear(self):
         """清空所有记录"""
         self._records.clear()
-        
+
         # 清空 SQLite
         if self.use_sqlite and self._dedup_db:
             self._dedup_db.clear(self.kb_id)
@@ -531,6 +554,7 @@ class DeduplicationManager:
         """获取 LanceDB 表（延迟初始化）"""
         if self._table is None:
             import lancedb
+
             self._db = lancedb.connect(self.uri)
             try:
                 self._table = self._db.open_table(self.table_name)
@@ -571,15 +595,21 @@ class DeduplicationManager:
             # 将节点转换为 dict
             data = []
             for node in nodes:
-                row = {"id": getattr(node, id_key, node.id_) if hasattr(node, 'id_') else str(node)}
-                row["text"] = node.get_content() if hasattr(node, 'get_content') else str(node)
+                row = {
+                    "id": getattr(node, id_key, node.id_)
+                    if hasattr(node, "id_")
+                    else str(node)
+                }
+                row["text"] = (
+                    node.get_content() if hasattr(node, "get_content") else str(node)
+                )
 
                 # 添加 embedding
-                if hasattr(node, 'embedding') and node.embedding:
+                if hasattr(node, "embedding") and node.embedding:
                     row["embedding"] = node.embedding
 
                 # 添加 metadata
-                if hasattr(node, 'metadata') and node.metadata:
+                if hasattr(node, "metadata") and node.metadata:
                     for k, v in node.metadata.items():
                         if isinstance(v, (str, int, float, bool, type(None))):
                             row[k] = v
@@ -595,7 +625,9 @@ class DeduplicationManager:
 
             # 执行 upsert
             df = pa.Table.from_pylist(data)
-            table.merge_insert("id").when_matched_update_all().when_not_matched_insert_all().execute(df)
+            table.merge_insert(
+                "id"
+            ).when_matched_update_all().when_not_matched_insert_all().execute(df)
 
             return len(nodes)
 
@@ -710,8 +742,10 @@ class IncrementalProcessor:
             files, vault_root
         )
 
-        logger.info(f"增量: 新增 {len(to_add)}, 更新 {len(to_update)}, "
-                    f"删除 {len(to_delete)}, 未变 {len(unchanged)}")
+        logger.info(
+            f"增量: 新增 {len(to_add)}, 更新 {len(to_update)}, "
+            f"删除 {len(to_delete)}, 未变 {len(unchanged)}"
+        )
 
         stats = {"files": 0, "nodes": 0, "failed": 0, "skipped": 0}
 
@@ -730,7 +764,9 @@ class IncrementalProcessor:
                     stats["files"] += 1
 
                     # 标记已处理
-                    content = change.abs_path.read_text(encoding="utf-8", errors="ignore")
+                    content = change.abs_path.read_text(
+                        encoding="utf-8", errors="ignore"
+                    )
                     self.manager.mark_processed(
                         change.abs_path,
                         content,
@@ -810,6 +846,7 @@ class IncrementalProcessor:
 
         # 创建文档
         from llama_index.core.schema import Document as LlamaDocument
+
         doc = LlamaDocument(
             text=content,
             metadata=metadata,
