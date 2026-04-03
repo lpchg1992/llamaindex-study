@@ -106,55 +106,26 @@ class DocumentProcessor:
 
     def _upsert_nodes(self, lance_store, nodes):
         """
-        使用 merge_insert 实现去重插入
+        使用 lance_store.add() 写入节点，自动处理表创建
 
         Args:
-            lance_store: LanceDB vector store
+            lance_store: LlamaIndex LanceDBVectorStore
             nodes: 节点列表
         """
+        import logging
+
+        add_logger = logging.getLogger("lancedb.add")
         try:
-            import lancedb
-            import pyarrow as pa
-
-            # 获取底层 table
-            uri = lance_store.uri
-            table_name = (
-                getattr(lance_store, "table_name", None) or lance_store._table_name
-            )
-
-            # 连接并获取 table
-            db = lancedb.connect(uri)
-            table = db.open_table(table_name)
-
-            # 将节点转换为 dict
-            data = []
-            for node in nodes:
-                row = {"id": node.id_}
-                row["text"] = node.get_content()
-                row["embedding"] = node.embedding
-
-                # 添加所有 metadata
-                if node.metadata:
-                    for k, v in node.metadata.items():
-                        if isinstance(v, (str, int, float, bool, type(None))):
-                            row[k] = v
-                        elif isinstance(v, list):
-                            row[k] = ",".join(str(x) for x in v)
-                        else:
-                            row[k] = str(v)
-                data.append(row)
-
-            # 使用 merge_insert (id 存在则覆盖)
-            df = pa.Table.from_pylist(data)
-
-            # 执行 merge_insert
-            table.merge_insert("id").when_matched_update_all().execute(df)
-            print(f"   ✅ Upsert {len(nodes)} 节点")
-
-        except Exception as e:
-            # 如果 upsert 失败，回退到普通 add
-            print(f"   ⚠️  Upsert 失败: {e}")
             lance_store.add(nodes)
+            add_logger.debug(f"添加 {len(nodes)} 节点")
+        except Exception as e:
+            add_logger.warning(f"添加失败，将重试: {e}")
+            try:
+                lance_store.add(nodes)
+                add_logger.debug(f"重试成功，添加 {len(nodes)} 节点")
+            except Exception as retry_err:
+                add_logger.error(f"重试仍然失败: {retry_err}")
+                raise
 
     @staticmethod
     def compute_file_hash(file_path: str) -> str:

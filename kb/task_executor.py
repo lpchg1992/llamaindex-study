@@ -600,7 +600,6 @@ class TaskExecutor:
                             task_id,
                             current=current,
                             total=total,
-                            progress=int(current / total * 100) if total > 0 else 0,
                             message=message,
                         )
                     except Exception:
@@ -633,7 +632,6 @@ class TaskExecutor:
                         task_id,
                         current=current,
                         total=total,
-                        progress=int(current / total * 100) if total > 0 else 0,
                         message=message,
                     )
                 except Exception:
