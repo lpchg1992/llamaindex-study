@@ -18,6 +18,81 @@ from llamaindex_study.logger import get_logger
 
 logger = get_logger(__name__)
 
+EMBEDDING_DIM = 1024
+
+
+class SiliconFlowEmbedding:
+    """
+    SiliconFlow 云端 Embedding（默认备用）
+
+    调用 SiliconFlow 的 /v1/embeddings 接口，
+    使用 Pro/BAAI/bge-m3 模型。
+    """
+
+    def __init__(
+        self,
+        model: str = "Pro/BAAI/bge-m3",
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+    ):
+        settings = get_settings()
+        self.model = model
+        self.api_key = api_key or settings.siliconflow_api_key
+        self.base_url = base_url or settings.siliconflow_base_url
+        self._client = None
+
+    def _get_client(self):
+        """懒加载 httpx 客户端"""
+        if self._client is None:
+            import httpx
+
+            self._client = httpx.Client(timeout=60.0)
+        return self._client
+
+    def get_text_embedding(self, text: str) -> List[float]:
+        """单条文本 embedding"""
+        results = self.get_text_embeddings([text])
+        return results[0]
+
+    def get_text_embeddings(self, texts: List[str]) -> List[List[float]]:
+        """批量文本 embedding"""
+        if not texts:
+            return []
+
+        payload = {"model": self.model, "input": texts}
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}",
+        }
+
+        try:
+            client = self._get_client()
+            response = client.post(
+                f"{self.base_url}/embeddings", json=payload, headers=headers
+            )
+            if response.status_code != 200:
+                logger.error(
+                    f"SiliconFlow embedding 失败: {response.status_code} {response.text}"
+                )
+                return [[0.0] * EMBEDDING_DIM for _ in texts]
+
+            data = response.json()
+            embeddings = data.get("data", [])
+            # 按 input 顺序返回
+            embedding_map = {item["index"]: item["embedding"] for item in embeddings}
+            return [
+                embedding_map.get(i, [0.0] * EMBEDDING_DIM) for i in range(len(texts))
+            ]
+        except Exception as e:
+            logger.error(f"SiliconFlow embedding 请求异常: {e}")
+            return [[0.0] * EMBEDDING_DIM for _ in texts]
+
+    def close(self):
+        """关闭客户端"""
+        if self._client:
+            self._client.close()
+            self._client = None
+
 
 @dataclass
 class OllamaEndpoint:

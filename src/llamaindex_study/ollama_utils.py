@@ -435,6 +435,10 @@ def configure_llamaindex(mode: Optional[str] = None) -> None:
         configure_llamaindex_for_siliconflow()
 
 
+_sf_fallback_count = 0
+_SF_FALLBACK_THRESHOLD = 3
+
+
 class BatchEmbeddingHelper:
     """
     批量 Embedding 辅助类
@@ -464,26 +468,25 @@ class BatchEmbeddingHelper:
         self.max_concurrency = max_concurrency
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        """
-        批量生成 embeddings（同步）
-
-        Args:
-            texts: 文本列表
-
-        Returns:
-            embedding 列表
-        """
         if not texts:
             return []
 
+        global _sf_fallback_count
+
+        if _sf_fallback_count >= _SF_FALLBACK_THRESHOLD:
+            sf = create_siliconflow_embedding()
+            return sf.get_text_embeddings(texts)
+
         if hasattr(self.embed_model, "get_text_embeddings"):
             try:
-                return self.embed_model.get_text_embeddings(texts)
+                result = self.embed_model.get_text_embeddings(texts)
+                _sf_fallback_count = 0
+                return result
             except Exception as e:
-                print(f"      ⚠️  批量 Embedding 失败，回退逐条模式: {e}")
+                print(f"      ⚠️  Ollama 批量 embedding 失败: {e}")
+                _sf_fallback_count += 1
 
         results = []
-
         for i in range(0, len(texts), self.batch_size):
             batch = texts[i : i + self.batch_size]
             for text in batch:
@@ -491,7 +494,8 @@ class BatchEmbeddingHelper:
                     embedding = self.embed_model.get_text_embedding(text)
                     results.append(embedding)
                 except Exception as e:
-                    print(f"      ⚠️  Embedding 失败: {e}")
+                    print(f"      ⚠️  Ollama embedding 失败: {e}")
+                    _sf_fallback_count += 1
                     results.append([0.0] * 1024)
 
         return results
@@ -566,9 +570,25 @@ class BatchEmbeddingHelper:
             node.embedding = embedding
 
 
+def create_siliconflow_embedding(
+    model: str = "Pro/BAAI/bge-m3",
+    api_key: Optional[str] = None,
+    base_url: Optional[str] = None,
+):
+    """创建 SiliconFlow embedding 模型"""
+    from llamaindex_study.embedding_service import SiliconFlowEmbedding
+
+    return SiliconFlowEmbedding(
+        model=model,
+        api_key=api_key,
+        base_url=base_url,
+    )
+
+
 __all__ = [
     "create_ollama_embedding",
     "create_parallel_ollama_embedding",
+    "create_siliconflow_embedding",
     "configure_global_embed_model",
     "configure_embed_model_by_model_id",
     "configure_llamaindex_for_siliconflow",

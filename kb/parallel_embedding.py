@@ -12,7 +12,7 @@ import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from queue import Queue, Empty
-from typing import AsyncIterator, Dict, List, Optional, Tuple
+from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 import httpx
 
@@ -132,6 +132,8 @@ class ParallelEmbeddingProcessor:
         endpoints = []
         for model_info in registry.get_by_type("embedding"):
             vendor_id = model_info.get("vendor_id", "")
+            if vendor_id == "siliconflow":
+                continue
             vendor_info = vendor_db.get(vendor_id) if vendor_id else None
             if not vendor_info:
                 continue
@@ -161,6 +163,21 @@ class ParallelEmbeddingProcessor:
                 )
 
             endpoints.append(ep)
+
+        # 添加 SiliconFlow 端点（跳过健康检查，始终可用）
+        sf_model_info = registry.get_model("siliconflow/bge-m3")
+        if sf_model_info:
+            vendor_info = vendor_db.get("siliconflow")
+            if vendor_info and vendor_info.get("api_base"):
+                sf_ep = EmbeddingEndpoint(
+                    name="SiliconFlow(siliconflow/bge-m3)",
+                    url="siliconflow://",
+                    model_id="siliconflow/bge-m3",
+                    model_name="Pro/BAAI/bge-m3",
+                )
+                sf_ep.is_healthy = True
+                endpoints.append(sf_ep)
+                logger.info("SiliconFlow embedding 端点已添加（跳过健康检查）")
 
         healthy_count = sum(1 for ep in endpoints if ep.is_healthy)
         logger.info(
@@ -261,13 +278,19 @@ class ParallelEmbeddingProcessor:
         self._models.clear()
         logger.info(f"Embedding 模型已切换为: {model_id} ({self._model_name})")
 
-    def _get_model(self, ep: EmbeddingEndpoint) -> OllamaEmbedder:
-        """获取或创建 embed 模型（使用 OllamaEmbedder 支持 503 重试）"""
+    def _get_model(self, ep: EmbeddingEndpoint) -> Any:
         cache_key = f"{ep.url}:{ep.model_name}"
         if cache_key not in self._models:
-            self._models[cache_key] = create_ollama_embedding(
-                model=ep.model_name or self._model_name, base_url=ep.url
-            )
+            if ep.url == "siliconflow://":
+                from llamaindex_study.ollama_utils import create_siliconflow_embedding
+
+                self._models[cache_key] = create_siliconflow_embedding(
+                    model=ep.model_name or "Pro/BAAI/bge-m3"
+                )
+            else:
+                self._models[cache_key] = create_ollama_embedding(
+                    model=ep.model_name or self._model_name, base_url=ep.url
+                )
         return self._models[cache_key]
 
     def _get_embedding_with_retry(

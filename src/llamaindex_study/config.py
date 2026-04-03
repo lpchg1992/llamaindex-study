@@ -254,6 +254,16 @@ class ModelRegistry:
                 for row in rows:
                     self._models[row["id"]] = row
                 logger.debug(f"从数据库加载了 {len(self._models)} 个模型")
+                if "siliconflow/bge-m3" not in self._models:
+                    self._models["siliconflow/bge-m3"] = {
+                        "id": "siliconflow/bge-m3",
+                        "vendor_id": "siliconflow",
+                        "name": "bge-m3",
+                        "type": "embedding",
+                        "is_active": True,
+                        "is_default": False,
+                        "config": {},
+                    }
             else:
                 logger.debug("数据库为空，使用配置默认值并填充模型")
                 self._load_defaults_from_config()
@@ -373,6 +383,19 @@ class ModelRegistry:
                     "config": {},
                 }
             )
+
+        # SiliconFlow embedding 模型
+        defaults.append(
+            {
+                "id": "siliconflow/bge-m3",
+                "vendor_id": "siliconflow",
+                "name": "bge-m3",
+                "type": "embedding",
+                "is_active": True,
+                "is_default": False,
+                "config": {},
+            }
+        )
 
         for model in defaults:
             self._models[model["id"]] = model
