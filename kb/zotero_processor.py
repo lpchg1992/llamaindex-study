@@ -100,39 +100,33 @@ class ZoteroImporter:
 
         根据 Zotero UI 中修改的附件标题(fieldID=1)来判断是否包含 [kb] 标记，
         而非检查实际文件名。
+
+        支持两种附件类型：
+        - 独立附件：itemID 本身就是要查询的附件 ID
+        - 子附件：需要通过 parentItemID 查找父 item 下的附件
         """
         conn = self.connect()
         cursor = conn.cursor()
 
-        # 首先查询标题 (fieldID = 1) - 这是用户在 Zotero UI 中修改的附件名称
         cursor.execute(
             """
-            SELECT v.value
-            FROM itemData d
+            SELECT ia.path, ia.storageHash, ia.contentType, v.value as attachment_title
+            FROM itemAttachments ia
+            JOIN itemData d ON d.itemID = ia.itemID AND d.fieldID = 1
             JOIN itemDataValues v ON d.valueID = v.valueID
-            WHERE d.itemID = ? AND d.fieldID = 1
-        """,
-            (item_id,),
-        )
-        title_row = cursor.fetchone()
-        title = title_row["value"] if title_row else ""
-
-        # 如果标题不包含 [kb] 标记，则跳过此附件
-        if "[kb]" not in title:
-            return None
-
-        cursor.execute(
-            """
-            SELECT path, storageHash, contentType
-            FROM itemAttachments
-            WHERE parentItemID = ?
+            WHERE ia.itemID = ? OR ia.parentItemID = ?
             LIMIT 1
         """,
-            (item_id,),
+            (item_id, item_id),
         )
         row = cursor.fetchone()
 
         if not row or not row["path"]:
+            return None
+
+        title = row["attachment_title"] if row["attachment_title"] else ""
+
+        if "[kb]" not in title:
             return None
 
         storage_hash = row["storageHash"]
@@ -141,7 +135,16 @@ class ZoteroImporter:
         content_type = row["contentType"] or ""
         supported = any(
             ext in content_type
-            for ext in ["pdf", "document", "presentation", "spreadsheet"]
+            for ext in [
+                "pdf",
+                "document",
+                "presentation",
+                "spreadsheet",
+                "ms-excel",
+                "excel",
+                "msword",
+                "wordprocessingml",
+            ]
         )
 
         if not supported:
@@ -157,7 +160,6 @@ class ZoteroImporter:
         if path.startswith("storage:"):
             filename = path.replace("storage:", "")
 
-            # fallback: search subdirs (data migration may change storage layout)
             for item_dir in self.storage_dir.iterdir():
                 if not item_dir.is_dir() or item_dir.name.startswith("."):
                     continue
