@@ -427,14 +427,15 @@ class ParallelEmbeddingProcessor:
         results: List[EmbeddingResult] = [None] * len(texts)
         completed = 0
         lock = threading.Lock()
+        chunk_queue: deque = deque(range(len(texts)))
 
         def worker(ep: EmbeddingEndpoint) -> None:
             nonlocal completed
             while True:
                 chunk_idx = None
                 with self._lock:
-                    if self._chunk_queue:
-                        chunk_idx = self._chunk_queue.popleft()
+                    if chunk_queue:
+                        chunk_idx = chunk_queue.popleft()
                     elif completed >= len(texts):
                         return
 
@@ -448,7 +449,6 @@ class ParallelEmbeddingProcessor:
                 with lock:
                     completed += 1
 
-        self._chunk_queue = deque(range(len(texts)))
         threads = []
         for ep in self.endpoints:
             for _ in range(2):
