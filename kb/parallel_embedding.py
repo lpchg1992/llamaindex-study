@@ -296,7 +296,33 @@ class ParallelEmbeddingProcessor:
     def _get_embedding_with_retry(
         self, text: str, ep: EmbeddingEndpoint
     ) -> EmbeddingResult:
-        """获取 embedding（内部重试由 OllamaEmbedder 处理）"""
+        """获取 embedding
+
+        策略：
+        - SiliconFlow 端点：直接调用，无重试（云服务稳定）
+        - Unhealthy Ollama 端点：直接路由到 SiliconFlow
+        - Healthy Ollama 端点：调用 OllamaEmbedder（含 503 重试），
+          失败后标记为 unhealthy 并路由到 SiliconFlow
+        """
+        sf_ep = next((e for e in self.endpoints if e.url == "siliconflow://"), None)
+
+        def call_sf() -> EmbeddingResult:
+            if sf_ep is None:
+                return (ep.name, [0.0] * EMBEDDING_DIM, "SiliconFlow 端点不可用")
+            model = self._get_model(sf_ep)
+            try:
+                emb = model.get_text_embedding(text[:8192])
+                return (sf_ep.name, emb, None)
+            except Exception as sf_err:
+                logger.warning(f"SiliconFlow fallback 也失败: {sf_err}")
+                return (sf_ep.name, [0.0] * EMBEDDING_DIM, str(sf_err))
+
+        if ep.url == "siliconflow://":
+            return call_sf()
+
+        if not ep.is_healthy:
+            return call_sf()
+
         try:
             start = time.perf_counter()
             with self._lock:
@@ -329,8 +355,10 @@ class ParallelEmbeddingProcessor:
                         f"已标记为不健康: {e}"
                     )
 
-            logger.warning(f"[{ep.name}] Embedding 失败: {e}")
-            return (ep.name, [0.0] * EMBEDDING_DIM, str(e))
+            logger.warning(
+                f"[{ep.name}] Ollama embedding 失败，切换到 SiliconFlow: {e}"
+            )
+            return call_sf()
         finally:
             with self._lock:
                 ep.inflight = max(0, ep.inflight - 1)
@@ -341,15 +369,25 @@ class ParallelEmbeddingProcessor:
         return model.get_text_embedding(text[:8192])
 
     def _get_best_endpoint(self) -> EmbeddingEndpoint:
-        """选择当前最优的端点（基于健康状态、速度和负载）"""
+        """选择当前最优的端点（基于健康状态、速度和负载）
+
+        规则：
+        - 只从 is_healthy=True 的端点中选择
+        - SiliconFlow 端点始终视为健康（跳过健康检查）
+        - 如果所有 Ollama 端点都不健康但 SiliconFlow 可用，返回 SiliconFlow
+        - 绝不会强制使用 unhealthy 的 Ollama 端点
+        """
         with self._lock:
             healthy_eps = [ep for ep in self.endpoints if ep.is_healthy]
             if not healthy_eps:
-                logger.warning("无可用健康端点，尝试复活所有端点")
-                for ep in self.endpoints:
-                    ep.is_healthy = True
-                    self._consecutive_failures[ep.name] = 0
-                healthy_eps = self.endpoints.copy()
+                sf_ep = next(
+                    (ep for ep in self.endpoints if ep.url == "siliconflow://"), None
+                )
+                if sf_ep:
+                    logger.warning("所有 Ollama 端点不健康，回退到 SiliconFlow")
+                    return sf_ep
+                logger.error("无可用端点（包含 SiliconFlow）")
+                return self.endpoints[0]
 
             best_ep = healthy_eps[0]
             best_score = float("inf")
@@ -400,24 +438,29 @@ class ParallelEmbeddingProcessor:
 
         self._chunk_queue = deque(range(len(texts)))
         futures: List[Tuple[int, asyncio.Task]] = []
+        task_to_future: Dict[asyncio.Task, int] = {}
 
         for i in range(len(texts)):
             ep = self._get_best_endpoint()
             coro = self._run_embedding_in_thread(texts[i], ep)
             task = asyncio.create_task(coro)
             futures.append((i, task))
+            task_to_future[task] = i
 
-        for _, coro in asyncio.as_completed([f for _, f in futures]):
-            idx = next(i for i, t in futures if t == coro)
+        async def wait_for(task: asyncio.Task) -> Tuple[int, EmbeddingResult]:
+            idx = task_to_future[task]
             try:
-                result = await coro
-                yield (base_idx + idx, result)
+                result = await task
+                return (base_idx + idx, result)
             except Exception as e:
                 logger.warning(f"Embedding 流式处理失败 idx={idx}: {e}")
-                yield (
+                return (
                     base_idx + idx,
                     (self.endpoints[0].name, [0.0] * EMBEDDING_DIM, str(e)),
                 )
+
+        for f in asyncio.as_completed([wait_for(t) for _, t in futures]):
+            yield await f
 
     async def _run_embedding_in_thread(
         self, text: str, ep: "EmbeddingEndpoint"
