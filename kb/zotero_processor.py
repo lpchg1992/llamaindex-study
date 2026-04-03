@@ -54,6 +54,7 @@ class ZoteroImporter:
     - 处理 PDF 附件（含 OCR）
     - 处理 Office 文档附件
     - 增量导入和断点续传
+    - 去重支持（基于 item_id）
     """
 
     def __init__(
@@ -61,6 +62,7 @@ class ZoteroImporter:
         zotero_dir: Optional[Path] = None,
         db_path: Optional[Path] = None,
         config: Optional[DocumentProcessorConfig] = None,
+        dedup_manager=None,
     ):
         """
         初始化 Zotero 导入器
@@ -69,14 +71,15 @@ class ZoteroImporter:
             zotero_dir: Zotero 数据目录（默认 ~/.Zotero）
             db_path: Zotero 数据库路径
             config: 文档处理器配置
+            dedup_manager: 可选的去重管理器，用于增量导入
         """
         self.zotero_dir = zotero_dir or Path.home() / "Zotero"
         self.db_path = db_path or self.zotero_dir / "zotero.sqlite"
         self.storage_dir = self.zotero_dir / "storage"
 
         self.processor = DocumentProcessor(config=config)
+        self.dedup_manager = dedup_manager
 
-        # 缓存
         self._conn = None
 
     def connect(self):
@@ -537,6 +540,10 @@ class ZoteroImporter:
         """
         logger.info(f"开始导入 Zotero 收藏夹: {collection_name} (ID: {collection_id})")
 
+        if rebuild and self.dedup_manager:
+            logger.info("重建模式：清空去重状态")
+            self.dedup_manager.clear()
+
         item_ids = self.get_items_in_collection(collection_id)
         logger.info(f"收藏夹包含 {len(item_ids)} 篇文献")
 
@@ -559,6 +566,13 @@ class ZoteroImporter:
             if item_id_str in processed_set:
                 logger.debug(f"跳过已处理文献: {item_id}")
                 continue
+
+            if self.dedup_manager:
+                doc_id = f"zotero_{item_id}"
+                existing = self.dedup_manager.get_record(doc_id)
+                if existing and not rebuild:
+                    logger.debug(f"跳过已处理文献(dedup): {item_id}")
+                    continue
 
             if i % 5 == 0:
                 elapsed = time.time() - (
@@ -586,6 +600,17 @@ class ZoteroImporter:
                 if item.file_path:
                     stats["processed_sources"].append(item.file_path)
                 logger.info(f"文献导入成功: {item.title}, 节点数: {nodes}")
+
+                if self.dedup_manager:
+                    self.dedup_manager.mark_processed(
+                        file_path=Path(item.file_path)
+                        if item.file_path
+                        else Path(str(item_id)),
+                        content=f"zotero_{item_id}_{item.title}",
+                        doc_id=f"zotero_{item_id}",
+                        chunk_count=nodes,
+                    )
+
             except Exception as e:
                 logger.error(f"文献导入失败: {item.title}, 错误: {e}")
                 stats["failed"] += 1
@@ -599,6 +624,10 @@ class ZoteroImporter:
                     or Path.home() / ".llamaindex" / "zotero_progress.json"
                 )
                 progress.save(save_path)
+
+        if self.dedup_manager:
+            self.dedup_manager._save()
+            logger.debug("去重状态已保存")
 
         logger.info(
             f"收藏夹导入完成: {collection_name}, "

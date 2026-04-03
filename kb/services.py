@@ -317,41 +317,52 @@ class ZoteroService:
         from kb.zotero_processor import ZoteroImporter
         from kb.document_processor import DocumentProcessorConfig, ProcessingProgress
 
-        importer = ZoteroImporter()
+        lookup_importer = ZoteroImporter()
 
-        # 解析收藏夹 ID
         if not collection_id and collection_name:
-            result = importer.get_collection_by_name(collection_name)
+            result = lookup_importer.get_collection_by_name(collection_name)
             if result and "collectionID" in result:
                 collection_id = result["collectionID"]
                 collection_name = result.get("collectionName", collection_name)
             elif result and "multiple" in result:
-                importer.close()
+                lookup_importer.close()
                 raise ValueError(f"名称模糊，存在多个匹配，请用 collection_id 精确指定")
             else:
-                importer.close()
+                lookup_importer.close()
                 raise ValueError(f"未找到收藏夹: {collection_name}")
 
         if not collection_id:
-            importer.close()
+            lookup_importer.close()
             raise ValueError("未指定收藏夹 ID 或名称")
+
+        lookup_importer.close()
 
         if progress_callback:
             progress_callback(f"开始导入 Zotero: {collection_name}")
 
-        # 获取向量存储
         vs = VectorStoreService.get_vector_store(kb_id)
 
-        # 进度文件
         progress_file = (
             Path.home() / ".llamaindex" / f"zotero_{collection_id}_progress.json"
         )
         progress = ProcessingProgress.load(progress_file)
 
+        from kb.deduplication import DeduplicationManager
+
+        persist_dir = vs.persist_dir or Path.home() / ".llamaindex" / "storage" / kb_id
+        dedup_manager = DeduplicationManager(
+            kb_id=kb_id,
+            persist_dir=persist_dir,
+            uri=str(persist_dir),
+            table_name=kb_id,
+        )
+
         if rebuild:
             vs.delete_table()
+            dedup_manager.clear()
             progress = ProcessingProgress()
 
+        importer = ZoteroImporter(dedup_manager=dedup_manager)
         try:
             stats = importer.import_collection(
                 collection_id=collection_id,
@@ -672,35 +683,34 @@ class KnowledgeBaseService:
             init_dedup_db,
             init_progress_db,
         )
+        from kb.deduplication import DeduplicationManager
 
         info = KnowledgeBaseService.get_info(kb_id)
         if not info:
             return False
 
-        # 1. 删除向量存储表
         persist_dir = Path(info["persist_dir"])
+
         vs = LanceDBVectorStore(persist_dir=persist_dir, table_name=kb_id)
         try:
             vs.delete_table()
         except Exception:
             pass
 
-        # 2. 删除物理数据目录
         import shutil
 
         if persist_dir.exists():
             shutil.rmtree(persist_dir)
 
-        # 3. 清理去重状态（SyncState, DedupRecord, Progress）
+        dedup_manager = DeduplicationManager(kb_id, persist_dir)
+        dedup_manager.clear()
+
         init_sync_db().clear(kb_id)
         init_dedup_db().clear(kb_id)
         init_progress_db().reset(kb_id)
 
-        # 4. 软删除：设置 is_active = 0（而不是硬删除）
-        # 这样注册表不会从 KNOWLEDGE_BASES 回退加载已删除的 KB
         init_kb_meta_db().set_active(kb_id, is_active=False)
 
-        # 5. 清除注册表缓存，强制重新加载
         registry._loaded = False
         registry._bases.clear()
 
@@ -1750,6 +1760,15 @@ class TaskService:
         dedup_manager = DeduplicationManager(kb_id, persist_dir)
 
         if task_type == "initialize":
+            dedup_manager.clear()
+            cleaned["dedup_state"] = True
+
+            from kb.services import VectorStoreService
+
+            vs = VectorStoreService.get_vector_store(kb_id)
+            vs.delete_table()
+            cleaned["vector_store"] = True
+        elif task_type == "zotero":
             dedup_manager.clear()
             cleaned["dedup_state"] = True
 

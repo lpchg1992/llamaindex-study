@@ -1340,17 +1340,42 @@ def handle_task_cleanup(args: argparse.Namespace) -> int:
 
 
 def handle_task_watch(args: argparse.Namespace) -> int:
+    from llamaindex_study.logger import get_task_log_file
+
     start = time.time()
     last_snapshot = None
+    log_file = get_task_log_file(args.task_id)
+    last_log_pos = 0
+
+    if log_file.exists():
+        last_log_pos = log_file.stat().st_size
+
+    use_log = not args.no_log
+
     while True:
         task = TaskService.get_task(args.task_id)
         if task is None:
             raise ValueError(f"任务不存在: {args.task_id}")
+
         snapshot = (task["status"], task.get("progress"), task.get("message"))
         if snapshot != last_snapshot:
             print_json(task)
             last_snapshot = snapshot
+
+        if use_log and log_file.exists():
+            current_size = log_file.stat().st_size
+            if current_size > last_log_pos:
+                with open(log_file, "r", encoding="utf-8") as f:
+                    f.seek(last_log_pos)
+                    new_logs = f.read()
+                    if new_logs.strip():
+                        for line in new_logs.strip().split("\n"):
+                            print(f"  [LOG] {line}")
+                last_log_pos = current_size
+
         if task["status"] in {"completed", "failed", "cancelled"}:
+            if use_log and log_file.exists():
+                print(f"\n任务已结束，最后 {last_log_pos} 字节日志已输出")
             return 0
         if args.timeout > 0 and time.time() - start >= args.timeout:
             return 0
@@ -2251,6 +2276,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=0,
         help="超时时间（秒），默认0表示不限时。超时后退出观察。",
+    )
+    task_watch.add_argument(
+        "--no-log",
+        action="store_true",
+        help="不显示实时日志输出",
     )
     task_watch.set_defaults(handler=handle_task_watch)
 

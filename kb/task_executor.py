@@ -458,6 +458,7 @@ class TaskExecutor:
         from kb.document_processor import DocumentProcessorConfig, ProcessingProgress
         from kb.parallel_embedding import get_parallel_processor
         from llamaindex_study.ollama_utils import create_parallel_ollama_embedding
+        from kb.deduplication import DeduplicationManager
 
         kb_id = task.kb_id
         params = task.params
@@ -485,10 +486,19 @@ class TaskExecutor:
             embed_processor = get_parallel_processor()
             logger.debug(f"[{task_id}] 并行 Embedding 处理器初始化完成")
 
+            persist_dir = self._get_vector_store(kb_id).persist_dir
+            dedup_manager = DeduplicationManager(
+                kb_id=kb_id,
+                persist_dir=persist_dir,
+                uri=str(persist_dir),
+                table_name=kb_id,
+            )
+            logger.debug(f"[{task_id}] DeduplicationManager 初始化完成")
+
             config = DocumentProcessorConfig(
                 chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP
             )
-            importer = ZoteroImporter(config=config)
+            importer = ZoteroImporter(config=config, dedup_manager=dedup_manager)
             logger.debug(f"[{task_id}] ZoteroImporter 初始化完成")
 
             if not collection_id and params.get("collection_name"):
@@ -512,6 +522,7 @@ class TaskExecutor:
             if rebuild:
                 logger.info(f"[{task_id}] 重建模式，删除现有数据")
                 vs.delete_table()
+                dedup_manager.clear()
                 progress = ProcessingProgress()
 
             self.queue.update_progress(

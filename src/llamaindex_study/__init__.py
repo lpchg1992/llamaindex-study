@@ -13,6 +13,11 @@ from llamaindex_study.logger import (
     get_app_logger,
     get_kb_logger,
     get_api_logger,
+    get_task_log_file,
+    setup_task_logger,
+    configure_all_loggers,
+    get_log_dir,
+    set_log_dir,
 )
 from llamaindex_study.ollama_utils import (
     create_ollama_embedding,
@@ -52,6 +57,11 @@ __all__ = [
     "get_app_logger",
     "get_kb_logger",
     "get_api_logger",
+    "get_task_log_file",
+    "setup_task_logger",
+    "configure_all_loggers",
+    "get_log_dir",
+    "set_log_dir",
     # Ollama 工具
     "create_ollama_embedding",
     "configure_global_embed_model",
