@@ -302,8 +302,6 @@ uv run llamaindex-study search "<查询词>" --auto [-k <top_k>] [--exclude <kb1
 | `--force-delete` | 同步时处理已删除的文件。当源文件被删除时，是否从向量库中移除对应的数据 | True |
 | `--persist-dir` | 自定义持久化目录（通常不需要指定） | 空 |
 | `--refresh-topics/--no-refresh-topics` | 导入后是否刷新 topics | True |
-| `--wait` | 提交后阻塞等待任务完成并输出最终状态 | False |
-| `--timeout` | 与 `--wait` 配合使用，等待超时秒数（0 不超时） | 0 |
 
 示例：
 
@@ -314,7 +312,7 @@ uv run llamaindex-study ingest obsidian tech_tools
 # 导入特定文件夹
 uv run llamaindex-study ingest obsidian tech_tools --folder-path IT
 
-# 递归导入并等待完成
+# 递归导入
 uv run llamaindex-study ingest obsidian tech_tools --folder-path IT --recursive
 
 # 指定 Vault 路径
@@ -334,9 +332,7 @@ uv run llamaindex-study ingest zotero <kb_id> \
     [--collection-id <id>] \
     [--collection-name <name>] \
     [--rebuild] \
-    [--refresh-topics|--no-refresh-topics] \
-    [--wait] \
-    [--timeout <seconds>]
+    [--refresh-topics|--no-refresh-topics]
 ```
 
 参数说明：
@@ -347,8 +343,6 @@ uv run llamaindex-study ingest zotero <kb_id> \
 | `--collection-name` | 收藏夹名称（可能模糊匹配） |
 | `--rebuild` | **清空后重新导入**。启用后，会先删除知识库中的所有向量数据和去重记录，再重新导入该收藏夹的文献 |
 | `--refresh-topics/--no-refresh-topics` | 导入后是否刷新 topics |
-| `--wait` | 提交后阻塞等待任务完成并输出最终状态 |
-| `--timeout` | 与 `--wait` 配合使用，等待超时秒数（0 不超时） |
 
 示例：
 
@@ -367,9 +361,7 @@ uv run llamaindex-study ingest zotero zotero_nutrition --collection-name "营养
 
 ```bash
 uv run llamaindex-study ingest file <kb_id> <file_path> \
-    [--refresh-topics|--no-refresh-topics] \
-    [--wait] \
-    [--timeout <seconds>]
+    [--refresh-topics|--no-refresh-topics]
 ```
 
 > **验证**：提交任务前会检查路径是否存在、是否为有效文件/目录，以及目录中是否有可处理的文件。如果没有找到文件，命令会报错而不会提交空任务。
@@ -386,9 +378,7 @@ uv run llamaindex-study ingest file tech_tools README.md
 ```bash
 uv run llamaindex-study ingest batch <kb_id> <path1> <path2> ... \
     [--include pdf,md] [--exclude xlsx] \
-    [--refresh-topics|--no-refresh-topics] \
-    [--wait] \
-    [--timeout <seconds>]
+    [--refresh-topics|--no-refresh-topics]
 ```
 
 > **验证**：提交任务前会检查所有路径是否存在，并统计可处理的文件总数。如果所有路径都不存在或没有可处理的文件，命令会报错而不会提交空任务。
@@ -403,9 +393,7 @@ uv run llamaindex-study ingest batch tech_tools ./docs ./notes /tmp/papers
 
 ```bash
 uv run llamaindex-study ingest rebuild <kb_id> \
-    [--refresh-topics|--no-refresh-topics] \
-    [--wait] \
-    [--timeout <seconds>]
+    [--refresh-topics|--no-refresh-topics]
 ```
 
 **作用**：清空知识库后，按照知识库配置中记录的源路径重新导入所有文档。

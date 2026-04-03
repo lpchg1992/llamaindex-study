@@ -73,7 +73,7 @@ uv run llamaindex-study kb create my_kb --name "我的知识库"
 uv run llamaindex-study ingest obsidian my_kb --folder-path 技术
 uv run llamaindex-study ingest file my_kb ./docs.pdf
 uv run llamaindex-study ingest zotero my_kb --collection-name "文献"
-uv run llamaindex-study ingest batch my_kb ./docs ./notes --wait --timeout 120
+uv run llamaindex-study ingest batch my_kb ./docs ./notes
 
 # topics 管理
 uv run llamaindex-study kb topics my_kb --update

@@ -263,11 +263,7 @@ def submit_task_and_handle(
     return 0
 
 
-def submit_import_and_handle(
-    req: "ImportRequest",
-    wait: bool = False,
-    timeout: float = 0,
-) -> int:
+def submit_import_and_handle(req: "ImportRequest") -> int:
     from kb.import_service import ImportApplicationService
     from kb.task_executor import SchedulerStarter, is_scheduler_running
 
@@ -277,10 +273,6 @@ def submit_import_and_handle(
 
     result = ImportApplicationService.submit_task(req)
     print_json(result)
-    if wait:
-        task_id = result["task_id"]
-        final = TaskService.wait_for_task(task_id, interval=1.0, timeout=timeout)
-        print_json({"final_status": final.get("status"), "task": final})
     return 0
 
 
@@ -1008,9 +1000,7 @@ def handle_ingest_obsidian(args: argparse.Namespace) -> int:
             persist_dir=args.persist_dir,
             refresh_topics=args.refresh_topics,
             source=args.folder_path or args.vault_path,
-        ),
-        wait=args.wait,
-        timeout=args.timeout,
+        )
     )
 
 
@@ -1027,9 +1017,7 @@ def handle_ingest_zotero(args: argparse.Namespace) -> int:
             rebuild=args.rebuild,
             refresh_topics=args.refresh_topics,
             source=source,
-        ),
-        wait=args.wait,
-        timeout=args.timeout,
+        )
     )
 
 
@@ -1088,9 +1076,7 @@ def handle_ingest_file(args: argparse.Namespace) -> int:
             paths=[args.path],
             refresh_topics=args.refresh_topics,
             source=args.path,
-        ),
-        wait=args.wait,
-        timeout=args.timeout,
+        )
     )
 
 
@@ -1137,9 +1123,7 @@ def handle_ingest_batch(args: argparse.Namespace) -> int:
             exclude_exts=exclude_exts,
             refresh_topics=args.refresh_topics,
             source=paths[0],
-        ),
-        wait=args.wait,
-        timeout=args.timeout,
+        )
     )
 
 
@@ -1188,11 +1172,7 @@ def handle_ingest_rebuild(args: argparse.Namespace) -> int:
             source="cli:ingest:rebuild",
         )
 
-    return submit_import_and_handle(
-        req,
-        wait=args.wait,
-        timeout=args.timeout,
-    )
+    return submit_import_and_handle(req)
 
 
 def handle_obsidian_vaults(_: argparse.Namespace) -> int:
@@ -1974,12 +1954,6 @@ def build_parser() -> argparse.ArgumentParser:
         default=True,
         help="导入完成后是否刷新 topics",
     )
-    ingest_obsidian.add_argument(
-        "--wait", action="store_true", help="等待任务执行完成并输出最终状态"
-    )
-    ingest_obsidian.add_argument(
-        "--timeout", type=float, default=0, help="等待超时秒数（0 表示不超时）"
-    )
     ingest_obsidian.set_defaults(handler=handle_ingest_obsidian)
 
     ingest_zotero = ingest_sub.add_parser("zotero", help="导入 Zotero 收藏夹")
@@ -1993,12 +1967,6 @@ def build_parser() -> argparse.ArgumentParser:
         default=True,
         help="导入完成后是否刷新 topics",
     )
-    ingest_zotero.add_argument(
-        "--wait", action="store_true", help="等待任务执行完成并输出最终状态"
-    )
-    ingest_zotero.add_argument(
-        "--timeout", type=float, default=0, help="等待超时秒数（0 表示不超时）"
-    )
     ingest_zotero.set_defaults(handler=handle_ingest_zotero)
 
     ingest_file = ingest_sub.add_parser("file", help="导入单个文件或目录")
@@ -2009,12 +1977,6 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="导入完成后是否刷新 topics",
-    )
-    ingest_file.add_argument(
-        "--wait", action="store_true", help="等待任务执行完成并输出最终状态"
-    )
-    ingest_file.add_argument(
-        "--timeout", type=float, default=0, help="等待超时秒数（0 表示不超时）"
     )
     ingest_file.set_defaults(handler=handle_ingest_file)
 
@@ -2035,12 +1997,6 @@ def build_parser() -> argparse.ArgumentParser:
         default=True,
         help="导入完成后是否刷新 topics",
     )
-    ingest_batch.add_argument(
-        "--wait", action="store_true", help="等待任务执行完成并输出最终状态"
-    )
-    ingest_batch.add_argument(
-        "--timeout", type=float, default=0, help="等待超时秒数（0 表示不超时）"
-    )
     ingest_batch.set_defaults(handler=handle_ingest_batch)
 
     ingest_rebuild = ingest_sub.add_parser(
@@ -2052,12 +2008,6 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="重建完成后是否刷新 topics",
-    )
-    ingest_rebuild.add_argument(
-        "--wait", action="store_true", help="等待任务执行完成并输出最终状态"
-    )
-    ingest_rebuild.add_argument(
-        "--timeout", type=float, default=0, help="等待超时秒数（0 表示不超时）"
     )
     ingest_rebuild.set_defaults(handler=handle_ingest_rebuild)
 
