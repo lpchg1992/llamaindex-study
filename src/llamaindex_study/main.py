@@ -1469,6 +1469,45 @@ def handle_task_watch(args: argparse.Namespace) -> int:
         time.sleep(args.interval)
 
 
+def handle_scheduler_restart(args: argparse.Namespace) -> int:
+    import signal
+    import subprocess
+
+    from kb.task_executor import get_scheduler_pid_file
+
+    pid_file = get_scheduler_pid_file()
+
+    # 检查当前是否有 scheduler 在运行
+    if pid_file.exists():
+        with open(pid_file, "r") as f:
+            old_pid = int(f.read().strip())
+        try:
+            os.kill(old_pid, 0)  # 检查进程是否存在
+            print(f"停止现有调度器 (PID: {old_pid})...")
+            os.kill(old_pid, signal.SIGTERM)
+            time.sleep(1)
+            # 如果还没停止，强制杀死
+            try:
+                os.kill(old_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        except (ProcessLookupError, OSError):
+            print("现有调度器进程已不存在")
+
+    # 启动新的 scheduler
+    print("启动新的调度器...")
+    subprocess.Popen(
+        ["uv", "run", "python", "-m", "kb.scheduler"],
+        cwd=str(PROJECT_ROOT),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    time.sleep(1)
+    print("调度器已重启")
+    return 0
+
+
 def handle_evaluate(args: argparse.Namespace) -> int:
     from kb.services import SearchService
 
@@ -2392,6 +2431,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="不显示实时日志输出",
     )
     task_watch.set_defaults(handler=handle_task_watch)
+
+    task_scheduler = task_sub.add_parser(
+        "restart",
+        help="重启调度器",
+        description="停止现有调度器并启动新的调度器。用于加载新代码或解决调度器无响应的问题。",
+    )
+    task_scheduler.set_defaults(handler=handle_scheduler_restart)
 
     category_parser = subparsers.add_parser("category", help="分类规则与分类辅助")
     category_sub = category_parser.add_subparsers(
