@@ -62,10 +62,18 @@ class OllamaEmbedder(OllamaEmbedding):
         return self._call_with_retry(super().aget_text_embedding, text)
 
     def get_text_embeddings(self, texts: List[str]) -> List[List[float]]:
-        return self._call_with_retry(super().get_text_embeddings, texts)
+        results = []
+        for text in texts:
+            result = self._call_with_retry(super().get_text_embedding, text)
+            results.append(result)
+        return results
 
     async def aget_text_embeddings(self, texts: List[str]) -> List[List[float]]:
-        return self._call_with_retry(super().aget_text_embeddings, texts)
+        results = []
+        for text in texts:
+            result = await self._call_with_retry(super().aget_text_embedding, text)
+            results.append(result)
+        return results
 
 
 from llama_index.core import Settings as LlamaSettings
