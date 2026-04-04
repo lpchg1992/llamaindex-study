@@ -108,17 +108,20 @@ class LanceDBVectorStore(BaseVectorStore):
         self._vector_store: Optional[Any] = None
 
     def _get_embed_model(self):
-        """获取 Embedding 模型"""
-        from llama_index.embeddings.ollama import OllamaEmbedding
+        """获取 Embedding 模型
 
-        # 创建 Ollama embedding
-        settings = __import__(
-            "llamaindex_study.config", fromlist=["get_settings"]
-        ).get_settings()
-        return OllamaEmbedding(
-            model_name=settings.ollama_embed_model,
-            base_url=settings.ollama_base_url,
-        )
+        优先使用 LlamaSettings.embed_model（如果已配置），
+        以支持用户通过 embed_model_id 指定特定模型（如 ollama_homepc）。
+        """
+        from llama_index.core import Settings as LlamaSettings
+        from llamaindex_study.ollama_utils import create_ollama_embedding
+
+        # 优先使用全局配置的 embed_model（支持 embed_model_id 场景）
+        if hasattr(LlamaSettings, "embed_model") and LlamaSettings.embed_model:
+            return LlamaSettings.embed_model
+
+        # 回退到默认配置
+        return create_ollama_embedding()
 
     def _get_uri(self) -> str:
         """获取 LanceDB URI"""

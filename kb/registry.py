@@ -33,12 +33,6 @@ def get_storage_root() -> Path:
     return Path(settings.persist_dir)
 
 
-def get_zotero_storage_root() -> Path:
-    """获取 Zotero 存储根目录"""
-    settings = get_settings()
-    return Path(settings.zotero_persist_dir)
-
-
 def get_vault_root() -> Path:
     """获取 Obsidian Vault 根目录"""
     from dotenv import load_dotenv
@@ -71,15 +65,7 @@ class KnowledgeBase:
 
     @property
     def persist_dir(self) -> Path:
-        """获取持久化目录路径
-
-        Obsidian 知识库使用 get_storage_root()
-        Zotero 知识库使用 get_zotero_storage_root()
-        """
-        # Zotero 知识库的 persist_name 以 zotero_ 开头
-        if self.id.startswith("zotero_"):
-            return get_zotero_storage_root() / self.id
-
+        """获取持久化目录路径"""
         return get_storage_root() / self.persist_name
 
     def source_paths_abs(self, vault_root: Optional[Path] = None) -> List[Path]:
@@ -201,25 +187,9 @@ def get_registry() -> KnowledgeBaseRegistry:
 
 
 def seed_all_to_database() -> int:
-    """将所有注册表知识库迁移到数据库
-
-    Returns:
-        迁移的知识库数量
-    """
+    """将所有注册表知识库迁移到数据库"""
     from kb.database import init_kb_meta_db
 
-    obsidian_kbs = []
-    zotero_kbs = []
-
-    for kb in KNOWLEDGE_BASES:
-        kb_dict = kb.to_dict()
-        if kb.id.startswith("zotero_"):
-            zotero_kbs.append(kb_dict)
-        else:
-            obsidian_kbs.append(kb_dict)
-
+    kb_dicts = [kb.to_dict() for kb in KNOWLEDGE_BASES]
     db = init_kb_meta_db()
-    count = 0
-    count += db.seed_from_registry(obsidian_kbs, source_type="obsidian")
-    count += db.seed_from_registry(zotero_kbs, source_type="zotero")
-    return count
+    return db.seed_from_registry(kb_dicts)
