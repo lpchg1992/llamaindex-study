@@ -115,6 +115,18 @@ class DocumentProcessor:
         import logging
 
         add_logger = logging.getLogger("lancedb.add")
+
+        # 获取 LanceDB 表的有效 metadata 字段列表
+        valid_metadata_keys = self._get_valid_metadata_keys(lance_store)
+
+        # 过滤每个节点的 metadata，只保留表 schema 中存在的字段
+        for node in nodes:
+            if hasattr(node, "metadata") and node.metadata:
+                # 过滤掉不在 schema 中的字段
+                node.metadata = {
+                    k: v for k, v in node.metadata.items() if k in valid_metadata_keys
+                }
+
         try:
             lance_store.add(nodes)
             add_logger.debug(f"添加 {len(nodes)} 节点")
@@ -126,6 +138,26 @@ class DocumentProcessor:
             except Exception as retry_err:
                 add_logger.error(f"重试仍然失败: {retry_err}")
                 raise
+
+    def _get_valid_metadata_keys(self, lance_store) -> set:
+        try:
+            table = lance_store.table
+            if table is None:
+                return set()
+
+            schema = table.schema
+
+            for field in schema:
+                if field.name == "metadata":
+                    struct_type = field.type
+                    valid_keys = set()
+                    for i in range(struct_type.num_fields):
+                        valid_keys.add(struct_type.field(i).name)
+                    return valid_keys
+
+            return set()
+        except Exception:
+            return set()
 
     @staticmethod
     def compute_file_hash(file_path: str) -> str:
@@ -672,6 +704,7 @@ class DocumentProcessor:
 
         except Exception as e:
             logger.error(f"文档读取失败: {path}, 错误: {e}")
+            raise
 
         return docs
 
@@ -772,7 +805,7 @@ class DocumentProcessor:
             self._upsert_nodes(lance_store, processed_batch)
             saved = len(processed_batch)
         except Exception as e:
-            print(f"\n   ⚠️  保存失败: {e}")
+            raise RuntimeError(f"向量数据库写入失败: {e}")
 
         if progress:
             progress.total_nodes += saved

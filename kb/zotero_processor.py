@@ -105,29 +105,47 @@ class ZoteroImporter:
         支持两种附件类型：
         - 独立附件：itemID 本身就是要查询的附件 ID
         - 子附件：需要通过 parentItemID 查找父 item 下的附件
+
+        修复: 优先选择包含 [kb] 标记的附件，确保多附件时选中正确的文件
         """
         conn = self.connect()
         cursor = conn.cursor()
 
+        # 先尝试查找包含 [kb] 标记的附件
         cursor.execute(
             """
-            SELECT ia.path, ia.storageHash, ia.contentType, v.value as attachment_title
+            SELECT ia.itemID, ia.path, ia.storageHash, ia.contentType, v.value as attachment_title
             FROM itemAttachments ia
             JOIN itemData d ON d.itemID = ia.itemID AND d.fieldID = 1
             JOIN itemDataValues v ON d.valueID = v.valueID
-            WHERE ia.itemID = ? OR ia.parentItemID = ?
+            WHERE (ia.itemID = ? OR ia.parentItemID = ?)
+            AND v.value LIKE '%[kb]%'
             LIMIT 1
         """,
             (item_id, item_id),
         )
         row = cursor.fetchone()
 
+        # 如果没找到 [kb] 附件，尝试查找任何有效的附件
+        if not row:
+            cursor.execute(
+                """
+                SELECT ia.itemID, ia.path, ia.storageHash, ia.contentType, v.value as attachment_title
+                FROM itemAttachments ia
+                JOIN itemData d ON d.itemID = ia.itemID AND d.fieldID = 1
+                JOIN itemDataValues v ON d.valueID = v.valueID
+                WHERE ia.itemID = ? OR ia.parentItemID = ?
+                LIMIT 1
+            """,
+                (item_id, item_id),
+            )
+            row = cursor.fetchone()
+
         if not row or not row["path"]:
             return None
 
         title = row["attachment_title"] if row["attachment_title"] else ""
-
-        if "[kb]" not in title:
+        if "[kb]" not in title and row["itemID"] != item_id:
             return None
 
         storage_hash = row["storageHash"]
@@ -606,11 +624,14 @@ class ZoteroImporter:
 
             try:
                 nodes = self.import_item(item, vector_store, embed_model, progress)
-                stats["nodes"] += nodes
-                stats["items"] += 1
-                if item.file_path:
-                    stats["processed_sources"].append(item.file_path)
-                logger.info(f"文献导入成功: {item.title}, 节点数: {nodes}")
+                if nodes > 0:
+                    stats["nodes"] += nodes
+                    stats["items"] += 1
+                    if item.file_path:
+                        stats["processed_sources"].append(item.file_path)
+                    logger.info(f"文献导入成功: {item.title}, 节点数: {nodes}")
+                else:
+                    logger.warning(f"文献未产生节点: {item.title}")
 
                 if self.dedup_manager:
                     self.dedup_manager.mark_processed(
