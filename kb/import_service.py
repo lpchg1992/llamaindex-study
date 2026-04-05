@@ -24,6 +24,9 @@ class ImportRequest:
     collection_id: Optional[str] = None
     collection_name: Optional[str] = None
     rebuild: bool = False
+    chunk_strategy: Optional[str] = None
+    chunk_size: Optional[int] = None
+    hierarchical_chunk_sizes: Optional[List[int]] = None
 
 
 class ImportApplicationService:
@@ -81,6 +84,12 @@ class ImportApplicationService:
                 "rebuild": req.rebuild,
                 "refresh_topics": req.refresh_topics,
             }
+            if req.chunk_strategy:
+                params["chunk_strategy"] = req.chunk_strategy
+            if req.chunk_size:
+                params["chunk_size"] = req.chunk_size
+            if req.hierarchical_chunk_sizes:
+                params["hierarchical_chunk_sizes"] = req.hierarchical_chunk_sizes
             source = req.source or (
                 req.collection_name or req.collection_id or "zotero"
             )

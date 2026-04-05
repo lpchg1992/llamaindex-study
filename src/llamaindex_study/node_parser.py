@@ -31,6 +31,7 @@ def get_node_parser(
     use_semantic: bool = False,
     embed_model: Optional[Any] = None,
     strategy: Optional[str] = None,
+    hierarchical_chunk_sizes: Optional[List[int]] = None,
 ) -> Any:
     """
     获取节点解析器
@@ -42,6 +43,8 @@ def get_node_parser(
         embed_model: embedding 模型（语义分块时需要）
         strategy: 分块策略，可选 'hierarchical'/'sentence'/'semantic'
                  默认从配置读取 CHUNK_STRATEGY
+        hierarchical_chunk_sizes: hierarchical 模式的分层大小列表，
+                                 如 [2048, 1024, 512]
 
     Returns:
         BaseNodeParser: 节点解析器实例
@@ -54,7 +57,10 @@ def get_node_parser(
     chunk_overlap = chunk_overlap or settings.chunk_overlap or 100
 
     if strategy == "hierarchical":
-        return get_hierarchical_node_parser()
+        return get_hierarchical_node_parser(
+            chunk_sizes=hierarchical_chunk_sizes,
+            chunk_overlap=chunk_overlap,
+        )
     elif strategy == "semantic" or use_semantic:
         return _create_semantic_chunker(
             chunk_size=chunk_size,

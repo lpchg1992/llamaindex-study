@@ -40,6 +40,8 @@ class DocumentProcessorConfig:
 
     chunk_size: int = 1024
     chunk_overlap: int = 100
+    chunk_strategy: str = "hierarchical"
+    hierarchical_chunk_sizes: list = None
     batch_size: int = 50  # 每 N 个节点保存一次
     max_file_size: int = 100 * 1024 * 1024  # 100MB
     pdf_scan_threshold: float = 10.0  # 文字密度阈值 (chars/sq inch)
@@ -47,19 +49,27 @@ class DocumentProcessorConfig:
     pdf_convert_timeout: int = 600  # PDF 转换超时 (秒)
     incremental: bool = True  # 增量更新模式
 
+    def __post_init__(self):
+        if self.hierarchical_chunk_sizes is None:
+            from llamaindex_study.config import get_settings
+
+            settings = get_settings()
+            self.hierarchical_chunk_sizes = settings.hierarchical_chunk_sizes
+
 
 @dataclass
 class ProcessingProgress:
     """处理进度"""
 
     total_items: int = 0
-    processed_items: List[str] = field(default_factory=list)  # 文件路径或 ID
+    processed_items: List[str] = field(default_factory=list)
+    skipped_items: List[str] = field(default_factory=list)
     failed_items: List[str] = field(default_factory=list)
-    converted_files: dict = field(default_factory=dict)  # 原路径 -> 转换后路径
+    converted_files: dict = field(default_factory=dict)
     started_at: Optional[float] = None
     last_item: Optional[str] = None
     total_nodes: int = 0
-    file_hashes: dict = field(default_factory=dict)  # 文件路径 -> MD5 哈希
+    file_hashes: dict = field(default_factory=dict)
 
     def save(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -98,6 +108,8 @@ class DocumentProcessor:
         self.node_parser = node_parser or get_node_parser(
             chunk_size=self.config.chunk_size,
             chunk_overlap=self.config.chunk_overlap,
+            strategy=self.config.chunk_strategy,
+            hierarchical_chunk_sizes=self.config.hierarchical_chunk_sizes,
         )
 
     def set_embed_model(self, embed_model):

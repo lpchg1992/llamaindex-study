@@ -1008,6 +1008,13 @@ def handle_ingest_zotero(args: argparse.Namespace) -> int:
     from kb.import_service import ImportRequest
 
     source = args.collection_name or args.collection_id or "zotero"
+
+    hierarchical_chunk_sizes = None
+    if args.hierarchical_sizes:
+        hierarchical_chunk_sizes = [
+            int(x.strip()) for x in args.hierarchical_sizes.split(",")
+        ]
+
     return submit_import_and_handle(
         ImportRequest(
             kind="zotero",
@@ -1017,6 +1024,9 @@ def handle_ingest_zotero(args: argparse.Namespace) -> int:
             rebuild=args.rebuild,
             refresh_topics=args.refresh_topics,
             source=source,
+            chunk_strategy=args.chunk_strategy,
+            chunk_size=args.chunk_size,
+            hierarchical_chunk_sizes=hierarchical_chunk_sizes,
         )
     )
 
@@ -2112,6 +2122,20 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="导入完成后是否刷新 topics",
+    )
+    ingest_zotero.add_argument(
+        "--chunk-strategy",
+        choices=["hierarchical", "sentence", "semantic"],
+        help="分块策略 (默认: hierarchical)",
+    )
+    ingest_zotero.add_argument(
+        "--chunk-size",
+        type=int,
+        help="分块大小 (默认: 1024)",
+    )
+    ingest_zotero.add_argument(
+        "--hierarchical-sizes",
+        help="hierarchical 模式分层大小，逗号分隔 (如: 2048,1024,512)",
     )
     ingest_zotero.set_defaults(handler=handle_ingest_zotero)
 

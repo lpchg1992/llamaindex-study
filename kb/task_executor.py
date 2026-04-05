@@ -503,7 +503,10 @@ class TaskExecutor:
             logger.debug(f"[{task_id}] DeduplicationManager 初始化完成")
 
             config = DocumentProcessorConfig(
-                chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP
+                chunk_size=params.get("chunk_size") or CHUNK_SIZE,
+                chunk_overlap=CHUNK_OVERLAP,
+                chunk_strategy=params.get("chunk_strategy") or "hierarchical",
+                hierarchical_chunk_sizes=params.get("hierarchical_chunk_sizes"),
             )
             importer = ZoteroImporter(config=config, dedup_manager=dedup_manager)
             logger.debug(f"[{task_id}] ZoteroImporter 初始化完成")
