@@ -144,7 +144,10 @@ curl -X POST http://localhost:37241/kbs/HTE_history/topics/refresh \
 | `SILICONFLOW_API_KEY` | - | 硅基流动 API 密钥 |
 | `OLLAMA_EMBED_MODEL` | `bge-m3` | Embedding 模型 |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama 地址 |
-| `CHUNK_STRATEGY` | `hierarchical` | 分块策略 |
+| `CHUNK_STRATEGY` | `hierarchical` | 分块策略：`hierarchical`/`sentence`/`semantic` |
+| `CHUNK_SIZE` | `1024` | 分块大小 |
+| `CHUNK_OVERLAP` | `100` | 分块重叠 |
+| `HIERARCHICAL_CHUNK_SIZES` | `2048,1024,512` | 层级分块各层大小 |
 | `USE_AUTO_MERGING` | `false` | 启用 Auto-Merging |
 
 详细配置请参考 [docs/API.md](docs/API.md#环境变量配置)。

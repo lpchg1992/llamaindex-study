@@ -492,8 +492,9 @@ parser = get_hierarchical_node_parser()
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
 | `CHUNK_STRATEGY` | `hierarchical` | 分块策略 |
-| `HIERARCHICAL_CHUNK_SIZES` | `2048,512,128` | 各层分块大小 |
-| `CHUNK_OVERLAP` | `50` | 分块重叠大小 |
+| `CHUNK_SIZE` | `1024` | 默认分块大小 |
+| `CHUNK_OVERLAP` | `100` | 分块重叠大小 |
+| `HIERARCHICAL_CHUNK_SIZES` | `2048,1024,512` | 各层分块大小 |
 | `USE_AUTO_MERGING` | `false` | 是否启用 Auto-Merging 检索 |
 
 **存储的节点关系字段**：

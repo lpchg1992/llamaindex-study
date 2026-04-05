@@ -229,7 +229,10 @@ curl -X POST "http://localhost:8000/query" \
 | `OBSIDIAN_VAULT_ROOT` | `~/Documents/Obsidian Vault` | Vault 目录 |
 | `PERSIST_DIR` | `/Volumes/online/llamaindex` | 向量存储目录 |
 | `ZOTERO_PERSIST_DIR` | `/Volumes/online/llamaindex/zotero` | Zotero 存储目录 |
-| `CHUNK_SIZE` | `512` | 分块大小 |
+| `CHUNK_STRATEGY` | `hierarchical` | 分块策略：`hierarchical`/`sentence`/`semantic` |
+| `CHUNK_SIZE` | `1024` | 分块大小 |
+| `CHUNK_OVERLAP` | `100` | 分块重叠 |
+| `HIERARCHICAL_CHUNK_SIZES` | `2048,1024,512` | 层级分块各层大小 |
 | `MAX_RETRIES` | `3` | 最大重试次数 |
 | `MAX_CONCURRENT_TASKS` | `10` | 最大并发 |
 

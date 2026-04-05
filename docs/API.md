@@ -481,8 +481,28 @@ Zotero 收藏夹导入：
 ```bash
 curl -X POST "http://localhost:37241/kbs/swine_nutrition/ingest/zotero" \
   -H "Content-Type: application/json" \
-  -d '{"collection_name": "营养饲料理论", "async_mode": true, "refresh_topics": true}'
+  -d '{
+    "collection_name": "营养饲料理论",
+    "async_mode": true,
+    "refresh_topics": true,
+    "chunk_strategy": "hierarchical",
+    "chunk_size": 1024,
+    "hierarchical_chunk_sizes": [2048, 1024, 512]
+  }'
 ```
+
+请求参数：
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `collection_id` | string | Zotero 收藏夹 ID（精确） |
+| `collection_name` | string | 收藏夹名称（可能模糊匹配） |
+| `async_mode` | bool | 是否异步处理（默认: true） |
+| `rebuild` | bool | 是否清空后重建（默认: false） |
+| `refresh_topics` | bool | 导入后是否刷新 topics（默认: true） |
+| `chunk_strategy` | string | 分块策略：`hierarchical`（默认）/ `sentence` / `semantic` |
+| `chunk_size` | int | 分块大小（默认: 1024） |
+| `hierarchical_chunk_sizes` | list[int] | hierarchical 模式分层大小列表 |
 
 ```json
 {
@@ -1027,8 +1047,8 @@ curl -X POST "http://localhost:37241/search" \
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `CHUNK_SIZE` | `512` | 文本分块大小 |
-| `CHUNK_OVERLAP` | `50` | 文本分块重叠 |
+| `CHUNK_SIZE` | `1024` | 文本分块大小 |
+| `CHUNK_OVERLAP` | `100` | 文本分块重叠 |
 | `PROGRESS_UPDATE_INTERVAL` | `10` | 进度更新间隔 |
 | `MAX_CONCURRENT_TASKS` | `10` | 最大并发任务数 |
 
@@ -1047,9 +1067,11 @@ curl -X POST "http://localhost:37241/search" \
 |------|--------|------|
 | `TOP_K` | `5` | 每个知识库返回的结果数量 |
 | `CHUNK_STRATEGY` | `hierarchical` | 分块策略：`hierarchical`/`sentence`/`semantic` |
-| `HIERARCHICAL_CHUNK_SIZES` | `2048,512,128` | 层级分块各层大小 |
-| `SENTENCE_CHUNK_SIZE` | `512` | 句子分块大小 |
-| `SENTENCE_CHUNK_OVERLAP` | `50` | 句子分块重叠 |
+| `CHUNK_SIZE` | `1024` | 默认分块大小 |
+| `CHUNK_OVERLAP` | `100` | 分块重叠 |
+| `HIERARCHICAL_CHUNK_SIZES` | `2048,1024,512` | 层级分块各层大小 |
+| `SENTENCE_CHUNK_SIZE` | `1024` | 句子分块大小 |
+| `SENTENCE_CHUNK_OVERLAP` | `100` | 句子分块重叠 |
 | `USE_SEMANTIC_CHUNKING` | `false` | 启用语义分块（需重建知识库） |
 | `USE_AUTO_MERGING` | `false` | 启用 Auto-Merging Retriever（需知识库使用 hierarchical 分块） |
 | `USE_HYBRID_SEARCH` | `false` | 启用混合搜索（向量 + BM25） |

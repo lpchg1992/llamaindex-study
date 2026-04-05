@@ -332,7 +332,10 @@ uv run llamaindex-study ingest zotero <kb_id> \
     [--collection-id <id>] \
     [--collection-name <name>] \
     [--rebuild] \
-    [--refresh-topics|--no-refresh-topics]
+    [--refresh-topics|--no-refresh-topics] \
+    [--chunk-strategy {hierarchical,sentence,semantic}] \
+    [--chunk-size <size>] \
+    [--hierarchical-sizes <sizes>]
 ```
 
 参数说明：
@@ -343,11 +346,14 @@ uv run llamaindex-study ingest zotero <kb_id> \
 | `--collection-name` | 收藏夹名称（可能模糊匹配） |
 | `--rebuild` | **清空后重新导入**。启用后，会先删除知识库中的所有向量数据和去重记录，再重新导入该收藏夹的文献 |
 | `--refresh-topics/--no-refresh-topics` | 导入后是否刷新 topics |
+| `--chunk-strategy` | 分块策略：`hierarchical`（默认）/ `sentence` / `semantic` |
+| `--chunk-size` | 分块大小（默认: 1024） |
+| `--hierarchical-sizes` | hierarchical 模式分层大小，逗号分隔（默认: 2048,1024,512）|
 
 示例：
 
 ```bash
-# 按名称导入
+# 按名称导入（默认 hierarchical 分块）
 uv run llamaindex-study ingest zotero zotero_nutrition --collection-name "营养饲料理论"
 
 # 按 ID 精确导入
@@ -355,6 +361,15 @@ uv run llamaindex-study ingest zotero zotero_nutrition --collection-id 123456
 
 # 重建并导入
 uv run llamaindex-study ingest zotero zotero_nutrition --collection-name "营养" --rebuild
+
+# 使用 sentence 分块策略
+uv run llamaindex-study ingest zotero zotero_nutrition --collection-name "营养" --chunk-strategy sentence
+
+# 使用 sentence 分块策略并指定大小
+uv run llamaindex-study ingest zotero zotero_nutrition --collection-name "营养" --chunk-strategy sentence --chunk-size 2048
+
+# 使用 hierarchical 分块策略并自定义分层大小
+uv run llamaindex-study ingest zotero zotero_nutrition --collection-name "营养" --chunk-strategy hierarchical --hierarchical-sizes 4096,2048,1024
 ```
 
 ### 导入单个文件
@@ -1136,6 +1151,8 @@ CLI 工具读取以下环境变量（参见 `.env.example`）：
 | `PERSIST_DIR` | 向量存储目录（通用 KB） | `/Volumes/online/llamaindex` |
 | `ZOTERO_PERSIST_DIR` | Zotero 存储目录 | `/Volumes/online/llamaindex/zotero` |
 | `CHUNK_STRATEGY` | 分块策略 | `hierarchical` |
-| `HIERARCHICAL_CHUNK_SIZES` | 层级分块各层大小 | `2048,512,128` |
-| `SENTENCE_CHUNK_SIZE` | 句子分块大小 | `512` |
-| `SENTENCE_CHUNK_OVERLAP` | 句子分块重叠 | `50` |
+| `CHUNK_SIZE` | 默认分块大小 | `1024` |
+| `CHUNK_OVERLAP` | 默认分块重叠 | `100` |
+| `HIERARCHICAL_CHUNK_SIZES` | 层级分块各层大小 | `2048,1024,512` |
+| `SENTENCE_CHUNK_SIZE` | 句子分块大小 | `1024` |
+| `SENTENCE_CHUNK_OVERLAP` | 句子分块重叠 | `100` |
