@@ -237,6 +237,12 @@ class LanceDBVectorStore(BaseVectorStore):
         self._index = index
         self._vector_store = vector_store
 
+        # 保存分块策略元数据
+        from llamaindex_study.config import get_settings
+
+        settings = get_settings()
+        self.set_chunk_strategy(settings.chunk_strategy)
+
         return index
 
     def load_index(self) -> Optional[Any]:
