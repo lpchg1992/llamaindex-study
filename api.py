@@ -1206,6 +1206,13 @@ class ZoteroIngestRequest(BaseModel):
     async_mode: bool = Field(True, description="是否异步处理")
     rebuild: bool = Field(False, description="是否重建")
     refresh_topics: bool = Field(True, description="任务完成后是否刷新 topics")
+    chunk_strategy: Optional[str] = Field(
+        None, description="分块策略: hierarchical/sentence/semantic"
+    )
+    chunk_size: Optional[int] = Field(None, description="分块大小")
+    hierarchical_chunk_sizes: Optional[List[int]] = Field(
+        None, description="hierarchical 模式分层大小列表"
+    )
 
 
 @app.get("/zotero/collections")
@@ -1261,6 +1268,9 @@ def ingest_zotero(kb_id: str, req: ZoteroIngestRequest):
                 collection_name=collection_name,
                 rebuild=req.rebuild,
                 refresh_topics=req.refresh_topics,
+                chunk_strategy=req.chunk_strategy,
+                chunk_size=req.chunk_size,
+                hierarchical_chunk_sizes=req.hierarchical_chunk_sizes,
             )
         )
         return IngestResponse(
@@ -1281,6 +1291,9 @@ def ingest_zotero(kb_id: str, req: ZoteroIngestRequest):
             rebuild=req.rebuild,
             refresh_topics=req.refresh_topics,
             source=f"zotero:{collection_name}",
+            chunk_strategy=req.chunk_strategy,
+            chunk_size=req.chunk_size,
+            hierarchical_chunk_sizes=req.hierarchical_chunk_sizes,
         )
     )
     task_id = task["task_id"]
