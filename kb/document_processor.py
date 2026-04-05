@@ -3,7 +3,7 @@
 
 提供统一的文档处理能力：
 - PDF 扫描件检测
-- PDF 转 Markdown (本地 OCR + 云端 doc2x 回退)
+- PDF 转 Markdown (云端 OCR 服务: MinerU / doc2x)
 - Office 文档处理 (Word, Excel, PPTX)
 - 批量处理和增量保存
 - 断点续传
@@ -288,44 +288,51 @@ class DocumentProcessor:
     def convert_pdf_to_markdown(
         self, pdf_path: str, timeout: int = None
     ) -> Optional[str]:
-        """
-        将 PDF 转换为 Markdown (OCR 优先级策略)
-
-        策略：
-        1. 本地 Ollama OCR - PDF 转图片后调用 deepseek-ocr
-        2. MinerU - 直接上传 PDF (需配置 MINERU_API_KEY 和 MINERU_PIPELINE_ID)
-        3. doc2x - 直接上传 PDF (需配置 DOC2X_API_KEY)
-
-        Returns:
-            转换后的 Markdown 内容，失败返回 None
-        """
+        """将 PDF 转换为 Markdown"""
         timeout = timeout or self.config.pdf_convert_timeout
         print(f"   🔄 正在转换 PDF 为 Markdown...")
 
-        from llamaindex_study.config import get_settings
+        file_size_mb, page_count = self._get_pdf_info(pdf_path)
+        need_split = file_size_mb >= 200 or page_count >= 600
 
-        settings = get_settings()
+        if need_split:
+            print(f"   📄 文件过大 ({file_size_mb:.1f}MB, {page_count}页)，开始拆分...")
+            chunk_files = self._split_pdf_to_temp(pdf_path, pages_per_chunk=500)
+            if not chunk_files:
+                print(f"   ❌ PDF 拆分失败")
+                return None
 
-        # ========== 策略 1: 本地 Ollama OCR ==========
-        print(f"   📡 策略1: 本地 Ollama OCR...")
-        image_paths = self._convert_pdf_to_images(pdf_path)
-        if image_paths:
             all_text = []
-            for i, img_path in enumerate(image_paths):
-                print(f"   📄 识别第 {i + 1}/{len(image_paths)} 页...")
-                text = self._call_ollama_ocr(img_path)
-                if text and len(text.strip()) > 10:
-                    all_text.append(text)
+            for i, chunk_path in enumerate(chunk_files):
+                print(
+                    f"   📄 处理第 {i + 1}/{len(chunk_files)} 部分 ({chunk_path.name})..."
+                )
+                chunk_text = self._convert_single_pdf(chunk_path, timeout)
+                if chunk_text:
+                    all_text.append(chunk_text)
                 else:
-                    all_text.append(f"[Page {i + 1}: OCR failed]")
+                    all_text.append(f"[Part {i + 1}: OCR failed]")
+
+                try:
+                    chunk_path.unlink()
+                except Exception:
+                    pass
 
             if all_text:
                 combined = "\n\n---\n\n".join(all_text)
                 if len(combined.strip()) > 100:
-                    print(f"   ✅ 本地 OCR 成功")
+                    print(f"   ✅ 拆分转换完成 ({len(chunk_files)} parts)")
                     return combined
+            return None
 
-        # ========== 策略 2: MinerU ==========
+        return self._convert_single_pdf(pdf_path, timeout)
+
+    def _convert_single_pdf(self, pdf_path: str, timeout: int = None) -> Optional[str]:
+        """转换单个 PDF（不拆分）"""
+        from llamaindex_study.config import get_settings
+
+        settings = get_settings()
+
         mineru_api_key = getattr(settings, "mineru_api_key", None) or os.getenv(
             "MINERU_API_KEY"
         )
@@ -334,27 +341,26 @@ class DocumentProcessor:
         )
 
         if mineru_api_key and mineru_pipeline_id:
-            print(f"   ☁️  策略2: MinerU...")
+            print(f"   ☁️  策略1: MinerU...")
             md = self._convert_pdf_mineru(
                 pdf_path, mineru_api_key, mineru_pipeline_id, timeout
             )
             if md:
                 return md
         else:
-            print(f"   ⏭️  策略2: MinerU 未配置 (MINERU_API_KEY 或 MINERU_PIPELINE_ID)")
+            print(f"   ⏭️  策略1: MinerU 未配置")
 
-        # ========== 策略 3: doc2x ==========
         doc2x_api_key = getattr(settings, "doc2x_api_key", None) or os.getenv(
             "DOC2X_API_KEY"
         )
 
         if doc2x_api_key:
-            print(f"   ☁️  策略3: doc2x...")
+            print(f"   ☁️  策略2: doc2x...")
             md = self._convert_pdf_doc2x(pdf_path, doc2x_api_key, timeout)
             if md:
                 return md
         else:
-            print(f"   ⏭️  策略3: doc2x 未配置 (DOC2X_API_KEY)")
+            print(f"   ⏭️  策略2: doc2x 未配置")
 
         print(f"   ❌ 所有 OCR 策略均失败")
         return None
@@ -444,6 +450,7 @@ class DocumentProcessor:
             Markdown 内容，失败返回 None
         """
         timeout = timeout or self.config.pdf_convert_timeout
+        proc = None
 
         try:
             proc = subprocess.Popen(
@@ -455,147 +462,105 @@ class DocumentProcessor:
                 env={**os.environ, "DOC2X_API_KEY": api_key},
             )
 
-            init_msg = json.dumps(
-                {
-                    "jsonrpc": "2.0",
-                    "id": 0,
-                    "method": "initialize",
-                    "params": {
-                        "protocolVersion": "2024-11-05",
-                        "capabilities": {},
-                        "clientInfo": {"name": "llamaindex-study", "version": "0.1"},
-                    },
-                }
-            )
+            init_msg = {
+                "jsonrpc": "2.0",
+                "id": 0,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {"name": "llamaindex-study", "version": "0.1"},
+                },
+            }
 
-            tool_msg = json.dumps(
-                {
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": "tools/call",
-                    "params": {
-                        "name": "doc2x_parse_pdf_wait_text",
-                        "arguments": {"pdf_path": pdf_path},
-                    },
-                }
-            )
+            tool_msg = {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "doc2x_parse_pdf_wait_text",
+                    "arguments": {"pdf_path": pdf_path},
+                },
+            }
 
-            input_data = init_msg + "\n" + tool_msg + "\n"
-            stdout, stderr = proc.communicate(input=input_data, timeout=timeout)
+            import threading
 
-            for line in stdout.strip().split("\n"):
-                if not line:
-                    continue
+            result_holder = {"result": None, "error": None}
+
+            def read_stdout():
                 try:
-                    resp = json.loads(line)
-                    if resp.get("id") == 1 and "result" in resp:
-                        content = resp["result"].get("content", [])
-                        if isinstance(content, list) and len(content) > 0:
-                            text = content[0].get("text", "")
-                            if text and len(text.strip()) > 100:
-                                print(f"   ✅ doc2x 转换成功")
-                                return text
-                except json.JSONDecodeError:
-                    continue
+                    buffer = ""
+                    while True:
+                        char = proc.stdout.read(1)
+                        if not char:
+                            break
+                        buffer += char
+                        if char == "\n":
+                            line = buffer.strip()
+                            buffer = ""
+                            if not line:
+                                continue
+                            try:
+                                resp = json.loads(line)
+                                if resp.get("id") == 1 and "result" in resp:
+                                    content = resp["result"].get("content", [])
+                                    if isinstance(content, list) and len(content) > 0:
+                                        text = content[0].get("text", "")
+                                        if text and len(text.strip()) > 100:
+                                            result_holder["result"] = text
+                                            return
+                            except json.JSONDecodeError:
+                                continue
+                except Exception as e:
+                    result_holder["error"] = str(e)
+
+            reader_thread = threading.Thread(target=read_stdout)
+            reader_thread.daemon = True
+            reader_thread.start()
+
+            proc.stdin.write(json.dumps(init_msg) + "\n")
+            proc.stdin.flush()
+
+            import time
+
+            start_time = time.time()
+            while reader_thread.is_alive() and (time.time() - start_time) < 5:
+                time.sleep(0.1)
+
+            if result_holder["result"]:
+                proc.stdin.write(json.dumps(tool_msg) + "\n")
+                proc.stdin.flush()
+
+                reader_thread.join(timeout=timeout)
+                if result_holder["result"]:
+                    print(f"   ✅ doc2x 转换成功")
+                    return result_holder["result"]
+            else:
+                time.sleep(2)
+
+                proc.stdin.write(json.dumps(tool_msg) + "\n")
+                proc.stdin.flush()
+
+                reader_thread.join(timeout=timeout)
+                if result_holder["result"]:
+                    print(f"   ✅ doc2x 转换成功")
+                    return result_holder["result"]
+
+            if result_holder["error"]:
+                print(f"   ⚠️  doc2x 读取错误: {result_holder['error']}")
+
+            if proc:
+                proc.terminate()
+            return result_holder.get("result")
 
         except subprocess.TimeoutExpired:
             print(f"   ❌ doc2x 转换超时")
-            proc.kill()
+            if proc:
+                proc.kill()
         except Exception as e:
             print(f"   ⚠️  doc2x 失败: {e}")
 
         return None
-
-    def _convert_pdf_to_images(
-        self, pdf_path: str, output_dir: Path = None
-    ) -> List[Path]:
-        """将 PDF 页面转换为图片
-
-        Args:
-            pdf_path: PDF 文件路径
-            output_dir: 输出目录，默认为临时目录
-
-        Returns:
-            图片路径列表
-        """
-        import fitz
-
-        if output_dir is None:
-            output_dir = Path(tempfile.gettempdir()) / "llamaindex_ocr"
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        image_paths = []
-        pdf_name = Path(pdf_path).stem
-
-        try:
-            doc = fitz.open(pdf_path)
-            for page_num in range(len(doc)):
-                page = doc[page_num]
-                pix = page.get_pixmap(dpi=300)
-                img_path = output_dir / f"{pdf_name}_page_{page_num + 1}.png"
-                pix.save(str(img_path))
-                image_paths.append(img_path)
-            doc.close()
-        except Exception as e:
-            print(f"   ⚠️  PDF 转图片失败: {e}")
-
-        return image_paths
-
-    def _call_ollama_ocr(
-        self,
-        image_path: Path,
-        prompt: str = "<|grounding|>Convert the document to markdown.",
-    ) -> Optional[str]:
-        """调用本地 Ollama OCR 模型
-
-        Args:
-            image_path: 图片路径
-            prompt: OCR 提示词
-
-        Returns:
-            识别出的文本，失败返回 None
-        """
-        import httpx
-
-        url = f"http://192.168.31.169:11434/api/generate"
-        model = "deepseek-ocr"
-
-        full_prompt = f'"{image_path}\n{prompt}"'
-
-        try:
-            response = httpx.post(
-                url,
-                json={"model": model, "prompt": full_prompt, "stream": False},
-                timeout=120,
-            )
-            if response.status_code == 200:
-                return response.json().get("response", "")
-        except Exception as e:
-            print(f"   ⚠️  Ollama OCR 调用失败: {e}")
-
-        return None
-
-    def _check_network_connectivity(
-        self, host: str = "8.8.8.8", port: int = 53, timeout: float = 3.0
-    ) -> bool:
-        """检查网络连接
-
-        Args:
-            host: 主机地址
-            port: 端口
-            timeout: 超时时间
-
-        Returns:
-            是否可以连接
-        """
-        import socket
-
-        try:
-            socket.setdefaulttimeout(timeout)
-            socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect((host, port))
-            return True
-        except socket.error:
-            return False
 
     def process_pdf(self, pdf_path: str, metadata: dict = None) -> List[LlamaDocument]:
         """
@@ -611,25 +576,32 @@ class DocumentProcessor:
         docs = []
         ext = Path(pdf_path).suffix.lower()
 
-        # 检查是否需要转换
         is_scanned = self.is_scanned_pdf(pdf_path)
 
         if is_scanned:
             print(f"   🔍 检测为扫描件，尝试 OCR 转换...")
             md_content = self.convert_pdf_to_markdown(pdf_path)
             if md_content:
+                md_save_dir = Path("/Volumes/online/llamaindex/mddocs")
+                md_save_dir.mkdir(parents=True, exist_ok=True)
+                md_file_name = Path(pdf_path).stem + ".md"
+                md_file_path = md_save_dir / md_file_name
+                with open(md_file_path, "w", encoding="utf-8") as f:
+                    f.write(md_content)
+                print(f"   💾 Markdown 已保存: {md_file_path}")
+
                 doc = LlamaDocument(
                     text=md_content,
                     metadata={
                         "source": "pdf_scanned",
                         "file_path": pdf_path,
                         "converted": True,
+                        "md_file_path": str(md_file_path),
                         **(metadata or {}),
                     },
                 )
                 docs.append(doc)
             else:
-                # 尝试直接读取（可能有部分文字）
                 try:
                     reader = SimpleDirectoryReader(input_files=[pdf_path])
                     raw_docs = reader.load_data()
@@ -641,7 +613,6 @@ class DocumentProcessor:
                 except Exception:
                     pass
         else:
-            # 正常 PDF
             try:
                 reader = SimpleDirectoryReader(input_files=[pdf_path])
                 raw_docs = reader.load_data()
@@ -654,6 +625,65 @@ class DocumentProcessor:
                 print(f"   ⚠️  PDF 读取失败: {e}")
 
         return docs
+
+    def _split_pdf_to_temp(
+        self, pdf_path: str, pages_per_chunk: int = 500
+    ) -> List[Path]:
+        """将大型 PDF 拆分为临时文件
+
+        Args:
+            pdf_path: PDF 文件路径
+            pages_per_chunk: 每块页数
+
+        Returns:
+            临时 PDF 文件路径列表
+        """
+        import fitz
+
+        temp_dir = Path(tempfile.gettempdir()) / "llamaindex_pdf_split"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+
+        temp_files = []
+        pdf_name = Path(pdf_path).stem
+
+        try:
+            doc = fitz.open(pdf_path)
+            total_pages = len(doc)
+
+            for start in range(0, total_pages, pages_per_chunk):
+                end = min(start + pages_per_chunk, total_pages)
+                new_doc = fitz.open()
+                for page_num in range(start, end):
+                    new_doc.insert_pdf(doc, from_page=page_num, to_page=page_num)
+
+                chunk_path = temp_dir / f"{pdf_name}_p{start + 1}-{end}.pdf"
+                new_doc.save(str(chunk_path))
+                new_doc.close()
+                temp_files.append(chunk_path)
+
+            doc.close()
+            print(f"   📄 PDF 已拆分为 {len(temp_files)} 个部分")
+        except Exception as e:
+            print(f"   ⚠️  PDF 拆分失败: {e}")
+
+        return temp_files
+
+    def _get_pdf_info(self, pdf_path: str) -> tuple:
+        """获取 PDF 信息
+
+        Returns:
+            (file_size_mb, page_count)
+        """
+        file_size_mb = Path(pdf_path).stat().st_size / (1024 * 1024)
+        try:
+            import fitz
+
+            doc = fitz.open(pdf_path)
+            page_count = len(doc)
+            doc.close()
+        except Exception:
+            page_count = 0
+        return file_size_mb, page_count
 
     def process_document(
         self, file_path: str, metadata: dict = None

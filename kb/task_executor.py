@@ -750,9 +750,18 @@ class TaskExecutor:
                 return
 
             try:
-                from kb.document_processor import DocumentProcessor
+                from kb.document_processor import (
+                    DocumentProcessor,
+                    DocumentProcessorConfig,
+                )
 
-                processor = DocumentProcessor()
+                config = DocumentProcessorConfig(
+                    chunk_size=params.get("chunk_size", 1024),
+                    chunk_overlap=params.get("chunk_overlap", 100),
+                    chunk_strategy=params.get("chunk_strategy", "hierarchical"),
+                    hierarchical_chunk_sizes=params.get("hierarchical_chunk_sizes"),
+                )
+                processor = DocumentProcessor(config=config)
                 docs = processor.process_file(str(file_path))
 
                 if docs:
