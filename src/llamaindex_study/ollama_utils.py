@@ -11,6 +11,7 @@ from typing import Any, List, Optional
 
 from llama_index.embeddings.ollama import OllamaEmbedding
 from llama_index.llms.ollama import Ollama
+from llama_index.core.constants import DEFAULT_NUM_OUTPUTS, DEFAULT_CONTEXT_WINDOW
 
 logger = logging.getLogger(__name__)
 
@@ -253,6 +254,59 @@ class RetryableOllama(Ollama):
 
     async def astream_chat(self, messages: Any, **kwargs) -> Any:
         return self._call_with_retry("astream_chat", messages, **kwargs)
+
+    def get_context_window(self) -> int:
+        """获取上下文窗口大小，带重试机制"""
+        import time
+
+        last_error: BaseException = Exception("Unknown error")
+        delay = self._initial_delay
+
+        for attempt in range(self._max_retries):
+            try:
+                # 调用父类的逻辑，但通过 try/except 检测 503
+                if self.context_window != -1:
+                    return self.context_window
+
+                info = self.client.show(self.model).modelinfo
+                for key, value in info.items():
+                    if "context_length" in key:
+                        self.context_window = int(value)
+                        break
+
+                return (
+                    self.context_window
+                    if self.context_window != -1
+                    else 128000  # DEFAULT_CONTEXT_WINDOW fallback
+                )
+            except Exception as e:
+                last_error = e
+                error_str = str(e).lower()
+
+                if "503" in error_str or "service unavailable" in error_str:
+                    logger.warning(
+                        f"Ollama 模型加载中 (尝试 {attempt + 1}/{self._max_retries})，"
+                        f"等待 {delay:.1f}s: {e}"
+                    )
+                    time.sleep(delay)
+                    delay *= self._backoff_factor
+                else:
+                    raise
+
+        raise last_error
+
+    @property
+    def metadata(self) -> Any:
+        """LLM metadata，带重试机制"""
+        from llama_index.core.base.llms.types import LLMMetadata
+
+        return LLMMetadata(
+            context_window=self.get_context_window(),
+            num_output=DEFAULT_NUM_OUTPUTS,
+            model_name=self.model,
+            is_chat_model=True,
+            is_function_calling_model=self.is_function_calling_model,
+        )
 
 
 def create_llm(
