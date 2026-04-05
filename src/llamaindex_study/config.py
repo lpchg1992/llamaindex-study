@@ -122,19 +122,19 @@ class Settings:
         )
         self.hybrid_search_alpha: float = float(os.getenv("HYBRID_SEARCH_ALPHA", "0.5"))
         self.hybrid_search_mode: str = os.getenv("HYBRID_SEARCH_MODE", "relative_score")
-        self.chunk_size: int = int(os.getenv("CHUNK_SIZE", "512"))
-        self.chunk_overlap: int = int(os.getenv("CHUNK_OVERLAP", "50"))
+        self.chunk_size: int = int(os.getenv("CHUNK_SIZE", "1024"))
+        self.chunk_overlap: int = int(os.getenv("CHUNK_OVERLAP", "100"))
         self.embed_batch_size: int = int(os.getenv("EMBED_BATCH_SIZE", "32"))
 
         # ========== 分块策略配置 ==========
         self.chunk_strategy: str = os.getenv("CHUNK_STRATEGY", "hierarchical")
         self.hierarchical_chunk_sizes: List[int] = [
             int(x)
-            for x in os.getenv("HIERARCHICAL_CHUNK_SIZES", "2048,512,128").split(",")
+            for x in os.getenv("HIERARCHICAL_CHUNK_SIZES", "2048,1024,512").split(",")
         ]
-        self.sentence_chunk_size: int = int(os.getenv("SENTENCE_CHUNK_SIZE", "512"))
+        self.sentence_chunk_size: int = int(os.getenv("SENTENCE_CHUNK_SIZE", "1024"))
         self.sentence_chunk_overlap: int = int(
-            os.getenv("SENTENCE_CHUNK_OVERLAP", "50")
+            os.getenv("SENTENCE_CHUNK_OVERLAP", "100")
         )
 
         # ========== Query Transform 配置 ==========

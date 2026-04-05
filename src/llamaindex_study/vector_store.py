@@ -217,7 +217,7 @@ class LanceDBVectorStore(BaseVectorStore):
 
         vector_store = self._get_lance_vector_store()
 
-        node_parser = get_node_parser(chunk_size=1024, chunk_overlap=50)
+        node_parser = get_node_parser()
         nodes = node_parser.get_nodes_from_documents(documents)
 
         # 为每个节点生成 embedding

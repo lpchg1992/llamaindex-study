@@ -14,6 +14,9 @@
 
     # 父子节点分块（用于 Auto-Merging Retriever）
     parser = get_hierarchical_node_parser()
+
+    # 自动选择分块策略（根据文档长度）
+    parser = get_node_parser(documents=[doc1, doc2])
 """
 
 import warnings
@@ -47,9 +50,8 @@ def get_node_parser(
 
     if strategy is None:
         strategy = getattr(settings, "chunk_strategy", "hierarchical")
-
-    chunk_size = chunk_size or settings.chunk_size or 512
-    chunk_overlap = chunk_overlap or settings.chunk_overlap or 50
+    chunk_size = chunk_size or settings.chunk_size or 1024
+    chunk_overlap = chunk_overlap or settings.chunk_overlap or 100
 
     if strategy == "hierarchical":
         return get_hierarchical_node_parser()
@@ -61,8 +63,8 @@ def get_node_parser(
         )
     else:
         return _create_sentence_splitter(
-            chunk_size=settings.sentence_chunk_size or chunk_size,
-            chunk_overlap=settings.sentence_chunk_overlap or chunk_overlap,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
         )
 
 
