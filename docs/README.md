@@ -198,20 +198,20 @@ results = SearchService.search("my_kb", "猪营养配方设计")
 
 ```bash
 # 导入 Obsidian（并行处理）
-curl -X POST "http://localhost:8000/kbs/my_kb/ingest/obsidian" \
+curl -X POST "http://localhost:37241/kbs/my_kb/ingest/obsidian" \
   -H "Content-Type: application/json" \
   -d '{"vault_path": "/path/to/vault", "recursive": true}'
 
 # 查询任务状态
-curl http://localhost:8000/tasks/{task_id}
+curl http://localhost:37241/tasks/{task_id}
 
 # 搜索
-curl -X POST "http://localhost:8000/search" \
+curl -X POST "http://localhost:37241/search" \
   -H "Content-Type: application/json" \
   -d '{"query": "猪营养", "kb_ids": "my_kb", "top_k": 5}'
 
 # RAG 问答
-curl -X POST "http://localhost:8000/query" \
+curl -X POST "http://localhost:37241/query" \
   -H "Content-Type: application/json" \
   -d '{"query": "如何设计猪饲料配方？", "kb_ids": "my_kb", "top_k": 5}'
 ```
@@ -251,9 +251,9 @@ curl -X POST "http://localhost:8000/query" \
 ```bash
 uv run python api.py
 ```
-- 服务地址：`http://localhost:8000`
-- API 文档：`http://localhost:8000/docs`
-- WebSocket：`ws://localhost:8000/ws/tasks`
+- 服务地址：`http://localhost:37241`
+- API 文档：`http://localhost:37241/docs`
+- WebSocket：`ws://localhost:37241/ws/tasks`
 
 ### Q: 如何查看详细日志？
 配置 Python logging 级别：

@@ -1607,52 +1607,6 @@ def handle_evaluate(args: argparse.Namespace) -> int:
 
     return 0
 
-    # 执行评估
-    print(f"\n开始评估知识库: {args.kb_id}")
-    print(f"问题数量: {len(questions)}\n")
-
-    contexts = []
-    answers = []
-
-    for i, question in enumerate(questions):
-        print(f"[{i + 1}/{len(questions)}] 检索: {question[:50]}...")
-        try:
-            # 检索获取上下文
-            results = SearchService.search(args.kb_id, question, top_k=args.top_k)
-            ctx = [r["text"] for r in results]
-            contexts.append(ctx)
-
-            # 生成答案
-            answer = f"[评估模式: 仅检索上下文中，不生成完整答案]"
-            answers.append(answer)
-        except Exception as e:
-            print(f"  检索失败: {e}")
-            contexts.append([])
-            answers.append("")
-
-    print("\n执行评估...")
-
-    evaluator = RAGEvaluator()
-    result = evaluator.evaluate(
-        questions=questions,
-        contexts=contexts,
-        answers=answers,
-        ground_truths=ground_truths,
-    )
-
-    print("\n=== 评估结果 ===\n")
-    print_json(result)
-
-    # 保存结果
-    if args.output:
-        import json
-
-        with open(args.output, "w", encoding="utf-8") as f:
-            json.dump(result, f, ensure_ascii=False, indent=2, default=str)
-        print(f"\n结果已保存到: {args.output}")
-
-    return 0
-
 
 def handle_category_rules_list(_: argparse.Namespace) -> int:
     result = CategoryService.list_rules()
