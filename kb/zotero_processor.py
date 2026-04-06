@@ -630,32 +630,32 @@ class ZoteroImporter:
                     if item.file_path:
                         stats["processed_sources"].append(item.file_path)
                     logger.info(f"文献导入成功: {item.title}, 节点数: {nodes}")
+
+                    if self.dedup_manager:
+                        self.dedup_manager.mark_processed(
+                            file_path=Path(item.file_path)
+                            if item.file_path
+                            else Path(str(item_id)),
+                            content=f"zotero_{item_id}_{item.title}",
+                            doc_id=f"zotero_{item_id}",
+                            chunk_count=nodes,
+                        )
+
+                    if progress:
+                        progress.processed_items.append(item_id_str)
+                        save_path = (
+                            progress_file
+                            or Path.home() / ".llamaindex" / "zotero_progress.json"
+                        )
+                        progress.save(save_path)
                 else:
                     logger.warning(f"文献未产生节点: {item.title}")
-
-                if self.dedup_manager:
-                    self.dedup_manager.mark_processed(
-                        file_path=Path(item.file_path)
-                        if item.file_path
-                        else Path(str(item_id)),
-                        content=f"zotero_{item_id}_{item.title}",
-                        doc_id=f"zotero_{item_id}",
-                        chunk_count=nodes,
-                    )
 
             except Exception as e:
                 logger.error(f"文献导入失败: {item.title}, 错误: {e}")
                 stats["failed"] += 1
                 if progress:
                     progress.failed_items.append(item_id_str)
-
-            if progress:
-                progress.processed_items.append(item_id_str)
-                save_path = (
-                    progress_file
-                    or Path.home() / ".llamaindex" / "zotero_progress.json"
-                )
-                progress.save(save_path)
 
         if self.dedup_manager:
             self.dedup_manager._save()

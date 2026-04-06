@@ -21,7 +21,14 @@ from sqlalchemy import (
     update,
 )
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, scoped_session, sessionmaker
+from sqlalchemy.orm import (
+    DeclarativeBase,
+    Mapped,
+    Session,
+    mapped_column,
+    scoped_session,
+    sessionmaker,
+)
 
 from llamaindex_study.config import get_settings
 from llamaindex_study.logger import get_logger
@@ -210,7 +217,12 @@ class DatabaseManager:
             connect_args={"timeout": 30, "check_same_thread": False},
         )
         self._session_factory = scoped_session(
-            sessionmaker(bind=self.engine, autoflush=False, autocommit=False, expire_on_commit=False)
+            sessionmaker(
+                bind=self.engine,
+                autoflush=False,
+                autocommit=False,
+                expire_on_commit=False,
+            )
         )
         self._register_sqlite_pragmas()
         self._init_database()
@@ -380,7 +392,9 @@ class VendorDB:
 
     def delete(self, vendor_id: str) -> bool:
         with self.db.session_scope() as session:
-            result = session.execute(delete(VendorModel).where(VendorModel.id == vendor_id))
+            result = session.execute(
+                delete(VendorModel).where(VendorModel.id == vendor_id)
+            )
             return (result.rowcount or 0) > 0
 
     def set_active(self, vendor_id: str, is_active: bool) -> bool:
@@ -452,7 +466,9 @@ class ModelDB:
                 "updated_at": row.updated_at,
             }
 
-    def get_all(self, active_only: bool = True, type: str = None) -> List[Dict[str, Any]]:
+    def get_all(
+        self, active_only: bool = True, type: str = None
+    ) -> List[Dict[str, Any]]:
         with self.db.session_scope() as session:
             stmt = select(ModelModel)
             if active_only:
@@ -501,7 +517,9 @@ class ModelDB:
 
     def delete(self, model_id: str) -> bool:
         with self.db.session_scope() as session:
-            result = session.execute(delete(ModelModel).where(ModelModel.id == model_id))
+            result = session.execute(
+                delete(ModelModel).where(ModelModel.id == model_id)
+            )
             return (result.rowcount or 0) > 0
 
     def set_default(self, model_id: str) -> bool:
@@ -509,8 +527,14 @@ class ModelDB:
             model = session.get(ModelModel, model_id)
             if not model:
                 return False
-            session.execute(update(ModelModel).where(ModelModel.type == model.type).values(is_default=0))
-            result = session.execute(update(ModelModel).where(ModelModel.id == model_id).values(is_default=1))
+            session.execute(
+                update(ModelModel)
+                .where(ModelModel.type == model.type)
+                .values(is_default=0)
+            )
+            result = session.execute(
+                update(ModelModel).where(ModelModel.id == model_id).values(is_default=1)
+            )
             return (result.rowcount or 0) > 0
 
 
@@ -546,7 +570,9 @@ class SyncStateDB:
             "updated_at": row.updated_at,
         }
 
-    def update_state(self, kb_id: str, file_path: str, hash: str, mtime: float, doc_id: str) -> bool:
+    def update_state(
+        self, kb_id: str, file_path: str, hash: str, mtime: float, doc_id: str
+    ) -> bool:
         now = time.time()
         stmt = sqlite_insert(SyncStateModel).values(
             kb_id=kb_id,
@@ -623,34 +649,47 @@ class SyncStateDB:
     def get_hash_map(self, kb_id: str) -> Dict[str, str]:
         with self.db.session_scope() as session:
             rows = session.execute(
-                select(SyncStateModel.file_path, SyncStateModel.hash).where(SyncStateModel.kb_id == kb_id)
+                select(SyncStateModel.file_path, SyncStateModel.hash).where(
+                    SyncStateModel.kb_id == kb_id
+                )
             ).all()
             return {file_path: hash_value for file_path, hash_value in rows}
 
     def get_doc_id_map(self, kb_id: str) -> Dict[str, str]:
         with self.db.session_scope() as session:
             rows = session.execute(
-                select(SyncStateModel.file_path, SyncStateModel.doc_id).where(SyncStateModel.kb_id == kb_id)
+                select(SyncStateModel.file_path, SyncStateModel.doc_id).where(
+                    SyncStateModel.kb_id == kb_id
+                )
             ).all()
             return {file_path: doc_id for file_path, doc_id in rows}
 
     def has_hash(self, kb_id: str, hash: str) -> bool:
         with self.db.session_scope() as session:
-            return session.scalars(
-                select(SyncStateModel.id).where(SyncStateModel.kb_id == kb_id, SyncStateModel.hash == hash).limit(1)
-            ).first() is not None
+            return (
+                session.scalars(
+                    select(SyncStateModel.id)
+                    .where(SyncStateModel.kb_id == kb_id, SyncStateModel.hash == hash)
+                    .limit(1)
+                ).first()
+                is not None
+            )
 
     def get_by_hash(self, kb_id: str, hash: str) -> Optional[Dict[str, Any]]:
         with self.db.session_scope() as session:
             row = session.scalars(
-                select(SyncStateModel).where(SyncStateModel.kb_id == kb_id, SyncStateModel.hash == hash).limit(1)
+                select(SyncStateModel)
+                .where(SyncStateModel.kb_id == kb_id, SyncStateModel.hash == hash)
+                .limit(1)
             ).first()
             return self._to_dict(row) if row else None
 
     def remove(self, kb_id: str, file_path: str) -> bool:
         with self.db.session_scope() as session:
             result = session.execute(
-                delete(SyncStateModel).where(SyncStateModel.kb_id == kb_id, SyncStateModel.file_path == file_path)
+                delete(SyncStateModel).where(
+                    SyncStateModel.kb_id == kb_id, SyncStateModel.file_path == file_path
+                )
             )
             return (result.rowcount or 0) > 0
 
@@ -668,7 +707,9 @@ class SyncStateDB:
 
     def clear(self, kb_id: str) -> int:
         with self.db.session_scope() as session:
-            result = session.execute(delete(SyncStateModel).where(SyncStateModel.kb_id == kb_id))
+            result = session.execute(
+                delete(SyncStateModel).where(SyncStateModel.kb_id == kb_id)
+            )
             return result.rowcount or 0
 
     def cleanup_orphaned(self, kb_id: str, valid_doc_ids: Set[str]) -> int:
@@ -681,7 +722,14 @@ class SyncStateDB:
 
     def get_stats(self, kb_id: str) -> Dict[str, int]:
         with self.db.session_scope() as session:
-            total = session.scalar(select(func.count()).select_from(SyncStateModel).where(SyncStateModel.kb_id == kb_id)) or 0
+            total = (
+                session.scalar(
+                    select(func.count())
+                    .select_from(SyncStateModel)
+                    .where(SyncStateModel.kb_id == kb_id)
+                )
+                or 0
+            )
             return {"total": int(total)}
 
 
@@ -704,7 +752,9 @@ class DedupStateDB:
             "updated_at": row.updated_at,
         }
 
-    def add_record(self, kb_id: str, file_path: str, hash: str, doc_id: str, chunk_count: int = 0) -> bool:
+    def add_record(
+        self, kb_id: str, file_path: str, hash: str, doc_id: str, chunk_count: int = 0
+    ) -> bool:
         now = time.time()
         stmt = sqlite_insert(DedupRecordModel).values(
             kb_id=kb_id,
@@ -769,41 +819,60 @@ class DedupStateDB:
 
     def check_hash(self, kb_id: str, hash: str) -> bool:
         with self.db.session_scope() as session:
-            return session.scalars(
-                select(DedupRecordModel.id).where(DedupRecordModel.kb_id == kb_id, DedupRecordModel.hash == hash).limit(1)
-            ).first() is not None
+            return (
+                session.scalars(
+                    select(DedupRecordModel.id)
+                    .where(
+                        DedupRecordModel.kb_id == kb_id, DedupRecordModel.hash == hash
+                    )
+                    .limit(1)
+                ).first()
+                is not None
+            )
 
     def get_by_hash(self, kb_id: str, hash: str) -> Optional[Dict[str, Any]]:
         with self.db.session_scope() as session:
             row = session.scalars(
-                select(DedupRecordModel).where(DedupRecordModel.kb_id == kb_id, DedupRecordModel.hash == hash).limit(1)
+                select(DedupRecordModel)
+                .where(DedupRecordModel.kb_id == kb_id, DedupRecordModel.hash == hash)
+                .limit(1)
             ).first()
             return self._to_dict(row) if row else None
 
     def get_by_doc_id(self, kb_id: str, doc_id: str) -> Optional[Dict[str, Any]]:
         with self.db.session_scope() as session:
             row = session.scalars(
-                select(DedupRecordModel).where(DedupRecordModel.kb_id == kb_id, DedupRecordModel.doc_id == doc_id).limit(1)
+                select(DedupRecordModel)
+                .where(
+                    DedupRecordModel.kb_id == kb_id, DedupRecordModel.doc_id == doc_id
+                )
+                .limit(1)
             ).first()
             return self._to_dict(row) if row else None
 
     def get_records(self, kb_id: str) -> List[Dict[str, Any]]:
         with self.db.session_scope() as session:
             rows = session.scalars(
-                select(DedupRecordModel).where(DedupRecordModel.kb_id == kb_id).order_by(DedupRecordModel.updated_at.desc())
+                select(DedupRecordModel)
+                .where(DedupRecordModel.kb_id == kb_id)
+                .order_by(DedupRecordModel.updated_at.desc())
             ).all()
             return [self._to_dict(row) for row in rows]
 
     def get_hash_set(self, kb_id: str) -> Set[str]:
         with self.db.session_scope() as session:
-            rows = session.execute(select(DedupRecordModel.hash).where(DedupRecordModel.kb_id == kb_id)).all()
+            rows = session.execute(
+                select(DedupRecordModel.hash).where(DedupRecordModel.kb_id == kb_id)
+            ).all()
             return {hash_value for (hash_value,) in rows}
 
     def update_chunk_count(self, kb_id: str, doc_id: str, chunk_count: int) -> bool:
         with self.db.session_scope() as session:
             result = session.execute(
                 update(DedupRecordModel)
-                .where(DedupRecordModel.kb_id == kb_id, DedupRecordModel.doc_id == doc_id)
+                .where(
+                    DedupRecordModel.kb_id == kb_id, DedupRecordModel.doc_id == doc_id
+                )
                 .values(chunk_count=chunk_count, updated_at=time.time())
             )
             return (result.rowcount or 0) > 0
@@ -811,7 +880,10 @@ class DedupStateDB:
     def remove(self, kb_id: str, file_path: str) -> bool:
         with self.db.session_scope() as session:
             result = session.execute(
-                delete(DedupRecordModel).where(DedupRecordModel.kb_id == kb_id, DedupRecordModel.file_path == file_path)
+                delete(DedupRecordModel).where(
+                    DedupRecordModel.kb_id == kb_id,
+                    DedupRecordModel.file_path == file_path,
+                )
             )
             return (result.rowcount or 0) > 0
 
@@ -820,19 +892,27 @@ class DedupStateDB:
             return 0
         with self.db.session_scope() as session:
             result = session.execute(
-                delete(DedupRecordModel).where(DedupRecordModel.kb_id == kb_id, DedupRecordModel.file_path.in_(file_paths))
+                delete(DedupRecordModel).where(
+                    DedupRecordModel.kb_id == kb_id,
+                    DedupRecordModel.file_path.in_(file_paths),
+                )
             )
             return result.rowcount or 0
 
     def clear(self, kb_id: str) -> int:
         with self.db.session_scope() as session:
-            result = session.execute(delete(DedupRecordModel).where(DedupRecordModel.kb_id == kb_id))
+            result = session.execute(
+                delete(DedupRecordModel).where(DedupRecordModel.kb_id == kb_id)
+            )
             return result.rowcount or 0
 
     def get_stats(self, kb_id: str) -> Dict[str, int]:
         with self.db.session_scope() as session:
             row = session.execute(
-                select(func.count(DedupRecordModel.id), func.sum(DedupRecordModel.chunk_count)).where(DedupRecordModel.kb_id == kb_id)
+                select(
+                    func.count(DedupRecordModel.id),
+                    func.sum(DedupRecordModel.chunk_count),
+                ).where(DedupRecordModel.kb_id == kb_id)
             ).first()
             return {
                 "total": int(row[0] or 0),
@@ -861,7 +941,9 @@ class ProgressDB:
 
     def get_or_create(self, kb_id: str, task_type: str = "import") -> Dict[str, Any]:
         with self.db.session_scope() as session:
-            row = session.scalars(select(ProgressModel).where(ProgressModel.kb_id == kb_id)).first()
+            row = session.scalars(
+                select(ProgressModel).where(ProgressModel.kb_id == kb_id)
+            ).first()
             if row:
                 return self._to_dict(row)
             now = time.time()
@@ -889,7 +971,9 @@ class ProgressDB:
     ) -> Dict[str, Any]:
         now = time.time()
         with self.db.session_scope() as session:
-            row = session.scalars(select(ProgressModel).where(ProgressModel.kb_id == kb_id)).first()
+            row = session.scalars(
+                select(ProgressModel).where(ProgressModel.kb_id == kb_id)
+            ).first()
             if not row:
                 row = ProgressModel(
                     kb_id=kb_id,
@@ -919,7 +1003,9 @@ class ProgressDB:
 
     def add_processed(self, kb_id: str, item_id: str) -> int:
         with self.db.session_scope() as session:
-            row = session.scalars(select(ProgressModel).where(ProgressModel.kb_id == kb_id)).first()
+            row = session.scalars(
+                select(ProgressModel).where(ProgressModel.kb_id == kb_id)
+            ).first()
             if not row:
                 return 0
             items = _json_load(row.processed_items, [])
@@ -932,7 +1018,9 @@ class ProgressDB:
 
     def add_failed(self, kb_id: str, item_id: str) -> int:
         with self.db.session_scope() as session:
-            row = session.scalars(select(ProgressModel).where(ProgressModel.kb_id == kb_id)).first()
+            row = session.scalars(
+                select(ProgressModel).where(ProgressModel.kb_id == kb_id)
+            ).first()
             if not row:
                 return 0
             items = _json_load(row.failed_items, [])
@@ -946,7 +1034,9 @@ class ProgressDB:
     def increment(self, kb_id: str, delta: int = 1) -> int:
         with self.db.session_scope() as session:
             result = session.execute(
-                update(ProgressModel).where(ProgressModel.kb_id == kb_id).values(
+                update(ProgressModel)
+                .where(ProgressModel.kb_id == kb_id)
+                .values(
                     current=ProgressModel.current + delta,
                     last_updated=time.time(),
                 )
@@ -956,7 +1046,9 @@ class ProgressDB:
     def mark_started(self, kb_id: str, total: int = 0) -> Dict[str, Any]:
         now = time.time()
         with self.db.session_scope() as session:
-            row = session.scalars(select(ProgressModel).where(ProgressModel.kb_id == kb_id)).first()
+            row = session.scalars(
+                select(ProgressModel).where(ProgressModel.kb_id == kb_id)
+            ).first()
             if row:
                 row.started_at = now
                 row.current = 0
@@ -983,7 +1075,9 @@ class ProgressDB:
     def mark_completed(self, kb_id: str) -> Dict[str, Any]:
         now = time.time()
         with self.db.session_scope() as session:
-            row = session.scalars(select(ProgressModel).where(ProgressModel.kb_id == kb_id)).first()
+            row = session.scalars(
+                select(ProgressModel).where(ProgressModel.kb_id == kb_id)
+            ).first()
             if not row:
                 return {}
             row.completed_at = now
@@ -992,17 +1086,23 @@ class ProgressDB:
 
     def reset(self, kb_id: str) -> bool:
         with self.db.session_scope() as session:
-            result = session.execute(delete(ProgressModel).where(ProgressModel.kb_id == kb_id))
+            result = session.execute(
+                delete(ProgressModel).where(ProgressModel.kb_id == kb_id)
+            )
             return (result.rowcount or 0) > 0
 
     def get(self, kb_id: str) -> Optional[Dict[str, Any]]:
         with self.db.session_scope() as session:
-            row = session.scalars(select(ProgressModel).where(ProgressModel.kb_id == kb_id)).first()
+            row = session.scalars(
+                select(ProgressModel).where(ProgressModel.kb_id == kb_id)
+            ).first()
             return self._to_dict(row) if row else None
 
     def get_all(self) -> List[Dict[str, Any]]:
         with self.db.session_scope() as session:
-            rows = session.scalars(select(ProgressModel).order_by(ProgressModel.last_updated.desc())).all()
+            rows = session.scalars(
+                select(ProgressModel).order_by(ProgressModel.last_updated.desc())
+            ).all()
             return [self._to_dict(row) for row in rows]
 
 
@@ -1069,6 +1169,7 @@ class KnowledgeBaseMetaDB:
                 "source_paths": stmt.excluded.source_paths,
                 "source_tags": stmt.excluded.source_tags,
                 "config": stmt.excluded.config,
+                "is_active": 1,
                 "updated_at": now,
             },
         )
@@ -1076,9 +1177,14 @@ class KnowledgeBaseMetaDB:
             session.execute(stmt)
         return True
 
-    def get(self, kb_id: str) -> Optional[Dict[str, Any]]:
+    def get(self, kb_id: str, active_only: bool = True) -> Optional[Dict[str, Any]]:
         with self.db.session_scope() as session:
-            row = session.scalars(select(KnowledgeBaseMetaModel).where(KnowledgeBaseMetaModel.kb_id == kb_id)).first()
+            stmt = select(KnowledgeBaseMetaModel).where(
+                KnowledgeBaseMetaModel.kb_id == kb_id
+            )
+            if active_only:
+                stmt = stmt.where(KnowledgeBaseMetaModel.is_active == 1)
+            row = session.scalars(stmt).first()
             return self._to_dict(row) if row else None
 
     def get_all(self, active_only: bool = True) -> List[Dict[str, Any]]:
@@ -1101,7 +1207,11 @@ class KnowledgeBaseMetaDB:
 
     def delete(self, kb_id: str) -> bool:
         with self.db.session_scope() as session:
-            result = session.execute(delete(KnowledgeBaseMetaModel).where(KnowledgeBaseMetaModel.kb_id == kb_id))
+            result = session.execute(
+                delete(KnowledgeBaseMetaModel).where(
+                    KnowledgeBaseMetaModel.kb_id == kb_id
+                )
+            )
             return (result.rowcount or 0) > 0
 
     def update_topics(self, kb_id: str, topics: List[str]) -> bool:
@@ -1116,11 +1226,15 @@ class KnowledgeBaseMetaDB:
     def get_topics(self, kb_id: str) -> List[str]:
         with self.db.session_scope() as session:
             topics = session.scalar(
-                select(KnowledgeBaseMetaModel.topics).where(KnowledgeBaseMetaModel.kb_id == kb_id).limit(1)
+                select(KnowledgeBaseMetaModel.topics)
+                .where(KnowledgeBaseMetaModel.kb_id == kb_id)
+                .limit(1)
             )
             return _json_load(topics, [])
 
-    def seed_from_registry(self, kb_configs: List[Dict[str, Any]], source_type: str = "obsidian") -> int:
+    def seed_from_registry(
+        self, kb_configs: List[Dict[str, Any]], source_type: str = "obsidian"
+    ) -> int:
         count = 0
         for kb in kb_configs:
             persist_path = kb.get("persist_path") or kb.get("persist_name", "")
@@ -1157,7 +1271,14 @@ class CategoryRuleDB:
             "updated_at": row.updated_at,
         }
 
-    def add_rule(self, kb_id: str, rule_type: str, pattern: str, description: str = "", priority: int = 0) -> bool:
+    def add_rule(
+        self,
+        kb_id: str,
+        rule_type: str,
+        pattern: str,
+        description: str = "",
+        priority: int = 0,
+    ) -> bool:
         now = time.time()
         stmt = sqlite_insert(CategoryRuleModel).values(
             kb_id=kb_id,
@@ -1170,7 +1291,11 @@ class CategoryRuleDB:
             updated_at=now,
         )
         stmt = stmt.on_conflict_do_update(
-            index_elements=[CategoryRuleModel.kb_id, CategoryRuleModel.rule_type, CategoryRuleModel.pattern],
+            index_elements=[
+                CategoryRuleModel.kb_id,
+                CategoryRuleModel.rule_type,
+                CategoryRuleModel.pattern,
+            ],
             set_={
                 "description": stmt.excluded.description,
                 "priority": stmt.excluded.priority,
@@ -1190,7 +1315,9 @@ class CategoryRuleDB:
         with self.db.session_scope() as session:
             rows = session.scalars(
                 select(CategoryRuleModel)
-                .where(CategoryRuleModel.kb_id == kb_id, CategoryRuleModel.is_active == 1)
+                .where(
+                    CategoryRuleModel.kb_id == kb_id, CategoryRuleModel.is_active == 1
+                )
                 .order_by(CategoryRuleModel.priority.desc())
             ).all()
             return [self._to_dict(row) for row in rows]
@@ -1199,7 +1326,10 @@ class CategoryRuleDB:
         with self.db.session_scope() as session:
             rows = session.scalars(
                 select(CategoryRuleModel)
-                .where(CategoryRuleModel.rule_type == rule_type, CategoryRuleModel.is_active == 1)
+                .where(
+                    CategoryRuleModel.rule_type == rule_type,
+                    CategoryRuleModel.is_active == 1,
+                )
                 .order_by(CategoryRuleModel.kb_id, CategoryRuleModel.priority.desc())
             ).all()
             return [self._to_dict(row) for row in rows]
@@ -1226,7 +1356,9 @@ class CategoryRuleDB:
 
     def delete_rules_for_kb(self, kb_id: str) -> int:
         with self.db.session_scope() as session:
-            result = session.execute(delete(CategoryRuleModel).where(CategoryRuleModel.kb_id == kb_id))
+            result = session.execute(
+                delete(CategoryRuleModel).where(CategoryRuleModel.kb_id == kb_id)
+            )
             return result.rowcount or 0
 
     def seed_initial_rules(self, knowledge_bases: List[Dict[str, Any]]) -> int:
