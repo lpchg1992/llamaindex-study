@@ -171,38 +171,63 @@ class DocumentProcessor:
 
     def _upsert_nodes(self, lance_store, nodes):
         """
-        使用 lance_store.add() 写入节点，自动处理表创建
+        使用 merge_insert UPSERT 写入节点，自动处理表创建。
+        相同 id 的节点会被更新，新 id 的节点会被插入。
 
         Args:
             lance_store: LlamaIndex LanceDBVectorStore
             nodes: 节点列表
         """
         import logging
+        import pyarrow as pa
+        from llama_index.core.vector_stores.utils import node_to_metadata_dict
 
         add_logger = logging.getLogger("lancedb.add")
 
-        # 获取 LanceDB 表的有效 metadata 字段列表
-        valid_metadata_keys = self._get_valid_metadata_keys(lance_store)
-
-        # 过滤每个节点的 metadata，只保留表 schema 中存在的字段
+        data = []
         for node in nodes:
-            if hasattr(node, "metadata") and node.metadata:
-                # 过滤掉不在 schema 中的字段
-                node.metadata = {
-                    k: v for k, v in node.metadata.items() if k in valid_metadata_keys
-                }
+            metadata_dict = node_to_metadata_dict(
+                node, remove_text=False, flat_metadata=True
+            )
+            row = {
+                "id": node.node_id,
+                "doc_id": node.ref_doc_id if hasattr(node, "ref_doc_id") else None,
+                "text": node.get_content(),
+                "vector": node.embedding
+                if hasattr(node, "embedding") and node.embedding
+                else [0.0] * 1024,
+                "metadata": metadata_dict,
+            }
+            data.append(row)
 
+        if not data:
+            return
+
+        df = pa.Table.from_pylist(data)
+
+        table = None
         try:
-            lance_store.add(nodes)
-            add_logger.debug(f"添加 {len(nodes)} 节点")
-        except Exception as e:
-            add_logger.warning(f"添加失败，将重试: {e}")
+            table = lance_store._connection.open_table(lance_store._table_name)
+        except Exception:
+            pass
+
+        if table is None:
+            lance_store._connection.create_table(
+                lance_store._table_name, df, mode="create"
+            )
+            add_logger.debug(f"创建新表并插入 {len(data)} 节点")
+        else:
             try:
-                lance_store.add(nodes)
-                add_logger.debug(f"重试成功，添加 {len(nodes)} 节点")
-            except Exception as retry_err:
-                add_logger.error(f"重试仍然失败: {retry_err}")
-                raise
+                (
+                    table.merge_insert("id")
+                    .when_matched_update_all()
+                    .when_not_matched_insert_all()
+                    .execute(df)
+                )
+                add_logger.debug(f"UPSERT {len(data)} 节点")
+            except Exception as e:
+                add_logger.warning(f"UPSERT 失败，回退到追加写入: {e}")
+                table.add(data)
 
     def _get_valid_metadata_keys(self, lance_store) -> set:
         try:
@@ -418,9 +443,11 @@ class DocumentProcessor:
             "MINERU_PIPELINE_ID"
         )
 
+        mineru_truncated = False
+
         if mineru_api_key and mineru_pipeline_id:
             print(f"   ☁️  MinerU...")
-            md = self._convert_pdf_mineru(
+            md, mineru_truncated = self._convert_pdf_mineru(
                 pdf_path, mineru_api_key, mineru_pipeline_id, timeout
             )
             if md:
@@ -429,23 +456,29 @@ class DocumentProcessor:
         else:
             print(f"   ⏭️  MinerU 未配置，跳过")
 
-        doc2x_api_key = getattr(settings, "doc2x_api_key", None) or os.getenv(
-            "DOC2X_API_KEY"
-        )
+        if mineru_truncated:
+            doc2x_api_key = getattr(settings, "doc2x_api_key", None) or os.getenv(
+                "DOC2X_API_KEY"
+            )
 
-        if doc2x_api_key:
-            print(f"   ☁️  doc2x (备用)...")
-            md = self._convert_pdf_doc2x(pdf_path, doc2x_api_key, timeout)
-            if md:
-                self._save_md_to_local(md, pdf_path)
-                return md
-        else:
-            print(f"   ⏭️  doc2x 未配置，跳过")
+            if doc2x_api_key:
+                print(f"   ☁️  doc2x (备用)...")
+                md = self._convert_pdf_doc2x(pdf_path, doc2x_api_key, timeout)
+                if md:
+                    self._save_md_to_local(md, pdf_path, mineru_truncated=True)
+                    return md
+            else:
+                print(f"   ⏭️  doc2x 未配置，跳过")
+
+            print(f"   ❌ MinerU 截断且 doc2x 失败")
+            return None
 
         print(f"   ❌ 所有转换策略均失败")
         return None
 
-    def _save_md_to_local(self, md_content: str, pdf_path: str) -> None:
+    def _save_md_to_local(
+        self, md_content: str, pdf_path: str, mineru_truncated: bool = False
+    ) -> None:
         """保存 md 内容到本地"""
         md_save_dir = Path("/Volumes/online/llamaindex/mddocs")
         md_save_dir.mkdir(parents=True, exist_ok=True)
@@ -456,9 +489,16 @@ class DocumentProcessor:
         except Exception as e:
             print(f"   ⚠️  保存 md 失败: {e}")
 
+        if mineru_truncated:
+            meta = ConversionMetadata(
+                is_truncated=False,
+                source_pdf=str(pdf_path),
+            )
+            meta.save(md_file_path)
+
     def _convert_pdf_mineru(
         self, pdf_path: str, api_key: str, pipeline_id: str, timeout: int = None
-    ) -> Optional[str]:
+    ) -> tuple:
         """使用 MinerU 精准解析 API 转换 PDF
 
         Args:
@@ -496,18 +536,18 @@ class DocumentProcessor:
 
             if batch_resp.status_code != 200:
                 print(f"   ⚠️  MinerU 获取上传链接失败: {batch_resp.status_code}")
-                return None
+                return (None, False)
 
             batch_data = batch_resp.json()
             if batch_data.get("code") != 0:
                 print(f"   ⚠️  MinerU API 错误: {batch_data.get('msg')}")
-                return None
+                return (None, False)
 
             batch_id = batch_data.get("data", {}).get("batch_id")
             file_urls = batch_data.get("data", {}).get("file_urls", [])
             if not file_urls:
                 print(f"   ⚠️  MinerU 无返回上传链接")
-                return None
+                return (None, False)
 
             upload_url = file_urls[0]
             print(f"   📤 正在上传 PDF 到 MinerU...")
@@ -517,7 +557,7 @@ class DocumentProcessor:
 
             if upload_resp.status_code not in (200, 201):
                 print(f"   ⚠️  MinerU 文件上传失败: {upload_resp.status_code}")
-                return None
+                return (None, False)
 
             print(f"   🔄 MinerU 正在解析 PDF (batch_id={batch_id[:8]}...)")
 
@@ -562,12 +602,17 @@ class DocumentProcessor:
                                                     )
                                                     / f"{Path(pdf_path).stem}.md"
                                                 )
+                                                meta = ConversionMetadata(
+                                                    is_truncated=True,
+                                                    source_pdf=str(pdf_path),
+                                                )
+                                                meta.save(md_file_path)
                                                 if md_file_path.exists():
                                                     md_file_path.unlink()
                                                 print(
                                                     f"   ⚠️  MinerU 截断，删除 MD 并触发 doc2x fallback"
                                                 )
-                                                return None
+                                                return (None, True)
 
                                             images_dir = Path(
                                                 "/Volumes/online/llamaindex/mddocs/images"
@@ -599,7 +644,7 @@ class DocumentProcessor:
                                             print(
                                                 f"   ✅ MinerU 转换成功 ({len(md_content)} chars)"
                                             )
-                                            return md_content
+                                            return (md_content, False)
                                     else:
                                         print(
                                             f"   ⚠️  MinerU 结果下载失败: {zip_resp.status_code}"
@@ -607,19 +652,19 @@ class DocumentProcessor:
                             elif state == "failed":
                                 err_msg = extract_result.get("err_msg", "未知错误")
                                 print(f"   ⚠️  MinerU 处理失败: {err_msg}")
-                                return None
+                                return (None, False)
                 time.sleep(interval)
                 interval = min(interval * 1.5, max_interval)
 
             print(f"   ⚠️  MinerU 轮询超时")
-            return None
+            return (None, False)
 
         except ImportError:
             print(f"   ⚠️  MinerU 需要 requests 库")
         except Exception as e:
             print(f"   ⚠️  MinerU 失败: {e}")
 
-        return None
+        return (None, False)
 
     def _extract_truncated_info(self, md_content: str) -> Optional[dict]:
         """从截断的 md 内容中提取 UID 和页数信息
@@ -1380,7 +1425,7 @@ class DocumentProcessor:
                     node.embedding = embedding
             except Exception as e:
                 print(f"\n   ⚠️  批量 Embedding 失败: {e}")
-                # 回退到逐个 embedding
+                failed = []
                 for node in processed_batch:
                     try:
                         node.embedding = self.embed_model.get_text_embedding(
@@ -1388,7 +1433,9 @@ class DocumentProcessor:
                         )
                     except Exception as ex:
                         print(f"      ⚠️  Embedding 失败: {ex}")
-                        processed_batch.remove(node)
+                        failed.append(node)
+                for node in failed:
+                    processed_batch.remove(node)
 
         # 保存所有节点
         try:
