@@ -639,6 +639,9 @@ class KnowledgeBaseService:
             persist_path=str(persist_dir),
         )
 
+        vs = LanceDBVectorStore(persist_dir=persist_dir, table_name=kb_id)
+        vs.set_chunk_strategy(get_settings().chunk_strategy)
+
         return {
             "id": kb_id,
             "name": name,
@@ -780,17 +783,24 @@ class SearchService:
         )
 
         if _use_auto_merging:
-            try:
-                from llama_index.core.retrievers import AutoMergingRetriever
-
-                merger = AutoMergingRetriever(
-                    base_retriever,
-                    index.storage_context,
-                    verbose=False,
+            docstore = index.storage_context.docstore
+            if not docstore or len(docstore.docs) == 0:
+                logger.warning(
+                    "Auto-Merging 需要 docstore，但当前 KB 的 docstore 为空"
+                    "（可能使用 LanceDB 向量索引创建），将使用普通 retriever"
                 )
-                retriever = merger
-            except Exception:
-                retriever = base_retriever
+            else:
+                try:
+                    from llama_index.core.retrievers import AutoMergingRetriever
+
+                    merger = AutoMergingRetriever(
+                        base_retriever,
+                        index.storage_context,
+                        verbose=False,
+                    )
+                    retriever = merger
+                except Exception:
+                    pass
         else:
             retriever = base_retriever
 
@@ -823,8 +833,17 @@ class SearchService:
             from llama_index.core.retrievers import QueryFusionRetriever
             from llama_index.retrievers.bm25 import BM25Retriever
 
+            # 检查 docstore 是否有数据（从 LanceDB 只加载向量时不包含 docstore）
+            docstore = index.docstore
+            if not docstore or len(docstore.docs) == 0:
+                logger.warning(
+                    "混合搜索：docstore 为空（可能使用 LanceDB 向量索引创建），"
+                    "无法使用 BM25，回退到纯向量检索"
+                )
+                return vector_retriever
+
             bm25_retriever = BM25Retriever.from_defaults(
-                docstore=index.docstore,
+                docstore=docstore,
                 similarity_top_k=top_k * 3,
             )
 
@@ -1450,16 +1469,20 @@ class TaskService:
 
         queue = TaskQueue()
 
-        # Only detect orphans if scheduler is not running
         if not is_scheduler_running():
             running_tasks = queue.list_tasks(status=TaskStatus.RUNNING.value, limit=100)
             for task in running_tasks:
                 if task.task_id not in task_executor._running_tasks:
-                    queue.update_status(
-                        task.task_id,
-                        TaskStatus.FAILED.value,
-                        "孤儿任务（执行进程已终止）",
+                    is_stale = (
+                        task.last_heartbeat is None
+                        or (time.time() - task.last_heartbeat) > 300
                     )
+                    if is_stale:
+                        queue.update_status(
+                            task.task_id,
+                            TaskStatus.FAILED.value,
+                            "孤儿任务（执行进程已终止）",
+                        )
 
         return [
             task.to_dict()
@@ -1481,12 +1504,19 @@ class TaskService:
                 task_id not in task_executor._running_tasks
                 and not is_scheduler_running()
             ):
-                queue.update_status(
-                    task_id,
-                    TaskStatus.FAILED.value,
-                    "孤儿任务（执行进程已终止）",
+                # Only mark as orphan if heartbeat is stale (> 5 minutes)
+                # A task with fresh heartbeat is likely still running normally
+                is_stale = (
+                    task.last_heartbeat is None
+                    or (time.time() - task.last_heartbeat) > 300
                 )
-                task = queue.get_task(task_id)
+                if is_stale:
+                    queue.update_status(
+                        task_id,
+                        TaskStatus.FAILED.value,
+                        "孤儿任务（执行进程已终止）",
+                    )
+                    task = queue.get_task(task_id)
 
         return task.to_dict() if task else None
 
@@ -1682,21 +1712,28 @@ class TaskService:
         if not is_scheduler_running():
             for task in tasks:
                 if task.task_id not in task_executor._running_tasks:
-                    cleaned.append(task.task_id)
-                    queue.update_status(
-                        task.task_id,
-                        TaskStatus.FAILED.value,
-                        "孤儿任务（执行进程已终止）",
+                    is_stale = (
+                        task.last_heartbeat is None
+                        or (time.time() - task.last_heartbeat) > 300
                     )
+                    if is_stale:
+                        cleaned.append(task.task_id)
+                        queue.update_status(
+                            task.task_id,
+                            TaskStatus.FAILED.value,
+                            "孤儿任务（执行进程已终止）",
+                        )
 
-                    if cleanup:
-                        sources = task.result.get("sources") if task.result else None
-                        result = TaskService._cleanup_task_data(
-                            task.kb_id, task.task_type, sources=sources
-                        )
-                        cleaned_data.append(
-                            {"task_id": task.task_id, "cleanup": result}
-                        )
+                        if cleanup:
+                            sources = (
+                                task.result.get("sources") if task.result else None
+                            )
+                            result = TaskService._cleanup_task_data(
+                                task.kb_id, task.task_type, sources=sources
+                            )
+                            cleaned_data.append(
+                                {"task_id": task.task_id, "cleanup": result}
+                            )
 
         result = {
             "status": "completed",
