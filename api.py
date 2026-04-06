@@ -46,10 +46,24 @@ API 端点:
     GET  /admin/tables              - 列出所有向量表
     GET  /admin/tables/{name}        - 获取表统计
     DELETE /admin/tables/{name}      - 删除表
+
+    LanceDB 管理:
+    GET  /lance/tables               - 列出所有知识库的 LanceDB 表
+    GET  /lance/{kb_id}/stats        - 获取表统计（行数、大小）
+    GET  /lance/{kb_id}/schema       - 获取表结构
+    GET  /lance/{kb_id}/docs         - 获取文档摘要（按 doc_id 聚合）
+    GET  /lance/{kb_id}/nodes        - 查询节点
+    GET  /lance/{kb_id}/duplicates   - 查找重复文档（同一源文件多个版本）
+    DELETE /lance/{kb_id}/doc_ids    - 按 doc_ids 删除
+    DELETE /lance/{kb_id}/source     - 按源文件删除
+    DELETE /lance/{kb_id}/nodes      - 按 node_ids 删除
+    POST /lance/{kb_id}/export      - 导出到 JSONL
+    POST /lance/{kb_id}/rebuild-docstore - 重建 docstore
 """
 
 import asyncio
 import threading
+from dataclasses import asdict
 from pathlib import Path
 from typing import List, Optional, Dict, Literal
 import markdown
@@ -1755,6 +1769,175 @@ def delete_table(kb_id: str):
     if KnowledgeBaseService.delete(kb_id):
         return {"status": "deleted", "kb_id": kb_id}
     raise HTTPException(status_code=404, detail=f"知识库 {kb_id} 不存在")
+
+
+@app.get("/lance/tables")
+def lance_list_tables():
+    """列出所有知识库的 LanceDB 表"""
+    from kb.lance_crud import LanceCRUDService
+
+    return {"tables": LanceCRUDService.list_all_tables()}
+
+
+@app.get("/lance/{kb_id}/stats")
+def lance_get_stats(kb_id: str, table_name: Optional[str] = None):
+    """获取 LanceDB 表统计信息"""
+    from kb.lance_crud import LanceCRUDService
+
+    try:
+        stats = LanceCRUDService.get_table_stats(kb_id, table_name)
+        return asdict(stats)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.get("/lance/{kb_id}/schema")
+def lance_get_schema(kb_id: str, table_name: Optional[str] = None):
+    """获取 LanceDB 表结构"""
+    from kb.lance_crud import LanceCRUDService
+
+    try:
+        return LanceCRUDService.get_schema(kb_id, table_name)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.get("/lance/{kb_id}/docs")
+def lance_get_doc_summary(kb_id: str, table_name: Optional[str] = None):
+    """获取文档摘要（按 doc_id 聚合）"""
+    from kb.lance_crud import LanceCRUDService
+
+    try:
+        docs = LanceCRUDService.get_doc_summary(kb_id, table_name)
+        return {"docs": [asdict(d) for d in docs]}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.get("/lance/{kb_id}/nodes")
+def lance_query_nodes(
+    kb_id: str,
+    table_name: Optional[str] = None,
+    doc_id: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+):
+    """查询节点"""
+    from kb.lance_crud import LanceCRUDService
+
+    try:
+        nodes = LanceCRUDService.query_nodes(kb_id, table_name, doc_id, limit, offset)
+        return {"nodes": [asdict(n) for n in nodes]}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.get("/lance/{kb_id}/duplicates")
+def lance_find_duplicates(kb_id: str, table_name: Optional[str] = None):
+    """查找重复的源文件（同一路径有多个 doc_id）"""
+    from kb.lance_crud import LanceCRUDService
+
+    try:
+        duplicates = LanceCRUDService.find_duplicate_sources(kb_id, table_name)
+        return {"duplicates": duplicates, "count": len(duplicates)}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.delete("/lance/{kb_id}/doc_ids")
+def lance_delete_by_doc_ids(kb_id: str, doc_ids: str, table_name: Optional[str] = None):
+    """按 doc_id 删除节点
+
+    Args:
+        kb_id: 知识库 ID
+        doc_ids: 逗号分隔的 doc_id 列表
+        table_name: 表名
+    """
+    from kb.lance_crud import LanceCRUDService
+
+    doc_id_list = [d.strip() for d in doc_ids.split(",") if d.strip()]
+    if not doc_id_list:
+        raise HTTPException(status_code=400, detail="doc_ids 不能为空")
+    try:
+        deleted = LanceCRUDService.delete_by_doc_ids(kb_id, doc_id_list, table_name)
+        return {"deleted": deleted, "doc_ids": doc_id_list}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.delete("/lance/{kb_id}/source")
+def lance_delete_by_source(kb_id: str, source: str, table_name: Optional[str] = None):
+    """按源文件路径删除节点
+
+    Args:
+        kb_id: 知识库 ID
+        source: 源文件路径或文件名
+        table_name: 表名
+    """
+    from kb.lance_crud import LanceCRUDService
+
+    if not source:
+        raise HTTPException(status_code=400, detail="source 不能为空")
+    try:
+        deleted = LanceCRUDService.delete_by_source_file(kb_id, source, table_name)
+        return {"deleted": deleted, "source": source}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.delete("/lance/{kb_id}/nodes")
+def lance_delete_by_nodes(kb_id: str, node_ids: str, table_name: Optional[str] = None):
+    """按节点 ID 删除
+
+    Args:
+        kb_id: 知识库 ID
+        node_ids: 逗号分隔的节点 ID 列表
+        table_name: 表名
+    """
+    from kb.lance_crud import LanceCRUDService
+
+    node_id_list = [n.strip() for n in node_ids.split(",") if n.strip()]
+    if not node_id_list:
+        raise HTTPException(status_code=400, detail="node_ids 不能为空")
+    try:
+        deleted = LanceCRUDService.delete_by_node_ids(kb_id, node_id_list, table_name)
+        return {"deleted": deleted, "node_ids": node_id_list}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.post("/lance/{kb_id}/export")
+def lance_export(kb_id: str, output_path: str, table_name: Optional[str] = None):
+    """导出数据到 JSONL 文件
+
+    Args:
+        kb_id: 知识库 ID
+        output_path: 输出文件路径
+        table_name: 表名
+    """
+    from kb.lance_crud import LanceCRUDService
+
+    try:
+        count = LanceCRUDService.export_to_jsonl(kb_id, output_path, table_name)
+        return {"exported": count, "output_path": output_path}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"导出失败: {e}")
+
+
+@app.post("/lance/{kb_id}/rebuild-docstore")
+def lance_rebuild_docstore(kb_id: str):
+    """重建 docstore（从 LanceDB 节点数据）"""
+    from kb.lance_crud import LanceCRUDService
+
+    try:
+        count = LanceCRUDService.rebuild_docstore(kb_id)
+        return {"rebuilt": count, "kb_id": kb_id}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"重建失败: {e}")
 
 
 # ============== WebSocket 接口 ==============
