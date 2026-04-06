@@ -22,7 +22,7 @@ def list_knowledge_bases() -> None:
     print()
 
 
-def ingest_one(kb_id: str, rebuild: bool = False) -> bool:
+def ingest_one(kb_id: str, rebuild: bool = False, refresh_topics: bool = True) -> bool:
     from kb.database import init_kb_meta_db
 
     registry = KnowledgeBaseRegistry()
@@ -46,7 +46,7 @@ def ingest_one(kb_id: str, rebuild: bool = False) -> bool:
                 async_mode=False,
                 collection_name=collection_name,
                 rebuild=rebuild,
-                refresh_topics=True,
+                refresh_topics=refresh_topics,
             )
         elif source_type == "generic":
             paths = source_paths if source_paths else None
@@ -56,7 +56,7 @@ def ingest_one(kb_id: str, rebuild: bool = False) -> bool:
                 async_mode=False,
                 paths=paths,
                 rebuild=rebuild,
-                refresh_topics=True,
+                refresh_topics=refresh_topics,
             )
         else:
             vault_path = str(get_vault_root())
@@ -69,7 +69,7 @@ def ingest_one(kb_id: str, rebuild: bool = False) -> bool:
                 folder_path=folder_path,
                 recursive=True,
                 rebuild=rebuild,
-                refresh_topics=True,
+                refresh_topics=refresh_topics,
             )
 
         stats = ImportApplicationService.run_sync(req)
@@ -88,6 +88,12 @@ def main() -> None:
     parser.add_argument("--list", "-l", action="store_true", help="列出所有知识库")
     parser.add_argument("--kb", "-k", type=str, help="指定知识库 ID")
     parser.add_argument("--rebuild", "-r", action="store_true", help="清空后重建")
+    parser.add_argument(
+        "--refresh-topics",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="导入完成后是否刷新 topics",
+    )
     args = parser.parse_args()
 
     registry = KnowledgeBaseRegistry()
@@ -96,13 +102,19 @@ def main() -> None:
         raise SystemExit(0)
 
     if args.kb:
-        raise SystemExit(0 if ingest_one(args.kb, rebuild=args.rebuild) else 1)
+        raise SystemExit(
+            0
+            if ingest_one(
+                args.kb, rebuild=args.rebuild, refresh_topics=args.refresh_topics
+            )
+            else 1
+        )
 
     print("🚀 开始批量导入所有知识库\n")
     ok = 0
     fail = 0
     for kb in registry.list_all():
-        if ingest_one(kb.id, rebuild=args.rebuild):
+        if ingest_one(kb.id, rebuild=args.rebuild, refresh_topics=args.refresh_topics):
             ok += 1
         else:
             fail += 1
