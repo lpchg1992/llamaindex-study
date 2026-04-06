@@ -71,5 +71,3 @@ logs/
 .api.pid/
 .sysphus/
 .test_llamaindex/
-.llamaindex/project.db
-.llamaindex/tasks.db
