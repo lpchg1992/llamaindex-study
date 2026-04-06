@@ -876,13 +876,18 @@ def handle_kb_repair(args: argparse.Namespace) -> int:
     for kb_id in kb_ids:
         try:
             vs = VectorStoreService.get_vector_store(kb_id)
-            current_strategy = vs.get_chunk_strategy()
-            if current_strategy != "sentence":
-                print(f"  ✅ {kb_id}: chunk_strategy={current_strategy} (无需修复)")
-            else:
-                vs.set_chunk_strategy("hierarchical")
+            if args.docstore:
+                nodes = vs.rebuild_docstore()
                 repaired_count += 1
-                print(f"  🔧 {kb_id}: sentence → hierarchical (已修复)")
+                print(f"  🔧 {kb_id}: docstore 重建完成 ({nodes} 节点)")
+            else:
+                current_strategy = vs.get_chunk_strategy()
+                if current_strategy != "sentence":
+                    print(f"  ✅ {kb_id}: chunk_strategy={current_strategy} (无需修复)")
+                else:
+                    vs.set_chunk_strategy("hierarchical")
+                    repaired_count += 1
+                    print(f"  🔧 {kb_id}: sentence → hierarchical (已修复)")
         except Exception as e:
             print(f"  ❌ {kb_id}: 修复失败 - {e}")
 
@@ -1944,6 +1949,9 @@ def build_parser() -> argparse.ArgumentParser:
         "kb_id", nargs="?", default=None, help="知识库ID，不指定则修复所有"
     )
     kb_repair.add_argument("--all", action="store_true", help="修复所有知识库")
+    kb_repair.add_argument(
+        "--docstore", action="store_true", help="重建 docstore（从 LanceDB 数据）"
+    )
     kb_repair.set_defaults(handler=handle_kb_repair)
 
     vendor_parser = subparsers.add_parser("vendor", help="供应商管理")

@@ -1482,6 +1482,20 @@ def repair_all_consistency(
     return result
 
 
+@app.post("/kbs/{kb_id}/docstore/rebuild")
+def rebuild_docstore(kb_id: str):
+    """从 LanceDB 数据重建 docstore"""
+    from kb.services import VectorStoreService
+
+    info = KnowledgeBaseService.get_info(kb_id)
+    if not info:
+        raise HTTPException(status_code=404, detail=f"知识库不存在: {kb_id}")
+
+    vs = VectorStoreService.get_vector_store(kb_id)
+    nodes = vs.rebuild_docstore()
+    return {"kb_id": kb_id, "nodes_rebuilt": nodes}
+
+
 # ============== Obsidian 全库分类导入 ==============
 
 

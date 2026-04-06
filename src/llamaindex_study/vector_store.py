@@ -291,6 +291,74 @@ class LanceDBVectorStore(BaseVectorStore):
             index.storage_context.docstore = docstore
             print(f"   ✅ docstore 已加载: {len(docstore.docs)} 个节点")
 
+    def rebuild_docstore(self) -> int:
+        import json
+        import lancedb
+        from llama_index.core.storage.docstore import SimpleDocumentStore
+
+        db = lancedb.connect(self._get_uri())
+        table = db.open_table(self.table_name)
+        total_count = table.count_rows()
+        print(f"   📊 LanceDB 表共有 {total_count} 行")
+
+        docstore = SimpleDocumentStore()
+        nodes_rebuilt = 0
+        batch_size = 5000
+        offset = 0
+
+        while offset < total_count:
+            batch = table.search().offset(offset).limit(batch_size).to_pandas()
+            if batch.empty:
+                break
+
+            batch_nodes = []
+            for _, row in batch.iterrows():
+                try:
+                    metadata = row.get("metadata", {})
+                    if not isinstance(metadata, dict):
+                        continue
+
+                    node_content_str = metadata.get("_node_content", "")
+                    if not node_content_str:
+                        continue
+
+                    node_data = json.loads(node_content_str)
+                    node_type = metadata.get("_node_type", "")
+
+                    if node_type == "TextNode":
+                        from llama_index.core.schema import TextNode
+
+                        node = TextNode(
+                            id_=node_data.get("id_") or row.get("id"),
+                            text=node_data.get("text", ""),
+                            metadata=node_data.get("metadata", {}),
+                            relationships=node_data.get("relationships", {}),
+                        )
+                    else:
+                        node = LlamaDocument(
+                            id_=node_data.get("id_") or row.get("id"),
+                            text=node_data.get("text", ""),
+                            metadata=node_data.get("metadata", {}),
+                            relationships=node_data.get("relationships", {}),
+                        )
+
+                    batch_nodes.append(node)
+                    nodes_rebuilt += 1
+                except Exception:
+                    continue
+
+            if batch_nodes:
+                docstore.add_documents(batch_nodes)
+
+            offset += batch_size
+            print(f"   🔄 已处理 {nodes_rebuilt}/{total_count} 节点...")
+
+        persist_path = str(Path(self._get_uri()) / "docstore.json")
+        docstore.persist(persist_path=persist_path)
+
+        print(f"   ✅ docstore 已重建: {nodes_rebuilt} 节点, 保存到 {persist_path}")
+        return nodes_rebuilt
+
     def save_index(self, index: Any) -> None:
         """LanceDB 自动持久化，无需手动保存"""
         print(f"✅ LanceDB 索引已自动保存: {self._get_uri()}/{self.table_name}")
