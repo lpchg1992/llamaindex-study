@@ -860,6 +860,36 @@ def handle_kb_consistency(args: argparse.Namespace) -> int:
     return 0
 
 
+def handle_kb_repair(args: argparse.Namespace) -> int:
+    from kb.services import VectorStoreService
+    from kb.registry import registry
+
+    if args.kb_id:
+        kb_ids = [args.kb_id]
+    elif args.all:
+        kb_ids = [kb.id for kb in registry.list_all()]
+    else:
+        print("错误: 请指定 kb_id 或使用 --all", file=sys.stderr)
+        return 1
+
+    repaired_count = 0
+    for kb_id in kb_ids:
+        try:
+            vs = VectorStoreService.get_vector_store(kb_id)
+            current_strategy = vs.get_chunk_strategy()
+            if current_strategy != "sentence":
+                print(f"  ✅ {kb_id}: chunk_strategy={current_strategy} (无需修复)")
+            else:
+                vs.set_chunk_strategy("hierarchical")
+                repaired_count += 1
+                print(f"  🔧 {kb_id}: sentence → hierarchical (已修复)")
+        except Exception as e:
+            print(f"  ❌ {kb_id}: 修复失败 - {e}")
+
+    print(f"\n修复完成: {repaired_count}/{len(kb_ids)} 个知识库已修复")
+    return 0
+
+
 def handle_search(args: argparse.Namespace) -> int:
     query = get_query_from_args_or_stdin(args)
     if not query:
@@ -1906,6 +1936,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="修复模式: sync(删除orphan), rebuild(重建), dry(只报告)",
     )
     kb_consistency.set_defaults(handler=handle_kb_consistency)
+
+    kb_repair = kb_sub.add_parser(
+        "repair", help="修复知识库元数据（chunk_strategy 等）"
+    )
+    kb_repair.add_argument(
+        "kb_id", nargs="?", default=None, help="知识库ID，不指定则修复所有"
+    )
+    kb_repair.add_argument("--all", action="store_true", help="修复所有知识库")
+    kb_repair.set_defaults(handler=handle_kb_repair)
 
     vendor_parser = subparsers.add_parser("vendor", help="供应商管理")
     vendor_sub = vendor_parser.add_subparsers(dest="vendor_command", required=True)

@@ -77,12 +77,20 @@ class QueryEngineWrapper:
         """创建检索器，支持 Auto-Merging 和混合搜索"""
         base_retriever = self.index.as_retriever(similarity_top_k=self.top_k * 3)
 
+        docstore = self.index.storage_context.docstore
+        is_docstore_empty = not docstore or len(docstore.docs) == 0
+
         if self.use_auto_merging:
             chunk_strategy = None
             if self.vector_store and hasattr(self.vector_store, "get_chunk_strategy"):
                 chunk_strategy = self.vector_store.get_chunk_strategy()
 
-            if chunk_strategy and chunk_strategy != "hierarchical":
+            if is_docstore_empty:
+                logger.warning(
+                    "Auto-Merging 需要 docstore，但当前 KB 的 docstore 为空"
+                    "（可能使用 LanceDB 向量索引创建），将使用普通 retriever"
+                )
+            elif chunk_strategy and chunk_strategy != "hierarchical":
                 logger.warning(
                     f"Auto-Merging 需要 hierarchical 策略，"
                     f"当前 KB 使用 {chunk_strategy}，将使用普通 retriever"
@@ -113,8 +121,15 @@ class QueryEngineWrapper:
             from llama_index.core.retrievers import QueryFusionRetriever
             from llama_index.retrievers.bm25 import BM25Retriever
 
+            docstore = self.index.docstore
+            if not docstore or len(docstore.docs) == 0:
+                logger.warning(
+                    "混合搜索：docstore 为空，无法使用 BM25，回退到纯向量检索"
+                )
+                return vector_retriever
+
             bm25_retriever = BM25Retriever.from_defaults(
-                docstore=self.index.docstore,
+                docstore=docstore,
                 similarity_top_k=self.top_k * 3,
             )
 

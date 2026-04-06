@@ -210,6 +210,7 @@ class LanceDBVectorStore(BaseVectorStore):
     ) -> Any:
         """从文档构建索引"""
         from llama_index.core import VectorStoreIndex, Settings as LlamaSettings
+        from llama_index.core.storage.docstore import SimpleDocumentStore
         from llamaindex_study.node_parser import get_node_parser
 
         embed_model = self._get_embed_model()
@@ -220,24 +221,26 @@ class LanceDBVectorStore(BaseVectorStore):
         node_parser = get_node_parser()
         nodes = node_parser.get_nodes_from_documents(documents)
 
-        # 为每个节点生成 embedding
         print(f"   🔄 正在生成 {len(nodes)} 个节点的 embedding...")
         for node in nodes:
             node.embedding = embed_model.get_text_embedding(node.get_content())
 
-        # 添加节点到向量存储
         vector_store.add(nodes)
 
-        # 从向量存储创建索引
         index = VectorStoreIndex.from_vector_store(
             vector_store=vector_store,
             embed_model=embed_model,
         )
 
+        docstore = SimpleDocumentStore()
+        docstore.add_documents(nodes)
+        index.storage_context.docstore = docstore
+
+        self._persist_docstore(index)
+
         self._index = index
         self._vector_store = vector_store
 
-        # 保存分块策略元数据
         from llamaindex_study.config import get_settings
 
         settings = get_settings()
@@ -245,31 +248,48 @@ class LanceDBVectorStore(BaseVectorStore):
 
         return index
 
+    def _persist_docstore(self, index: Any) -> None:
+        persist_dir = Path(self._get_uri())
+        persist_dir.mkdir(parents=True, exist_ok=True)
+        index.storage_context.docstore.persist(
+            persist_dir=str(persist_dir / "docstore.json")
+        )
+        print(f"   ✅ docstore 已持久化到 {persist_dir / 'docstore.json'}")
+
     def load_index(self) -> Optional[Any]:
         """加载已有索引"""
         if not self.exists():
             return None
 
         from llama_index.core import VectorStoreIndex, Settings as LlamaSettings
+        from llama_index.core.storage.docstore import SimpleDocumentStore
 
-        # 配置 embedding 模型
         embed_model = self._get_embed_model()
         LlamaSettings.embed_model = embed_model
 
-        # 获取底层向量存储
         vector_store = self._get_lance_vector_store()
 
-        # 从向量存储加载索引
         index = VectorStoreIndex.from_vector_store(
             vector_store=vector_store,
             embed_model=embed_model,
         )
+
+        self._load_docstore(index)
 
         self._index = index
         self._vector_store = vector_store
 
         print(f"✅ LanceDB 索引已加载: {self._get_uri()}/{self.table_name}")
         return index
+
+    def _load_docstore(self, index: Any) -> None:
+        from llama_index.core.storage.docstore import SimpleDocumentStore
+
+        docstore_path = Path(self._get_uri()) / "docstore.json"
+        if docstore_path.exists():
+            docstore = SimpleDocumentStore.from_persist_path(str(docstore_path))
+            index.storage_context.docstore = docstore
+            print(f"   ✅ docstore 已加载: {len(docstore.docs)} 个节点")
 
     def save_index(self, index: Any) -> None:
         """LanceDB 自动持久化，无需手动保存"""

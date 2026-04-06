@@ -292,6 +292,16 @@ class DocumentProcessor:
         timeout = timeout or self.config.pdf_convert_timeout
         print(f"   🔄 正在转换 PDF 为 Markdown...")
 
+        md_file_path = (
+            Path("/Volumes/online/llamaindex/mddocs") / f"{Path(pdf_path).stem}.md"
+        )
+        if md_file_path.exists() and md_file_path.stat().st_size > 100:
+            print(f"   📄 本地 md 已存在，跳过转换: {md_file_path.name}")
+            try:
+                return md_file_path.read_text(encoding="utf-8")
+            except Exception:
+                pass
+
         file_size_mb, page_count = self._get_pdf_info(pdf_path)
         need_split = file_size_mb >= 200 or page_count >= 600
 
@@ -329,6 +339,16 @@ class DocumentProcessor:
 
     def _convert_single_pdf(self, pdf_path: str, timeout: int = None) -> Optional[str]:
         """转换单个 PDF（不拆分）"""
+        md_file_path = (
+            Path("/Volumes/online/llamaindex/mddocs") / f"{Path(pdf_path).stem}.md"
+        )
+        if md_file_path.exists() and md_file_path.stat().st_size > 100:
+            print(f"   📄 本地 md 已存在，跳过云端转换: {md_file_path.name}")
+            try:
+                return md_file_path.read_text(encoding="utf-8")
+            except Exception:
+                pass
+
         from llamaindex_study.config import get_settings
 
         settings = get_settings()
@@ -341,29 +361,42 @@ class DocumentProcessor:
         )
 
         if mineru_api_key and mineru_pipeline_id:
-            print(f"   ☁️  策略1: MinerU...")
+            print(f"   ☁️  MinerU...")
             md = self._convert_pdf_mineru(
                 pdf_path, mineru_api_key, mineru_pipeline_id, timeout
             )
             if md:
+                self._save_md_to_local(md, pdf_path)
                 return md
         else:
-            print(f"   ⏭️  策略1: MinerU 未配置")
+            print(f"   ⏭️  MinerU 未配置，跳过")
 
         doc2x_api_key = getattr(settings, "doc2x_api_key", None) or os.getenv(
             "DOC2X_API_KEY"
         )
 
         if doc2x_api_key:
-            print(f"   ☁️  策略2: doc2x...")
+            print(f"   ☁️  doc2x (备用)...")
             md = self._convert_pdf_doc2x(pdf_path, doc2x_api_key, timeout)
             if md:
+                self._save_md_to_local(md, pdf_path)
                 return md
         else:
-            print(f"   ⏭️  策略2: doc2x 未配置")
+            print(f"   ⏭️  doc2x 未配置，跳过")
 
-        print(f"   ❌ 所有 OCR 策略均失败")
+        print(f"   ❌ 所有转换策略均失败")
         return None
+
+    def _save_md_to_local(self, md_content: str, pdf_path: str) -> None:
+        """保存 md 内容到本地"""
+        md_save_dir = Path("/Volumes/online/llamaindex/mddocs")
+        md_save_dir.mkdir(parents=True, exist_ok=True)
+        md_file_path = md_save_dir / f"{Path(pdf_path).stem}.md"
+        try:
+            md_file_path.write_text(md_content, encoding="utf-8")
+            print(f"   💾 Markdown 已保存: {md_file_path}")
+        except Exception as e:
+            print(f"   ⚠️  保存 md 失败: {e}")
 
     def _convert_pdf_mineru(
         self, pdf_path: str, api_key: str, pipeline_id: str, timeout: int = None
@@ -582,13 +615,10 @@ class DocumentProcessor:
             print(f"   🔍 检测为扫描件，尝试 OCR 转换...")
             md_content = self.convert_pdf_to_markdown(pdf_path)
             if md_content:
-                md_save_dir = Path("/Volumes/online/llamaindex/mddocs")
-                md_save_dir.mkdir(parents=True, exist_ok=True)
-                md_file_name = Path(pdf_path).stem + ".md"
-                md_file_path = md_save_dir / md_file_name
-                with open(md_file_path, "w", encoding="utf-8") as f:
-                    f.write(md_content)
-                print(f"   💾 Markdown 已保存: {md_file_path}")
+                md_file_path = (
+                    Path("/Volumes/online/llamaindex/mddocs")
+                    / f"{Path(pdf_path).stem}.md"
+                )
 
                 doc = LlamaDocument(
                     text=md_content,
