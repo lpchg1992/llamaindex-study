@@ -184,6 +184,13 @@ class LanceDBVectorStore(BaseVectorStore):
         """设置知识库的分块策略"""
         metadata = self._load_metadata()
         metadata["chunk_strategy"] = strategy
+        # Also save hierarchical_chunk_sizes if using hierarchical strategy
+        if strategy == "hierarchical":
+            from llamaindex_study.config import get_settings
+
+            settings = get_settings()
+            if settings.hierarchical_chunk_sizes:
+                metadata["hierarchical_chunk_sizes"] = settings.hierarchical_chunk_sizes
         self._save_metadata(metadata)
 
     def exists(self) -> bool:

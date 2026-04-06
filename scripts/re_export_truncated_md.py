@@ -7,21 +7,40 @@ This script:
 2. Extracts UID from each truncated file
 3. Uses doc2x_convert_export_* to get full markdown (no re-OCR)
 4. Overwrites the truncated file with complete content
+5. Updates meta.json to mark as not truncated (triggers re-import)
 """
 
-import fcntl
 import io
 import json
 import os
 import re
 import subprocess
 import sys
-import threading
 import time
 import urllib.request
 import urllib.error
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
+
+
+@dataclass
+class ConversionMetadata:
+    uid: str = None
+    mineru_batch_id: str = None
+    is_truncated: bool = False
+    converted_at: str = None
+    source_pdf: str = None
+    page_count: int = 0
+
+    def save(self, md_path: Path) -> None:
+        meta_path = md_path.with_suffix(".meta.json")
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(asdict(self), f, ensure_ascii=False, indent=2)
+
+
+def asdict(obj):
+    return {k: v for k, v in obj.__dataclass_fields__.items() if v.init}
 
 
 def load_env():
@@ -206,6 +225,14 @@ def main():
         if md_content:
             original_size = md_file.stat().st_size
             md_file.write_text(md_content, encoding="utf-8")
+
+            meta_file = md_file.with_suffix(".meta.json")
+            if meta_file.exists():
+                meta_file.unlink()
+
+            meta = ConversionMetadata(uid=uid, is_truncated=False)
+            meta.save(md_file)
+
             new_size = len(md_content.encode("utf-8"))
             print(f"   ✅ Success: {original_size} → {new_size} bytes")
             success_count += 1

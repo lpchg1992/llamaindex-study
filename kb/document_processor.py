@@ -77,6 +77,40 @@ class DocumentProcessorConfig:
 
 
 @dataclass
+class ConversionMetadata:
+    """文档转换元数据，存储在 {md_file}.meta.json"""
+
+    uid: Optional[str] = None
+    mineru_batch_id: Optional[str] = None
+    is_truncated: bool = False
+    converted_at: Optional[str] = None
+    source_pdf: Optional[str] = None
+    page_count: int = 0
+
+    def save(self, md_path: Path) -> None:
+        meta_path = md_path.with_suffix(".meta.json")
+        meta_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(asdict(self), f, ensure_ascii=False, indent=2)
+
+    @classmethod
+    def load(cls, md_path: Path) -> Optional["ConversionMetadata"]:
+        meta_path = md_path.with_suffix(".meta.json")
+        if meta_path.exists():
+            try:
+                with open(meta_path, encoding="utf-8") as f:
+                    return cls(**json.load(f))
+            except Exception:
+                pass
+        return None
+
+    def delete(self, md_path: Path) -> None:
+        meta_path = md_path.with_suffix(".meta.json")
+        if meta_path.exists():
+            meta_path.unlink()
+
+
+@dataclass
 class ProcessingProgress:
     """处理进度"""
 
@@ -314,12 +348,17 @@ class DocumentProcessor:
         md_file_path = (
             Path("/Volumes/online/llamaindex/mddocs") / f"{Path(pdf_path).stem}.md"
         )
+
         if md_file_path.exists() and md_file_path.stat().st_size > 100:
-            print(f"   📄 本地 md 已存在，跳过转换: {md_file_path.name}")
-            try:
-                return md_file_path.read_text(encoding="utf-8")
-            except Exception:
-                pass
+            meta = ConversionMetadata.load(md_file_path)
+            if meta and not meta.is_truncated:
+                print(f"   📄 本地 MD 已存在且完整，跳过转换: {md_file_path.name}")
+                try:
+                    return md_file_path.read_text(encoding="utf-8")
+                except Exception:
+                    pass
+            elif meta and meta.is_truncated:
+                print(f"   📄 本地 MD 存在但被截断，将重新转换")
 
         file_size_mb, page_count = self._get_pdf_info(pdf_path)
         need_split = file_size_mb >= 200 or page_count >= 600
@@ -483,8 +522,12 @@ class DocumentProcessor:
             print(f"   🔄 MinerU 正在解析 PDF (batch_id={batch_id[:8]}...)")
 
             poll_interval = 5
-            max_polls = (timeout or 600) // poll_interval
-            for _ in range(max_polls):
+            max_wait = timeout or 600
+            start_time = time.time()
+            interval = 5
+            max_interval = 30
+
+            while time.time() - start_time < max_wait:
                 result_resp = requests.get(
                     f"https://mineru.net/api/v4/extract-results/batch/{batch_id}",
                     headers=headers,
@@ -511,6 +554,21 @@ class DocumentProcessor:
                                             md_content = zf.read("full.md").decode(
                                                 "utf-8"
                                             )
+
+                                            if "Output truncated" in md_content:
+                                                md_file_path = (
+                                                    Path(
+                                                        "/Volumes/online/llamaindex/mddocs"
+                                                    )
+                                                    / f"{Path(pdf_path).stem}.md"
+                                                )
+                                                if md_file_path.exists():
+                                                    md_file_path.unlink()
+                                                print(
+                                                    f"   ⚠️  MinerU 截断，删除 MD 并触发 doc2x fallback"
+                                                )
+                                                return None
+
                                             images_dir = Path(
                                                 "/Volumes/online/llamaindex/mddocs/images"
                                             )
@@ -525,15 +583,33 @@ class DocumentProcessor:
                                                         parents=True, exist_ok=True
                                                     )
                                                     img_path.write_bytes(img_data)
+
+                                            md_file_path = (
+                                                Path(
+                                                    "/Volumes/online/llamaindex/mddocs"
+                                                )
+                                                / f"{Path(pdf_path).stem}.md"
+                                            )
+                                            meta = ConversionMetadata(
+                                                mineru_batch_id=batch_id,
+                                                is_truncated=False,
+                                            )
+                                            meta.save(md_file_path)
+
                                             print(
                                                 f"   ✅ MinerU 转换成功 ({len(md_content)} chars)"
                                             )
                                             return md_content
+                                    else:
+                                        print(
+                                            f"   ⚠️  MinerU 结果下载失败: {zip_resp.status_code}"
+                                        )
                             elif state == "failed":
                                 err_msg = extract_result.get("err_msg", "未知错误")
                                 print(f"   ⚠️  MinerU 处理失败: {err_msg}")
                                 return None
-                time.sleep(poll_interval)
+                time.sleep(interval)
+                interval = min(interval * 1.5, max_interval)
 
             print(f"   ⚠️  MinerU 轮询超时")
             return None
@@ -617,8 +693,6 @@ class DocumentProcessor:
             proc.stdin.flush()
             time.sleep(2)
 
-            result_holder = {"export_url": None}
-
             submit_msg = {
                 "jsonrpc": "2.0",
                 "id": 1,
@@ -630,7 +704,27 @@ class DocumentProcessor:
             }
             proc.stdin.write(json.dumps(submit_msg) + "\n")
             proc.stdin.flush()
-            time.sleep(2)
+
+            submit_done = False
+            submit_start = time.time()
+            while time.time() - submit_start < 60:
+                line = proc.stdout.readline()
+                if not line:
+                    time.sleep(0.2)
+                    continue
+                try:
+                    resp = json.loads(line.strip())
+                    if resp.get("id") == 1 and "result" in resp:
+                        submit_done = True
+                        break
+                except json.JSONDecodeError:
+                    continue
+                time.sleep(0.5)
+
+            if not submit_done:
+                print(f"   ⚠️  doc2x 导出提交超时")
+                proc.terminate()
+                return None
 
             wait_msg = {
                 "jsonrpc": "2.0",
@@ -638,18 +732,22 @@ class DocumentProcessor:
                 "method": "tools/call",
                 "params": {
                     "name": "doc2x_convert_export_wait",
-                    "arguments": {"uid": uid, "to": "md", "poll_interval": 3000},
+                    "arguments": {"uid": uid, "to": "md", "poll_interval": 5000},
                 },
             }
             proc.stdin.write(json.dumps(wait_msg) + "\n")
             proc.stdin.flush()
 
-            start_time = time.time()
             export_url = None
-            while time.time() - start_time < timeout:
+            start_time = time.time()
+            interval = 2
+            max_wait = min(timeout, 600)
+
+            while time.time() - start_time < max_wait:
                 line = proc.stdout.readline()
                 if not line:
-                    time.sleep(0.5)
+                    time.sleep(interval)
+                    interval = min(interval * 1.5, 20)
                     continue
                 try:
                     resp = json.loads(line.strip())
@@ -666,10 +764,15 @@ class DocumentProcessor:
                                         if url and data.get("status") == "success":
                                             export_url = url
                                             break
+                                        if data.get("status") == "failed":
+                                            print(f"   ⚠️  doc2x 导出失败")
+                                            break
                                     except json.JSONDecodeError:
                                         pass
                 except json.JSONDecodeError:
-                    continue
+                    pass
+                time.sleep(interval)
+                interval = min(interval * 1.5, 20)
 
             proc.terminate()
 
@@ -734,6 +837,47 @@ class DocumentProcessor:
         timeout = timeout or self.config.pdf_convert_timeout
         proc = None
 
+        def read_mcp_response(proc, timeout_sec=30):
+            start = time.time()
+            while time.time() - start < timeout_sec:
+                line = proc.stdout.readline()
+                if not line:
+                    time.sleep(0.1)
+                    continue
+                try:
+                    return json.loads(line.strip())
+                except json.JSONDecodeError:
+                    continue
+            return None
+
+        def poll_until_done(
+            proc,
+            status_msg,
+            check_done,
+            timeout_sec,
+            initial_interval=2,
+            max_interval=30,
+        ):
+            interval = initial_interval
+            max_polls = max(timeout_sec // initial_interval, 10)
+            for _ in range(max_polls):
+                proc.stdin.write(json.dumps(status_msg) + "\n")
+                proc.stdin.flush()
+
+                resp = read_mcp_response(proc, timeout_sec=10)
+                if resp and "result" in resp:
+                    done, should_retry = check_done(resp)
+                    if done:
+                        return True, None
+                    if not should_retry:
+                        return False, "任务失败"
+                    # 失败但可重试，继续等待
+
+                time.sleep(interval)
+                interval = min(interval * 1.5, max_interval)
+
+            return False, "轮询超时"
+
         try:
             proc = subprocess.Popen(
                 ["node", "/tmp/doc2x_mcp/node_modules/.bin/doc2x-mcp"],
@@ -759,8 +903,6 @@ class DocumentProcessor:
             proc.stdin.flush()
             time.sleep(2)
 
-            result_holder = {"uid": None, "export_url": None}
-
             submit_msg = {
                 "jsonrpc": "2.0",
                 "id": 1,
@@ -775,25 +917,19 @@ class DocumentProcessor:
 
             start_time = time.time()
             uid = None
-            while time.time() - start_time < 30:
-                line = proc.stdout.readline()
-                if not line:
-                    time.sleep(0.5)
-                    continue
-                try:
-                    resp = json.loads(line.strip())
-                    if resp.get("id") == 1 and "result" in resp:
-                        result = resp["result"]
-                        if isinstance(result, dict):
-                            uid = result.get("uid")
-                            if uid:
-                                result_holder["uid"] = uid
-                                break
-                except json.JSONDecodeError:
-                    continue
+            uid_timeout = min(timeout // 2, 120)
+            while time.time() - start_time < uid_timeout:
+                resp = read_mcp_response(proc, timeout_sec=5)
+                if resp and resp.get("id") == 1 and "result" in resp:
+                    result = resp["result"]
+                    if isinstance(result, dict):
+                        uid = result.get("uid")
+                        if uid:
+                            break
+                time.sleep(0.5)
 
             if not uid:
-                print(f"   ⚠️  无法获取 UID")
+                print(f"   ⚠️  无法获取 UID (等待超时)")
                 proc.terminate()
                 return None
 
@@ -809,10 +945,32 @@ class DocumentProcessor:
                 },
             }
 
-            for _ in range(min(timeout // 10, 60)):
-                proc.stdin.write(json.dumps(status_msg) + "\n")
-                proc.stdin.flush()
-                time.sleep(10)
+            def check_parse_done(resp):
+                result = resp.get("result", {})
+                if isinstance(result, dict):
+                    content = result.get("content", [])
+                    if content:
+                        text = content[0].get("text", "")
+                        if text:
+                            try:
+                                data = json.loads(text)
+                                status = data.get("status", "")
+                                if status == "success":
+                                    return True, None
+                                if status == "failed":
+                                    return False, False
+                            except json.JSONDecodeError:
+                                pass
+                return False, True
+
+            parse_done, parse_err = poll_until_done(
+                proc, status_msg, check_parse_done, timeout_sec=min(timeout, 600)
+            )
+
+            if not parse_done:
+                print(f"   ⚠️  doc2x parse 状态检查失败: {parse_err}")
+                proc.terminate()
+                return None
 
             export_submit_msg = {
                 "jsonrpc": "2.0",
@@ -825,7 +983,21 @@ class DocumentProcessor:
             }
             proc.stdin.write(json.dumps(export_submit_msg) + "\n")
             proc.stdin.flush()
-            time.sleep(2)
+
+            submit_done = False
+            submit_timeout = 60
+            submit_start = time.time()
+            while time.time() - submit_start < submit_timeout:
+                resp = read_mcp_response(proc, timeout_sec=5)
+                if resp and resp.get("id") == 3 and "result" in resp:
+                    submit_done = True
+                    break
+                time.sleep(0.5)
+
+            if not submit_done:
+                print(f"   ⚠️  doc2x 导出提交超时")
+                proc.terminate()
+                return None
 
             wait_msg = {
                 "jsonrpc": "2.0",
@@ -833,7 +1005,7 @@ class DocumentProcessor:
                 "method": "tools/call",
                 "params": {
                     "name": "doc2x_convert_export_wait",
-                    "arguments": {"uid": uid, "to": "md", "poll_interval": 3000},
+                    "arguments": {"uid": uid, "to": "md", "poll_interval": 5000},
                 },
             }
             proc.stdin.write(json.dumps(wait_msg) + "\n")
@@ -841,30 +1013,31 @@ class DocumentProcessor:
 
             export_url = None
             start_time = time.time()
-            while time.time() - start_time < min(timeout, 300):
-                line = proc.stdout.readline()
-                if not line:
-                    time.sleep(0.5)
-                    continue
-                try:
-                    resp = json.loads(line.strip())
-                    if resp.get("id") == 4 and "result" in resp:
-                        result = resp["result"]
-                        if isinstance(result, dict):
-                            content = result.get("content", [])
-                            if content:
-                                text = content[0].get("text", "")
-                                if text:
-                                    try:
-                                        data = json.loads(text)
-                                        url = data.get("url")
-                                        if url and data.get("status") == "success":
-                                            export_url = url
-                                            break
-                                    except json.JSONDecodeError:
-                                        pass
-                except json.JSONDecodeError:
-                    continue
+            interval = 2
+            max_wait = min(timeout, 600)
+
+            while time.time() - start_time < max_wait:
+                resp = read_mcp_response(proc, timeout_sec=10)
+                if resp and resp.get("id") == 4 and "result" in resp:
+                    result = resp["result"]
+                    if isinstance(result, dict):
+                        content = result.get("content", [])
+                        if content:
+                            text = content[0].get("text", "")
+                            if text:
+                                try:
+                                    data = json.loads(text)
+                                    url = data.get("url")
+                                    if url and data.get("status") == "success":
+                                        export_url = url
+                                        break
+                                    if data.get("status") == "failed":
+                                        print(f"   ⚠️  doc2x 导出失败")
+                                        break
+                                except json.JSONDecodeError:
+                                    pass
+                time.sleep(interval)
+                interval = min(interval * 1.5, 20)
 
             proc.terminate()
 
@@ -888,6 +1061,17 @@ class DocumentProcessor:
                                     img_path = images_dir / img_name
                                     img_path.parent.mkdir(parents=True, exist_ok=True)
                                     img_path.write_bytes(img_data)
+
+                            md_file_path = (
+                                Path("/Volumes/online/llamaindex/mddocs")
+                                / f"{Path(pdf_path).stem}.md"
+                            )
+                            meta = ConversionMetadata(
+                                uid=uid,
+                                is_truncated=False,
+                            )
+                            meta.save(md_file_path)
+
                             print(f"   ✅ doc2x 完整导出成功 ({len(md_content)} chars)")
                             return md_content
                 except Exception as e:
