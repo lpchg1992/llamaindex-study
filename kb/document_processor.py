@@ -10,6 +10,25 @@
 - 增量更新（基于文件哈希）
 
 供所有导入脚本使用
+
+==============================================================================
+临时性修复代码备注 (2026-04-06)
+==============================================================================
+本文件包含用于修复 doc2x 导出截断问题的临时性代码：
+
+1. _extract_truncated_info() 和 _doc2x_export_full_markdown_from_uid()
+   - 用途：从截断的 md 文件中提取 UID，使用 doc2x 的导出接口获取完整内容
+   - 触发条件：md 文件包含 "Output truncated" 标记
+   - 不消耗 OCR 额度：直接使用已存在的 UID 导出
+
+2. _convert_pdf_mineru() 已迁移到 MinerU v4 API
+   - 原因：v1 API 已弃用
+   - 迁移时间：2026-04-06
+
+这些代码在正常业务流程中不会被执行，仅在检测到截断文件时调用。
+当所有截断文件被修复并重新导入后，这些代码可以保留（不会影响正常流程）
+或删除（如果确认不再需要）。
+==============================================================================
 """
 
 import hashlib
@@ -401,62 +420,119 @@ class DocumentProcessor:
     def _convert_pdf_mineru(
         self, pdf_path: str, api_key: str, pipeline_id: str, timeout: int = None
     ) -> Optional[str]:
-        """使用 MinerU API 转换 PDF
+        """使用 MinerU 精准解析 API 转换 PDF
 
         Args:
             pdf_path: PDF 文件路径
             api_key: MinerU API Key
-            pipeline_id: MinerU Pipeline ID
+            pipeline_id: MinerU Pipeline ID (用于兼容旧接口，此参数不再使用)
             timeout: 超时时间
 
         Returns:
             Markdown 内容，失败返回 None
         """
         try:
+            import io
+            import zipfile
+
             import requests
 
-            base_url = "https://mineru.net/api/kie"
-            headers = {"Authorization": f"Bearer {api_key}"}
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            }
+
+            file_name = Path(pdf_path).name
+            batch_url = "https://mineru.net/api/v4/file-urls/batch"
+
+            batch_resp = requests.post(
+                batch_url,
+                headers=headers,
+                json={
+                    "files": [{"name": file_name, "data_id": file_name}],
+                    "model_version": "pipeline",
+                },
+                timeout=30,
+            )
+
+            if batch_resp.status_code != 200:
+                print(f"   ⚠️  MinerU 获取上传链接失败: {batch_resp.status_code}")
+                return None
+
+            batch_data = batch_resp.json()
+            if batch_data.get("code") != 0:
+                print(f"   ⚠️  MinerU API 错误: {batch_data.get('msg')}")
+                return None
+
+            batch_id = batch_data.get("data", {}).get("batch_id")
+            file_urls = batch_data.get("data", {}).get("file_urls", [])
+            if not file_urls:
+                print(f"   ⚠️  MinerU 无返回上传链接")
+                return None
+
+            upload_url = file_urls[0]
+            print(f"   📤 正在上传 PDF 到 MinerU...")
 
             with open(pdf_path, "rb") as f:
-                files = {"file": (Path(pdf_path).name, f, "application/pdf")}
-                data = {"pipeline_id": pipeline_id}
-                resp = requests.post(
-                    f"{base_url}/upload",
-                    headers=headers,
-                    files=files,
-                    data=data,
-                    timeout=timeout or 60,
-                )
+                upload_resp = requests.put(upload_url, data=f, timeout=60)
 
-            if resp.status_code != 200:
-                print(f"   ⚠️  MinerU 上传失败: {resp.status_code}")
+            if upload_resp.status_code not in (200, 201):
+                print(f"   ⚠️  MinerU 文件上传失败: {upload_resp.status_code}")
                 return None
 
-            file_ids = resp.json().get("file_ids", [])
-            if not file_ids:
-                print(f"   ⚠️  MinerU 无返回 file_ids")
-                return None
+            print(f"   🔄 MinerU 正在解析 PDF (batch_id={batch_id[:8]}...)")
 
             poll_interval = 5
             max_polls = (timeout or 600) // poll_interval
             for _ in range(max_polls):
                 result_resp = requests.get(
-                    f"{base_url}/result/{file_ids[0]}",
+                    f"https://mineru.net/api/v4/extract-results/batch/{batch_id}",
                     headers=headers,
                     timeout=30,
                 )
                 if result_resp.status_code == 200:
                     result = result_resp.json()
-                    status = result.get("status", "")
-                    if status == "completed":
-                        content = result.get("content", "")
-                        if content and len(content.strip()) > 100:
-                            print(f"   ✅ MinerU 转换成功")
-                            return content
-                        elif status == "failed":
-                            print(f"   ⚠️  MinerU 处理失败")
-                            return None
+                    if result.get("code") == 0:
+                        extract_results = result.get("data", {}).get(
+                            "extract_result", []
+                        )
+                        for extract_result in extract_results:
+                            state = extract_result.get("state", "")
+                            if state == "done":
+                                full_zip_url = extract_result.get("full_zip_url")
+                                if full_zip_url:
+                                    print(f"   📥 正在下载 MinerU 结果...")
+                                    zip_resp = requests.get(full_zip_url, timeout=120)
+                                    if zip_resp.status_code == 200:
+                                        zip_data = zip_resp.content
+                                        with zipfile.ZipFile(
+                                            io.BytesIO(zip_data)
+                                        ) as zf:
+                                            md_content = zf.read("full.md").decode(
+                                                "utf-8"
+                                            )
+                                            images_dir = Path(
+                                                "/Volumes/online/llamaindex/mddocs/images"
+                                            )
+                                            for name in zf.namelist():
+                                                if name.startswith(
+                                                    "images/"
+                                                ) and not name.endswith("/"):
+                                                    img_data = zf.read(name)
+                                                    img_name = Path(name).name
+                                                    img_path = images_dir / img_name
+                                                    img_path.parent.mkdir(
+                                                        parents=True, exist_ok=True
+                                                    )
+                                                    img_path.write_bytes(img_data)
+                                            print(
+                                                f"   ✅ MinerU 转换成功 ({len(md_content)} chars)"
+                                            )
+                                            return md_content
+                            elif state == "failed":
+                                err_msg = extract_result.get("err_msg", "未知错误")
+                                print(f"   ⚠️  MinerU 处理失败: {err_msg}")
+                                return None
                 time.sleep(poll_interval)
 
             print(f"   ⚠️  MinerU 轮询超时")
@@ -469,30 +545,61 @@ class DocumentProcessor:
 
         return None
 
-    def _convert_pdf_doc2x(
-        self, pdf_path: str, api_key: str, timeout: int = None
-    ) -> Optional[str]:
-        """使用 doc2x MCP 转换 PDF
+    def _extract_truncated_info(self, md_content: str) -> Optional[dict]:
+        """从截断的 md 内容中提取 UID 和页数信息
 
         Args:
-            pdf_path: PDF 文件路径
+            md_content: md 文件内容
+
+        Returns:
+            dict: {"uid": "...", "pages_done": N, "pages_total": M} 或 None
+        """
+        import re
+
+        pattern = r"Output truncated \(pages (\d+)/(\d+), uid=([a-f0-9\-]+)\)"
+        match = re.search(pattern, md_content)
+        if match:
+            return {
+                "pages_done": int(match.group(1)),
+                "pages_total": int(match.group(2)),
+                "uid": match.group(3),
+            }
+        return None
+
+    def _doc2x_export_full_markdown_from_uid(
+        self, uid: str, api_key: str, timeout: int = None
+    ) -> Optional[str]:
+        """使用已有 UID 导出完整 markdown（不消耗 OCR 额度）
+
+        工作流程：
+        1. doc2x_convert_export_submit - 提交导出任务
+        2. doc2x_convert_export_wait - 等待导出完成
+        3. 下载 zip 文件并提取 markdown 和图片
+
+        Args:
+            uid: 之前 OCR 生成的 UID
             api_key: doc2x API Key
             timeout: 超时时间
 
         Returns:
-            Markdown 内容，失败返回 None
+            完整 Markdown 内容，失败返回 None
         """
+        import io
+        import urllib.request
+        import urllib.error
+        import zipfile
+
         timeout = timeout or self.config.pdf_convert_timeout
         proc = None
 
         try:
             proc = subprocess.Popen(
-                ["npx", "-y", "@noedgeai-org/doc2x-mcp@latest"],
+                ["node", "/tmp/doc2x_mcp/node_modules/.bin/doc2x-mcp"],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                env={**os.environ, "DOC2X_API_KEY": api_key},
+                env=os.environ,
             )
 
             init_msg = {
@@ -506,93 +613,321 @@ class DocumentProcessor:
                 },
             }
 
-            tool_msg = {
+            proc.stdin.write(json.dumps(init_msg) + "\n")
+            proc.stdin.flush()
+            time.sleep(2)
+
+            result_holder = {"export_url": None}
+
+            submit_msg = {
                 "jsonrpc": "2.0",
                 "id": 1,
                 "method": "tools/call",
                 "params": {
-                    "name": "doc2x_parse_pdf_wait_text",
-                    "arguments": {"pdf_path": pdf_path},
+                    "name": "doc2x_convert_export_submit",
+                    "arguments": {"uid": uid, "to": "md", "formula_mode": "normal"},
+                },
+            }
+            proc.stdin.write(json.dumps(submit_msg) + "\n")
+            proc.stdin.flush()
+            time.sleep(2)
+
+            wait_msg = {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "doc2x_convert_export_wait",
+                    "arguments": {"uid": uid, "to": "md", "poll_interval": 3000},
+                },
+            }
+            proc.stdin.write(json.dumps(wait_msg) + "\n")
+            proc.stdin.flush()
+
+            start_time = time.time()
+            export_url = None
+            while time.time() - start_time < timeout:
+                line = proc.stdout.readline()
+                if not line:
+                    time.sleep(0.5)
+                    continue
+                try:
+                    resp = json.loads(line.strip())
+                    if resp.get("id") == 2 and "result" in resp:
+                        result = resp["result"]
+                        if isinstance(result, dict):
+                            content = result.get("content", [])
+                            if content:
+                                text = content[0].get("text", "")
+                                if text:
+                                    try:
+                                        data = json.loads(text)
+                                        url = data.get("url")
+                                        if url and data.get("status") == "success":
+                                            export_url = url
+                                            break
+                                    except json.JSONDecodeError:
+                                        pass
+                except json.JSONDecodeError:
+                    continue
+
+            proc.terminate()
+
+            if export_url:
+                print(f"   📥 正在从 URL 下载完整 markdown...")
+                try:
+                    req = urllib.request.Request(export_url)
+                    with urllib.request.urlopen(req, timeout=120) as response:
+                        zip_data = response.read()
+                        with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
+                            md_content = zf.read("output.md").decode("utf-8")
+                            images_dir = Path(
+                                "/Volumes/online/llamaindex/mddocs/images"
+                            )
+                            for name in zf.namelist():
+                                if name.startswith("images/") and not name.endswith(
+                                    "/"
+                                ):
+                                    img_data = zf.read(name)
+                                    img_name = Path(name).name
+                                    img_path = images_dir / img_name
+                                    img_path.parent.mkdir(parents=True, exist_ok=True)
+                                    img_path.write_bytes(img_data)
+                            print(f"   ✅ doc2x 完整导出成功 ({len(md_content)} chars)")
+                            return md_content
+                except Exception as e:
+                    print(f"   ⚠️  下载失败: {e}")
+
+            return None
+
+        except Exception as e:
+            print(f"   ⚠️  doc2x 导出失败: {e}")
+            if proc:
+                proc.kill()
+        return None
+
+    def _doc2x_parse_and_export_full(
+        self, pdf_path: str, api_key: str, timeout: int = None
+    ) -> Optional[str]:
+        """使用 doc2x MCP 完整解析并导出 PDF（包含完整 markdown）
+
+        工作流程：
+        1. doc2x_parse_pdf_submit - 提交解析任务
+        2. doc2x_parse_pdf_status - 轮询等待解析完成
+        3. doc2x_convert_export_submit - 提交导出任务
+        4. doc2x_convert_export_wait - 等待导出完成
+        5. 下载 zip 文件并提取 markdown 和图片
+
+        Args:
+            pdf_path: PDF 文件路径
+            api_key: doc2x API Key
+            timeout: 超时时间
+
+        Returns:
+            完整 Markdown 内容，失败返回 None
+        """
+        import io
+        import urllib.request
+        import urllib.error
+        import zipfile
+
+        timeout = timeout or self.config.pdf_convert_timeout
+        proc = None
+
+        try:
+            proc = subprocess.Popen(
+                ["node", "/tmp/doc2x_mcp/node_modules/.bin/doc2x-mcp"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=os.environ,
+            )
+
+            init_msg = {
+                "jsonrpc": "2.0",
+                "id": 0,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {"name": "llamaindex-study", "version": "0.1"},
                 },
             }
 
-            import threading
-
-            result_holder = {"result": None, "error": None}
-
-            def read_stdout():
-                try:
-                    buffer = ""
-                    while True:
-                        char = proc.stdout.read(1)
-                        if not char:
-                            break
-                        buffer += char
-                        if char == "\n":
-                            line = buffer.strip()
-                            buffer = ""
-                            if not line:
-                                continue
-                            try:
-                                resp = json.loads(line)
-                                if resp.get("id") == 1 and "result" in resp:
-                                    content = resp["result"].get("content", [])
-                                    if isinstance(content, list) and len(content) > 0:
-                                        text = content[0].get("text", "")
-                                        if text and len(text.strip()) > 100:
-                                            result_holder["result"] = text
-                                            return
-                            except json.JSONDecodeError:
-                                continue
-                except Exception as e:
-                    result_holder["error"] = str(e)
-
-            reader_thread = threading.Thread(target=read_stdout)
-            reader_thread.daemon = True
-            reader_thread.start()
-
             proc.stdin.write(json.dumps(init_msg) + "\n")
             proc.stdin.flush()
+            time.sleep(2)
 
-            import time
+            result_holder = {"uid": None, "export_url": None}
+
+            submit_msg = {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "doc2x_parse_pdf_submit",
+                    "arguments": {"pdf_path": pdf_path},
+                },
+            }
+            proc.stdin.write(json.dumps(submit_msg) + "\n")
+            proc.stdin.flush()
 
             start_time = time.time()
-            while reader_thread.is_alive() and (time.time() - start_time) < 5:
-                time.sleep(0.1)
+            uid = None
+            while time.time() - start_time < 30:
+                line = proc.stdout.readline()
+                if not line:
+                    time.sleep(0.5)
+                    continue
+                try:
+                    resp = json.loads(line.strip())
+                    if resp.get("id") == 1 and "result" in resp:
+                        result = resp["result"]
+                        if isinstance(result, dict):
+                            uid = result.get("uid")
+                            if uid:
+                                result_holder["uid"] = uid
+                                break
+                except json.JSONDecodeError:
+                    continue
 
-            if result_holder["result"]:
-                proc.stdin.write(json.dumps(tool_msg) + "\n")
-                proc.stdin.flush()
-
-                reader_thread.join(timeout=timeout)
-                if result_holder["result"]:
-                    print(f"   ✅ doc2x 转换成功")
-                    return result_holder["result"]
-            else:
-                time.sleep(2)
-
-                proc.stdin.write(json.dumps(tool_msg) + "\n")
-                proc.stdin.flush()
-
-                reader_thread.join(timeout=timeout)
-                if result_holder["result"]:
-                    print(f"   ✅ doc2x 转换成功")
-                    return result_holder["result"]
-
-            if result_holder["error"]:
-                print(f"   ⚠️  doc2x 读取错误: {result_holder['error']}")
-
-            if proc:
+            if not uid:
+                print(f"   ⚠️  无法获取 UID")
                 proc.terminate()
-            return result_holder.get("result")
+                return None
 
-        except subprocess.TimeoutExpired:
-            print(f"   ❌ doc2x 转换超时")
-            if proc:
-                proc.kill()
+            print(f"   🔄 doc2x 正在解析 PDF (uid={uid})...")
+
+            status_msg = {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "doc2x_parse_pdf_status",
+                    "arguments": {"uid": uid},
+                },
+            }
+
+            for _ in range(min(timeout // 10, 60)):
+                proc.stdin.write(json.dumps(status_msg) + "\n")
+                proc.stdin.flush()
+                time.sleep(10)
+
+            export_submit_msg = {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {
+                    "name": "doc2x_convert_export_submit",
+                    "arguments": {"uid": uid, "to": "md", "formula_mode": "normal"},
+                },
+            }
+            proc.stdin.write(json.dumps(export_submit_msg) + "\n")
+            proc.stdin.flush()
+            time.sleep(2)
+
+            wait_msg = {
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "tools/call",
+                "params": {
+                    "name": "doc2x_convert_export_wait",
+                    "arguments": {"uid": uid, "to": "md", "poll_interval": 3000},
+                },
+            }
+            proc.stdin.write(json.dumps(wait_msg) + "\n")
+            proc.stdin.flush()
+
+            export_url = None
+            start_time = time.time()
+            while time.time() - start_time < min(timeout, 300):
+                line = proc.stdout.readline()
+                if not line:
+                    time.sleep(0.5)
+                    continue
+                try:
+                    resp = json.loads(line.strip())
+                    if resp.get("id") == 4 and "result" in resp:
+                        result = resp["result"]
+                        if isinstance(result, dict):
+                            content = result.get("content", [])
+                            if content:
+                                text = content[0].get("text", "")
+                                if text:
+                                    try:
+                                        data = json.loads(text)
+                                        url = data.get("url")
+                                        if url and data.get("status") == "success":
+                                            export_url = url
+                                            break
+                                    except json.JSONDecodeError:
+                                        pass
+                except json.JSONDecodeError:
+                    continue
+
+            proc.terminate()
+
+            if export_url:
+                print(f"   📥 正在从 URL 下载完整 markdown...")
+                try:
+                    req = urllib.request.Request(export_url)
+                    with urllib.request.urlopen(req, timeout=120) as response:
+                        zip_data = response.read()
+                        with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
+                            md_content = zf.read("output.md").decode("utf-8")
+                            images_dir = Path(
+                                "/Volumes/online/llamaindex/mddocs/images"
+                            )
+                            for name in zf.namelist():
+                                if name.startswith("images/") and not name.endswith(
+                                    "/"
+                                ):
+                                    img_data = zf.read(name)
+                                    img_name = Path(name).name
+                                    img_path = images_dir / img_name
+                                    img_path.parent.mkdir(parents=True, exist_ok=True)
+                                    img_path.write_bytes(img_data)
+                            print(f"   ✅ doc2x 完整导出成功 ({len(md_content)} chars)")
+                            return md_content
+                except Exception as e:
+                    print(f"   ⚠️  下载失败: {e}")
+
+            return None
+
         except Exception as e:
             print(f"   ⚠️  doc2x 失败: {e}")
+            if proc:
+                proc.kill()
+        return None
 
+    def _convert_pdf_doc2x(
+        self, pdf_path: str, api_key: str, timeout: int = None
+    ) -> Optional[str]:
+        """使用 doc2x MCP 转换 PDF（完整 markdown，无截断）
+
+        Args:
+            pdf_path: PDF 文件路径
+            api_key: doc2x API Key
+            timeout: 超时时间
+
+        Returns:
+            Markdown 内容，失败返回 None
+        """
+        env_file = Path(__file__).parent.parent.parent / ".env"
+        if env_file.exists():
+            for line in env_file.read_text().split("\n"):
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    key, value = line.split("=", 1)
+                    os.environ[key] = value
+
+        print(f"   ☁️  doc2x 完整解析...")
+        md = self._doc2x_parse_and_export_full(pdf_path, api_key, timeout)
+        if md:
+            self._save_md_to_local(md, pdf_path)
+            return md
+        print(f"   ❌ doc2x 转换失败")
         return None
 
     def process_pdf(self, pdf_path: str, metadata: dict = None) -> List[LlamaDocument]:
