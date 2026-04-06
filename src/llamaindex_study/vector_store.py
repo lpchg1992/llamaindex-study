@@ -259,9 +259,34 @@ class LanceDBVectorStore(BaseVectorStore):
         persist_dir = Path(self._get_uri())
         persist_dir.mkdir(parents=True, exist_ok=True)
         index.storage_context.docstore.persist(
-            persist_dir=str(persist_dir / "docstore.json")
+            persist_path=str(persist_dir / "docstore.json")
         )
         print(f"   ✅ docstore 已持久化到 {persist_dir / 'docstore.json'}")
+
+    def update_docstore(self, nodes: List[Any]) -> int:
+        """增量更新 docstore
+
+        Args:
+            nodes: 新增的节点列表
+
+        Returns:
+            成功更新的节点数
+        """
+        from llama_index.core.storage.docstore import SimpleDocumentStore
+
+        docstore_path = Path(self._get_uri()) / "docstore.json"
+
+        if docstore_path.exists():
+            docstore = SimpleDocumentStore.from_persist_path(str(docstore_path))
+        else:
+            docstore = SimpleDocumentStore()
+
+        docstore.add_documents(nodes, allow_update=True)
+
+        docstore.persist(persist_path=str(docstore_path))
+        logger.debug(f"docstore 已更新: {len(nodes)} 节点, 保存到 {docstore_path}")
+
+        return len(nodes)
 
     def load_index(self) -> Optional[Any]:
         """加载已有索引"""
@@ -371,13 +396,18 @@ class LanceDBVectorStore(BaseVectorStore):
         print(f"✅ LanceDB 索引已自动保存: {self._get_uri()}/{self.table_name}")
 
     def delete_table(self) -> None:
-        """删除表"""
+        """删除表和docstore"""
         if self.exists():
             import lancedb
 
             db = lancedb.connect(self._get_uri())
             db.drop_table(self.table_name)
             print(f"✅ 表已删除: {self.table_name}")
+
+        docstore_path = Path(self._get_uri()) / "docstore.json"
+        if docstore_path.exists():
+            docstore_path.unlink()
+            print(f"✅ docstore 已删除: {docstore_path}")
 
     def delete_by_source(self, sources: List[str]) -> int:
         """按源文件路径删除节点

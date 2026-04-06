@@ -266,8 +266,6 @@ class GenericImporter:
                         doc.id_ = f"doc_{doc_id_hash}"
 
                         nodes = node_parser.get_nodes_from_documents([doc])
-                        for i, node in enumerate(nodes):
-                            node.node_id = f"{doc.id_}_{i}"
                         saved = self.processor.save_nodes(vector_store, nodes, progress)
                         stats["nodes"] += saved
                         stats["files"] += 1

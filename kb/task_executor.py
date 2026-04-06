@@ -405,6 +405,10 @@ class TaskExecutor:
 
         vs.set_chunk_strategy(settings.chunk_strategy)
 
+        if processed_chunks > 0:
+            nodes_updated = vs.rebuild_docstore()
+            logger.info(f"docstore 已同步: {nodes_updated} 节点")
+
         self.queue.complete_task(
             task.task_id,
             result={
@@ -654,6 +658,10 @@ class TaskExecutor:
                 f"failed={stats.get('failed', 0)}"
             )
 
+            if stats.get("nodes", 0) > 0:
+                nodes_updated = vs.rebuild_docstore()
+                logger.info(f"[{task_id}] docstore 已同步: {nodes_updated} 节点")
+
             self.queue.update_progress(
                 task_id,
                 progress=100,
@@ -804,6 +812,10 @@ class TaskExecutor:
                 stats["failed"] += 1
 
         await lance_write_queue.wait_until_empty()
+
+        if stats["nodes"] > 0:
+            nodes_updated = vs.rebuild_docstore()
+            logger.info(f"[{task.task_id}] docstore 已同步: {nodes_updated} 节点")
 
         settings = get_settings()
         self.queue.complete_task(

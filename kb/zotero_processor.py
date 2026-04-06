@@ -528,8 +528,6 @@ class ZoteroImporter:
                 logger.debug(f"文档处理完成, 文档数: {len(docs)}")
                 for doc in docs:
                     nodes = node_parser.get_nodes_from_documents([doc])
-                    for i, node in enumerate(nodes):
-                        node.node_id = f"{doc.id_}_{i}"
                     total_nodes += self.processor.save_nodes(
                         vector_store, nodes, progress
                     )
