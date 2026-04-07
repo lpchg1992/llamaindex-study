@@ -1051,6 +1051,8 @@ uv run llamaindex-study config set RESPONSE_MODE refine
 | `USE_SEMANTIC_CHUNKING` | 启用语义分块 | `true`/`false` |
 | `USE_RERANKER` | 启用重排序 | `true`/`false` |
 
+> **组合使用**：HyDE（`USE_HYDE`）、多查询转换（`USE_MULTI_QUERY`）、Auto-Merging（`USE_AUTO_MERGING`）可以任意组合同时启用，组合使用会获得更好的检索质量。
+
 ---
 
 ## 常见使用场景

@@ -748,6 +748,25 @@ curl -X POST "http://localhost:37241/query" \
 
 > **注意**：Auto-Merging 需要知识库使用 `hierarchical` 分块策略（父子节点分块）。如果 KB 使用 `sentence` 或 `semantic` 策略，查询时会自动回退到普通 retriever。
 
+#### 组合使用
+
+HyDE、多查询转换、Auto-Merging 可以任意组合同时使用：
+
+```bash
+# 同时启用 HyDE + 多查询 + Auto-Merging
+curl -X POST "http://localhost:37241/query" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "后备母猪营养需要",
+    "kb_ids": "animal-nutrition-breeding",
+    "use_hyde": true,
+    "use_multi_query": true,
+    "use_auto_merging": true
+  }'
+```
+
+组合使用会消耗更多 LLM 调用和检索时间，但通常能获得更好的检索质量。
+
 #### Response Synthesizer
 
 答案生成模式，可通过 `response_mode` 参数动态指定：
