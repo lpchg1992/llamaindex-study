@@ -8,7 +8,8 @@ import asyncio
 import logging
 import threading
 import time
-from typing import Any, Callable, List, Optional
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+from typing import Any, Callable, Dict, List, Optional
 
 from llama_index.embeddings.ollama import OllamaEmbedding
 from llama_index.llms.ollama import Ollama
@@ -16,15 +17,101 @@ from llama_index.core.constants import DEFAULT_NUM_OUTPUTS, DEFAULT_CONTEXT_WIND
 
 logger = logging.getLogger(__name__)
 
+# 默认配置
+DEFAULT_TIMEOUT = 120.0
+DEFAULT_MAX_CONCURRENT = 2
+CIRCUIT_BREAKER_FAILURE_THRESHOLD = 5
+CIRCUIT_BREAKER_RECOVERY_TIMEOUT = 60.0
+
+
+class CircuitBreaker:
+    """熔断器，防止向故障服务持续发送请求
+
+    当 URL 连续失败次数超过阈值后，熔断打开。
+    熔断打开期间对该 URL 的请求会立即失败。
+    等待恢复超时后，熔断半开，允许一个请求试探。
+    """
+
+    def __init__(
+        self,
+        failure_threshold: int = CIRCUIT_BREAKER_FAILURE_THRESHOLD,
+        recovery_timeout: float = CIRCUIT_BREAKER_RECOVERY_TIMEOUT,
+    ):
+        self._failure_threshold = failure_threshold
+        self._recovery_timeout = recovery_timeout
+        self._failure_count: Dict[str, int] = {}
+        self._last_failure_time: Dict[str, float] = {}
+        self._circuit_state: Dict[str, str] = {}  # "closed", "open", "half-open"
+        self._lock = threading.Lock()
+
+    def _get_state(self, url: str) -> str:
+        state = self._circuit_state.get(url, "closed")
+        if state == "open":
+            time_since_failure = time.time() - self._last_failure_time.get(url, 0)
+            if time_since_failure >= self._recovery_timeout:
+                self._circuit_state[url] = "half-open"
+                return "half-open"
+        return state
+
+    def is_available(self, url: str) -> bool:
+        with self._lock:
+            state = self._get_state(url)
+            return state != "open"
+
+    def record_success(self, url: str):
+        with self._lock:
+            self._failure_count[url] = 0
+            self._circuit_state[url] = "closed"
+
+    def record_failure(self, url: str):
+        with self._lock:
+            self._failure_count[url] = self._failure_count.get(url, 0) + 1
+            self._last_failure_time[url] = time.time()
+            if self._failure_count[url] >= self._failure_threshold:
+                self._circuit_state[url] = "open"
+                logger.warning(
+                    f"Circuit breaker opened for {url} after {self._failure_count[url]} failures"
+                )
+
+    @property
+    def stats(self) -> dict:
+        with self._lock:
+            return {
+                url: {
+                    "failure_count": self._failure_count.get(url, 0),
+                    "state": self._circuit_state.get(url, "closed"),
+                }
+                for url in set(
+                    list(self._failure_count.keys()) + list(self._circuit_state.keys())
+                )
+            }
+
+
+_circuit_breaker: Optional[CircuitBreaker] = None
+
+
+def get_circuit_breaker() -> CircuitBreaker:
+    global _circuit_breaker
+    if _circuit_breaker is None:
+        _circuit_breaker = CircuitBreaker()
+    return _circuit_breaker
+
 
 class _PerURLQueue:
-    """单个 Ollama URL 的请求队列"""
+    """单个 Ollama URL 的请求队列，带超时和熔断器支持"""
 
-    def __init__(self):
-        self._semaphore = threading.Semaphore(1)
+    def __init__(
+        self,
+        max_concurrent: int = DEFAULT_MAX_CONCURRENT,
+        timeout: float = DEFAULT_TIMEOUT,
+    ):
+        self._semaphore = threading.Semaphore(max_concurrent)
+        self._timeout = timeout
+        self._executor = ThreadPoolExecutor(max_workers=max_concurrent)
         self._active_requests = 0
         self._total_requests = 0
         self._total_wait_time = 0.0
+        self._timeouts = 0
         self._request_lock = threading.Lock()
 
     def acquire(self) -> float:
@@ -45,7 +132,12 @@ class _PerURLQueue:
     def call_with_queue(self, func: Callable[..., Any], *args, **kwargs) -> Any:
         self.acquire()
         try:
-            return func(*args, **kwargs)
+            future = self._executor.submit(func, *args, **kwargs)
+            return future.result(timeout=self._timeout)
+        except FutureTimeoutError:
+            with self._request_lock:
+                self._timeouts += 1
+            raise TimeoutError(f"Ollama request timed out after {self._timeout}s")
         finally:
             self.release()
 
@@ -61,6 +153,7 @@ class _PerURLQueue:
                 "active_requests": self._active_requests,
                 "total_requests": self._total_requests,
                 "average_wait_time": avg_wait,
+                "timeouts": self._timeouts,
             }
 
 
@@ -71,6 +164,11 @@ class OllamaRequestQueue:
     此队列通过信号量控制，确保同一时间只有一个请求访问同一 Ollama 服务，
     避免因并发竞争导致的 503 错误。
     不同 URL 的 Ollama 实例相互独立。
+
+    带超时保护和熔断器支持：
+    - 单请求超时：120秒
+    - 每个 URL 最大并发：2
+    - 熔断器阈值：5次连续失败后打开
     """
 
     _instance: Optional["OllamaRequestQueue"] = None
@@ -88,36 +186,72 @@ class OllamaRequestQueue:
         if self._initialized:
             return
         self._initialized = True
-        self._queues: dict[str, _PerURLQueue] = {}
+        self._queues: Dict[str, _PerURLQueue] = {}
         self._queues_lock = threading.Lock()
+        self._circuit_breaker = get_circuit_breaker()
 
     def _get_queue(self, url: str) -> _PerURLQueue:
         with self._queues_lock:
             if url not in self._queues:
-                self._queues[url] = _PerURLQueue()
+                self._queues[url] = _PerURLQueue(
+                    max_concurrent=DEFAULT_MAX_CONCURRENT,
+                    timeout=DEFAULT_TIMEOUT,
+                )
             return self._queues[url]
 
     def call_with_queue(
         self, url: str, func: Callable[..., Any], *args, **kwargs
     ) -> Any:
+        if not self._circuit_breaker.is_available(url):
+            raise CircuitBreakerOpenError(
+                f"Circuit breaker is open for {url}. Service unavailable."
+            )
+
         queue = self._get_queue(url)
         wait_time = queue.acquire()
         logger.debug(
             f"OllamaRequestQueue[{url}]: 请求获得访问权限 (等待 {wait_time:.2f}s)"
         )
         try:
-            return func(*args, **kwargs)
+            result = queue.call_with_queue(func, *args, **kwargs)
+            self._circuit_breaker.record_success(url)
+            return result
+        except TimeoutError:
+            self._circuit_breaker.record_failure(url)
+            raise
+        except Exception as e:
+            error_str = str(e).lower()
+            if "503" in error_str or "service unavailable" in error_str:
+                self._circuit_breaker.record_failure(url)
+            raise
         finally:
             queue.release()
             logger.debug(f"OllamaRequestQueue[{url}]: 请求释放访问权限")
 
     def get_stats(self, url: str) -> dict:
         queue = self._get_queue(url)
-        return queue.stats
+        return {
+            "queue": queue.stats,
+            "circuit_breaker": self._circuit_breaker.stats.get(url, {}),
+        }
 
-    def get_all_stats(self) -> dict[str, dict]:
+    def get_all_stats(self) -> dict:
         with self._queues_lock:
-            return {url: q.stats for url, q in self._queues.items()}
+            return {
+                url: {
+                    "queue": q.stats,
+                    "circuit_breaker": self._circuit_breaker.stats.get(url, {}),
+                }
+                for url, q in self._queues.items()
+            }
+
+
+class CircuitBreakerOpenError(Exception):
+    pass
+
+
+class RetryableError(Exception):
+    pass
 
 
 _ollama_request_queue: Optional[OllamaRequestQueue] = None
@@ -131,7 +265,13 @@ def get_ollama_request_queue() -> OllamaRequestQueue:
 
 
 class OllamaEmbedder(OllamaEmbedding):
-    """Ollama Embedding 封装类，继承自 OllamaEmbedding，支持 503 重试和请求队列"""
+    """Ollama Embedding 封装类，继承自 OllamaEmbedding，支持 503 重试和请求队列
+
+    特性：
+    - 503 重试：模型加载时自动等待和重试
+    - 请求超时：单请求最多等待 120 秒
+    - 熔断器：连续失败后自动暂停向故障服务发请求
+    """
 
     def __init__(
         self,
@@ -146,21 +286,40 @@ class OllamaEmbedder(OllamaEmbedding):
         self._max_retries = max_retries
         self._initial_delay = initial_delay
         self._backoff_factor = backoff_factor
+        self._queue = get_ollama_request_queue()
 
-    def _call_with_retry(self, method, *args, **kwargs):
-        """带重试的调用，使用请求队列确保串行访问"""
+    def _call_with_queue(self, method, *args, **kwargs):
+        try:
+            return self._queue.call_with_queue(self._base_url, method, *args, **kwargs)
+        except (CircuitBreakerOpenError, TimeoutError):
+            raise
+        except Exception as e:
+            error_str = str(e).lower()
+            if "503" in error_str or "service unavailable" in error_str:
+                raise RetryableError(str(e)) from e
+            raise
+
+    def _sync_call_with_retry(self, method, *args, **kwargs):
         last_error: BaseException = Exception("Unknown error")
         delay = self._initial_delay
-        queue = get_ollama_request_queue()
 
         for attempt in range(self._max_retries):
             try:
-                return queue.call_with_queue(self._base_url, method, *args, **kwargs)
-            except Exception as e:
+                return self._call_with_queue(method, *args, **kwargs)
+            except RetryableError as e:
                 last_error = e
+                logger.warning(
+                    f"Embedding[{self._base_url}] 模型加载中 (尝试 {attempt + 1}/{self._max_retries})，"
+                    f"等待 {delay:.1f}s: {e}"
+                )
+                time.sleep(delay)
+                delay *= self._backoff_factor
+            except (CircuitBreakerOpenError, TimeoutError):
+                raise
+            except Exception as e:
                 error_str = str(e).lower()
-
                 if "503" in error_str or "service unavailable" in error_str:
+                    last_error = e
                     logger.warning(
                         f"Embedding[{self._base_url}] 模型加载中 (尝试 {attempt + 1}/{self._max_retries})，"
                         f"等待 {delay:.1f}s: {e}"
@@ -172,23 +331,52 @@ class OllamaEmbedder(OllamaEmbedding):
 
         raise last_error
 
+    async def _async_call_with_retry(self, method, *args, **kwargs):
+        last_error: BaseException = Exception("Unknown error")
+        delay = self._initial_delay
+
+        for attempt in range(self._max_retries):
+            try:
+                coro = method(*args, **kwargs)
+                return await asyncio.wait_for(coro, timeout=DEFAULT_TIMEOUT)
+            except asyncio.TimeoutError:
+                raise TimeoutError(
+                    f"Embedding[{self._base_url}] request timed out after {DEFAULT_TIMEOUT}s"
+                )
+            except Exception as e:
+                last_error = e
+                error_str = str(e).lower()
+                if "503" in error_str or "service unavailable" in error_str:
+                    logger.warning(
+                        f"Embedding[{self._base_url}] async 模型加载中 (尝试 {attempt + 1}/{self._max_retries})，"
+                        f"等待 {delay:.1f}s: {e}"
+                    )
+                    await asyncio.sleep(delay)
+                    delay *= self._backoff_factor
+                else:
+                    raise
+
+        raise last_error
+
     def get_text_embedding(self, text: str) -> List[float]:
-        return self._call_with_retry(super().get_text_embedding, text)
+        return self._sync_call_with_retry(super().get_text_embedding, text)
 
     async def aget_text_embedding(self, text: str) -> List[float]:
-        return self._call_with_retry(super().aget_text_embedding, text)
+        return await self._async_call_with_retry(super().aget_text_embedding, text)
 
     def get_text_embeddings(self, texts: List[str]) -> List[List[float]]:
         results = []
         for text in texts:
-            result = self._call_with_retry(super().get_text_embedding, text)
+            result = self._sync_call_with_retry(super().get_text_embedding, text)
             results.append(result)
         return results
 
     async def aget_text_embeddings(self, texts: List[str]) -> List[List[float]]:
         results = []
         for text in texts:
-            result = await self._call_with_retry(super().aget_text_embedding, text)
+            result = await self._async_call_with_retry(
+                super().aget_text_embedding, text
+            )
             results.append(result)
         return results
 
@@ -289,10 +477,16 @@ def configure_llamaindex_for_siliconflow() -> None:
 
 
 class RetryableOllama(Ollama):
-    """Ollama LLM 子类，支持 503 错误重试
+    """Ollama LLM 子类，支持 503 错误重试、请求超时和熔断器
 
     当 Ollama 模型未加载时，会返回 503 Service Unavailable。
     此子类会自动重试请求，直到模型加载完成。
+
+    特性：
+    - 503 重试：模型加载时自动等待和重试
+    - 请求超时：单请求最多等待 120 秒
+    - 熔断器：连续失败后自动暂停向故障服务发请求
+    - 并发控制：每个 URL 最多 2 个并发请求
     """
 
     def __init__(
@@ -313,25 +507,45 @@ class RetryableOllama(Ollama):
         self._max_retries = max_retries
         self._initial_delay = initial_delay
         self._backoff_factor = backoff_factor
+        self._queue = get_ollama_request_queue()
 
-    def _call_with_retry(self, method_name: str, *args, **kwargs) -> Any:
+    def _call_with_queue(self, method: Callable[..., Any], *args, **kwargs) -> Any:
+        try:
+            return self._queue.call_with_queue(self.base_url, method, *args, **kwargs)
+        except CircuitBreakerOpenError:
+            raise
+        except TimeoutError:
+            raise
+        except Exception as e:
+            error_str = str(e).lower()
+            if "503" in error_str or "service unavailable" in error_str:
+                raise RetryableError(str(e)) from e
+            raise
+
+    def _sync_call_with_retry(self, method_name: str, *args, **kwargs) -> Any:
         import time
-        import logging
 
-        logger = logging.getLogger(__name__)
         last_error: BaseException = Exception("Unknown error")
         delay = self._initial_delay
-        queue = get_ollama_request_queue()
 
         for attempt in range(self._max_retries):
             try:
                 method = getattr(super(), method_name)
-                return queue.call_with_queue(self.base_url, method, *args, **kwargs)
-            except Exception as e:
+                return self._call_with_queue(method, *args, **kwargs)
+            except RetryableError as e:
                 last_error = e
+                logger.warning(
+                    f"Ollama[{self.base_url}] 模型加载中 (尝试 {attempt + 1}/{self._max_retries})，"
+                    f"等待 {delay:.1f}s: {e}"
+                )
+                time.sleep(delay)
+                delay *= self._backoff_factor
+            except (CircuitBreakerOpenError, TimeoutError):
+                raise
+            except Exception as e:
                 error_str = str(e).lower()
-
                 if "503" in error_str or "service unavailable" in error_str:
+                    last_error = e
                     logger.warning(
                         f"Ollama[{self.base_url}] 模型加载中 (尝试 {attempt + 1}/{self._max_retries})，"
                         f"等待 {delay:.1f}s: {e}"
@@ -344,28 +558,64 @@ class RetryableOllama(Ollama):
         raise last_error
 
     def complete(self, prompt: str, **kwargs) -> Any:
-        return self._call_with_retry("complete", prompt, **kwargs)
+        return self._sync_call_with_retry("complete", prompt, **kwargs)
 
     def completion(self, prompt: str, **kwargs) -> Any:
-        return self._call_with_retry("completion", prompt, **kwargs)
+        return self._sync_call_with_retry("completion", prompt, **kwargs)
 
     def predict(self, prompt: str, **kwargs) -> Any:
-        return self._call_with_retry("predict", prompt, **kwargs)
+        return self._sync_call_with_retry("predict", prompt, **kwargs)
 
     def stream_complete(self, prompt: str, **kwargs) -> Any:
-        return self._call_with_retry("stream_complete", prompt, **kwargs)
+        return self._sync_call_with_retry("stream_complete", prompt, **kwargs)
 
     def chat(self, messages: Any, **kwargs) -> Any:
-        return self._call_with_retry("chat", messages, **kwargs)
+        return self._sync_call_with_retry("chat", messages, **kwargs)
 
     def stream_chat(self, messages: Any, **kwargs) -> Any:
-        return self._call_with_retry("stream_chat", messages, **kwargs)
+        return self._sync_call_with_retry("stream_chat", messages, **kwargs)
+
+    async def _async_call_with_retry(self, method_name: str, *args, **kwargs) -> Any:
+        import time
+
+        last_error: BaseException = Exception("Unknown error")
+        delay = self._initial_delay
+
+        for attempt in range(self._max_retries):
+            try:
+                method = getattr(super(), method_name)
+                coro = method(*args, **kwargs)
+                return await asyncio.wait_for(coro, timeout=DEFAULT_TIMEOUT)
+            except asyncio.TimeoutError:
+                raise TimeoutError(
+                    f"Ollama[{self.base_url}] request timed out after {DEFAULT_TIMEOUT}s"
+                )
+            except Exception as e:
+                last_error = e
+                error_str = str(e).lower()
+                if "503" in error_str or "service unavailable" in error_str:
+                    logger.warning(
+                        f"Ollama[{self.base_url}] async 模型加载中 (尝试 {attempt + 1}/{self._max_retries})，"
+                        f"等待 {delay:.1f}s: {e}"
+                    )
+                    await asyncio.sleep(delay)
+                    delay *= self._backoff_factor
+                else:
+                    raise
+
+        raise last_error
 
     async def acomplete(self, prompt: str, **kwargs) -> Any:
-        return self._call_with_retry("acomplete", prompt, **kwargs)
+        return await self._async_call_with_retry("acomplete", prompt, **kwargs)
 
     async def achat(self, messages: Any, **kwargs) -> Any:
-        return self._call_with_retry("achat", messages, **kwargs)
+        return await self._async_call_with_retry("achat", messages, **kwargs)
+
+    async def astream_complete(self, prompt: str, **kwargs) -> Any:
+        return await self._async_call_with_retry("astream_complete", prompt, **kwargs)
+
+    async def astream_chat(self, messages: Any, **kwargs) -> Any:
+        return await self._async_call_with_retry("astream_chat", messages, **kwargs)
 
     async def astream_complete(self, prompt: str, **kwargs) -> Any:
         return self._call_with_retry("astream_complete", prompt, **kwargs)
