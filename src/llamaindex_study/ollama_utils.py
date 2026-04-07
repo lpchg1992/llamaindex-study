@@ -991,6 +991,22 @@ class RetryableSiliconFlowLLM:
             is_function_calling_model=False,
         )
 
+    @property
+    def system_prompt(self) -> Any:
+        return getattr(self._primary_llm, "system_prompt", None)
+
+    @system_prompt.setter
+    def system_prompt(self, value: Any) -> None:
+        setattr(self._primary_llm, "system_prompt", value)
+
+    @property
+    def callback_manager(self) -> Any:
+        return getattr(self._primary_llm, "callback_manager", None)
+
+    @callback_manager.setter
+    def callback_manager(self, value: Any) -> None:
+        setattr(self._primary_llm, "callback_manager", value)
+
     def __repr__(self) -> str:
         if self._use_fallback:
             return f"RetryableSiliconFlowLLM(fallback={self._fallback_model})"
