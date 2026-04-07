@@ -1045,8 +1045,15 @@ def create_llm(
         )
         return OllamaWithSiliconFlowFallback(primary_llm)
     else:
-        configure_llamaindex_for_siliconflow()
-        return LlamaSettings.llm
+        settings = get_settings()
+        return RetryableSiliconFlowLLM(
+            model=settings.siliconflow_model,
+            api_key=settings.siliconflow_api_key or "",
+            api_base=settings.siliconflow_base_url or "",
+            max_retries=3,
+            initial_delay=2.0,
+            backoff_factor=1.5,
+        )
 
 
 def configure_llm_by_model_id(model_id: str) -> Any:
