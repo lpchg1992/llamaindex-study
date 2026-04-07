@@ -1280,66 +1280,59 @@ class QueryRouter:
         query: str,
         top_k: int = 5,
         use_auto_merging: Optional[bool] = None,
+        use_hyde: Optional[bool] = None,
+        use_multi_query: Optional[bool] = None,
+        num_multi_queries: Optional[int] = None,
+        response_mode: Optional[str] = None,
         retrieval_mode: str = "vector",
         model_id: Optional[str] = None,
         embed_model_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        contexts = []
-        sources = []
+        all_sources = []
+        kb_responses = []
 
         for kb_id in kb_ids:
             try:
-                result = SearchService.search(
+                result = SearchService.query(
                     kb_id,
                     query,
-                    top_k=top_k,
-                    use_auto_merging=use_auto_merging,
                     mode=retrieval_mode,
+                    top_k=top_k,
+                    use_hyde=use_hyde,
+                    use_multi_query=use_multi_query,
+                    num_multi_queries=num_multi_queries,
+                    use_auto_merging=use_auto_merging,
+                    response_mode=response_mode,
+                    model_id=model_id,
                     embed_model_id=embed_model_id,
                 )
-                for r in result:
-                    contexts.append(f"[{kb_id}] {r['text']}")
-                    sources.append(
-                        {
-                            "kb_id": kb_id,
-                            "text": r["text"],
-                            "score": r.get("score", 0),
-                        }
-                    )
-            except Exception:
+                kb_responses.append(f"[{kb_id}]\n{result['response']}")
+
+                # Add kb_id to each source
+                for src in result.get("sources", []):
+                    src["kb_id"] = kb_id
+                    all_sources.append(src)
+            except Exception as e:
+                logger = get_logger(__name__)
+                logger.warning(f"知识库 {kb_id} 查询失败: {e}")
                 continue
 
-        if not contexts:
+        if not kb_responses:
             return {
                 "response": "在所有知识库中都没有找到相关内容",
                 "sources": [],
                 "kbs_queried": kb_ids,
             }
 
-        context_text = "\n\n".join(contexts[: top_k * 3])
-        prompt = f"""基于以下上下文信息回答用户问题。如果上下文中没有相关信息，请说明。
+        # Sort sources by score descending
+        all_sources.sort(key=lambda x: x.get("score", 0), reverse=True)
 
-        上下文：
-        {context_text}
-
-        用户问题：{query}
-
-        回答："""
-
-        try:
-            from llamaindex_study.ollama_utils import create_llm
-
-            llm = create_llm(model_id=model_id)
-            response = llm.complete(prompt)
-            answer = response.text.strip()
-        except Exception as e:
-            logger = get_logger(__name__)
-            logger.warning(f"LLM 生成失败: {e}")
-            answer = f"（在 {', '.join(kb_ids)} 中找到 {len(contexts)} 条相关内容）"
+        # Combine responses from all KBs
+        combined_response = "\n\n---\n\n".join(kb_responses)
 
         return {
-            "response": answer,
-            "sources": sources[: top_k * 3],
+            "response": combined_response,
+            "sources": all_sources[: top_k * 3],
             "kbs_queried": kb_ids,
         }
 
@@ -1423,6 +1416,10 @@ class QueryRouter:
             query=query,
             top_k=top_k,
             use_auto_merging=use_auto_merging,
+            use_hyde=use_hyde,
+            use_multi_query=use_multi_query,
+            num_multi_queries=num_multi_queries,
+            response_mode=response_mode,
             retrieval_mode=retrieval_mode,
             model_id=model_id,
             embed_model_id=embed_model_id,
@@ -1503,6 +1500,10 @@ class QueryRouter:
             query=query,
             top_k=top_k,
             use_auto_merging=use_auto_merging,
+            use_hyde=use_hyde,
+            use_multi_query=use_multi_query,
+            num_multi_queries=num_multi_queries,
+            response_mode=response_mode,
             retrieval_mode=retrieval_mode,
             model_id=model_id,
             embed_model_id=embed_model_id,
