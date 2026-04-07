@@ -786,8 +786,23 @@ class OllamaWithSiliconFlowFallback:
 
     @property
     def metadata(self) -> Any:
-        """返回当前使用的 LLM 的 metadata"""
         return self._primary_llm.metadata
+
+    @property
+    def system_prompt(self) -> Any:
+        return getattr(self._primary_llm, "system_prompt", None)
+
+    @property
+    def callback_manager(self) -> Any:
+        return getattr(self._primary_llm, "callback_manager", None)
+
+    @property
+    def is_chat_model(self) -> bool:
+        return True
+
+    @property
+    def is_function_calling_model(self) -> bool:
+        return False
 
 
 class RetryableSiliconFlowLLM:
