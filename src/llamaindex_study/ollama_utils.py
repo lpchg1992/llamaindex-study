@@ -776,6 +776,12 @@ class OllamaWithSiliconFlowFallback:
     async def astream_chat(self, messages: Any, **kwargs) -> Any:
         return self._call_with_fallback("astream_chat", messages, **kwargs)
 
+    def predict(self, prompt: Any, **kwargs: Any) -> Any:
+        return self._call_with_fallback("predict", prompt, **kwargs)
+
+    def apredict(self, prompt: Any, **kwargs: Any) -> Any:
+        return self._call_with_fallback("apredict", prompt, **kwargs)
+
     @property
     def model(self) -> str:
         return self._primary_llm.model
