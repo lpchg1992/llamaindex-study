@@ -166,7 +166,7 @@ class QueryEngineWrapper:
 
         retriever = self._create_retriever()
 
-        if self.use_multi_query and not self.use_hyde:
+        if self.use_multi_query:
             try:
                 from llamaindex_study.query_transform import (
                     MultiQueryFusionRetriever,

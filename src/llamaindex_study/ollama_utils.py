@@ -101,18 +101,20 @@ def configure_global_embed_model(
     base_url: Optional[str] = None,
     chunk_size: int = 512,
     embed_batch_size: int = 10,
-) -> OllamaEmbedding:
+) -> OllamaEmbedder:
+    """配置全局 Embedding 模型（默认使用 OllamaEmbedder，带 503 重试）"""
     settings = get_settings()
-    embed_model = OllamaEmbedding(
+    embed_model = OllamaEmbedder(
         model_name=model or settings.ollama_embed_model,
         base_url=base_url or settings.ollama_base_url,
+        max_retries=settings.ollama_max_retries,
+        initial_delay=settings.ollama_retry_delay,
+        backoff_factor=1.5,
     )
 
     LlamaSettings.embed_model = embed_model
     LlamaSettings.chunk_size = chunk_size
     LlamaSettings.embed_batch_size = embed_batch_size
-
-    return embed_model
 
     return embed_model
 

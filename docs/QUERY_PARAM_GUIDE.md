@@ -765,8 +765,21 @@ A: 尝试以下组合：
 - 上下文不完整 → 启用 `use_auto_merging=true`
 - 答案不相关 → 启用 `use_hyde=true` 重新检索
 
+### Q: HyDE、Multi-Query、Auto-Merging 可以同时使用吗？
+A: **可以**。这三个增强检索的选项可以任意组合使用：
+- `--hyde` + `--multi-query`：HyDE 转换查询，Multi-Query 生成多路变体
+- `--hyde` + `--auto-merging`：HyDE 转换后检索，再自动合并父子节点
+- `--multi-query` + `--auto-merging`：多路检索结果再合并
+- `--hyde` + `--multi-query` + `--auto-merging`：三种全部启用
+
+组合使用会消耗更多 LLM 调用和检索时间，但通常能获得更好的检索质量。
+
 ### Q: 响应太慢
-A: 关闭 `use_hyde`、`use_auto_merging`，使用默认 `compact` 模式。
+A: 延迟主要来自 LLM 调用和检索次数。可以选择性关闭：
+- 关闭 `use_hyde`（每次查询需 LLM 生成假设答案）
+- 关闭 `use_multi_query`（多路检索会增加延迟）
+- 关闭 `use_auto_merging`（合并操作有一定开销）
+- 使用 `retrieval_mode=vector`（关闭 hybrid 混合搜索）
 
 ---
 
