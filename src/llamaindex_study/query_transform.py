@@ -45,7 +45,8 @@ DEFAULT_MULTI_QUERY_PROMPT = """你是一个查询增强专家。你的任务是
 2. 变体之间要有差异化，涵盖问题的不同方面
 3. 保持原问题的核心意图不变
 4. 避免重复，每个变体要有独特价值
-5. 只输出查询变体，每行一个，不要其他解释
+5. 重要：必须保留原问题中的专业术语、动物名称、品种名称等关键实体（如"gilt"、"sow"、"pig"、"swine"、"肉鸡"、"蛋鸡"等），只变换通用描述词
+6. 只输出查询变体，每行一个，不要其他解释
 
 原问题：{query_str}
 
@@ -66,15 +67,49 @@ class MultiQueryConfig:
 
 
 def get_llm():
-    """获取 LLM 实例（用于 HyDE 和 Query Rewriting）"""
-    from llamaindex_study.ollama_utils import configure_llamaindex_for_siliconflow
+    """获取 LLM 实例（用于 HyDE 和 Query Rewriting）
 
-    configure_llamaindex_for_siliconflow()
-
+    优先从模型注册表获取默认 LLM，失败时回退到配置默认值。
+    """
     from llama_index.llms.openai import OpenAI
 
-    settings = get_settings()
+    try:
+        from llamaindex_study.config import get_model_registry
+        from kb.database import init_vendor_db
 
+        registry = get_model_registry()
+        default_llm = registry.get_default("llm")
+
+        if default_llm:
+            vendor_db = init_vendor_db()
+            vendor = vendor_db.get(default_llm["vendor_id"])
+
+            vendor_id = default_llm["vendor_id"]
+            model_id = default_llm["id"]
+
+            api_key = None
+            api_base = None
+
+            if vendor:
+                api_key = vendor.get("api_key")
+                api_base = vendor.get("api_base")
+
+            settings = get_settings()
+            if not api_key:
+                api_key = settings.siliconflow_api_key
+            if not api_base:
+                api_base = settings.siliconflow_base_url
+
+            return OpenAI(
+                model=model_id,
+                api_key=api_key,
+                api_base=api_base,
+                temperature=0.1,
+            )
+    except Exception:
+        pass
+
+    settings = get_settings()
     return OpenAI(
         model=settings.siliconflow_model,
         api_key=settings.siliconflow_api_key,
@@ -274,27 +309,33 @@ class MultiQueryFusionRetriever:
 
         for retriever in self._retrievers:
             nodes = retriever.retrieve(query_str)
-            for node_with_score in nodes:
-                all_nodes_with_scores.append((node_with_score, 1.0, 0))
+            for rank, node_with_score in enumerate(nodes):
+                # 使用原始相似度分数作为权重，并使用实际排名
+                # NodeWithScore.score 是原始向量检索的相似度 (0-1)
+                original_score = getattr(node_with_score, "score", 1.0)
+                all_nodes_with_scores.append(
+                    (node_with_score, original_score, rank + 1)
+                )
 
         return self._rrf_fusion(all_nodes_with_scores, self.top_k)
 
     def _rrf_fusion(self, results: List[tuple], top_k: int) -> List[Any]:
-        """RRF (Reciprocal Rank Fusion) 融合算法
+        """RRF (Reciprocal Rank Fusion) 融合算法 (加权版)
 
-        RRF score = sum(1 / (k + rank)), k=60 by default
+        RRF score = sum(weight / (k + rank)), k=60 by default
+        weight 是原始相似度分数，使高相似度结果在融合时更具影响力
         """
         k = 60
         fused_scores: dict = {}
 
-        for node_with_score, _, rank in results:
+        for node_with_score, weight, rank in results:
             node_id = id(node_with_score.node)
             if node_id not in fused_scores:
                 fused_scores[node_id] = {
                     "node": node_with_score,
                     "score": 0.0,
                 }
-            fused_scores[node_id]["score"] += 1.0 / (k + rank)
+            fused_scores[node_id]["score"] += weight / (k + rank)
 
         sorted_results = sorted(
             fused_scores.values(),

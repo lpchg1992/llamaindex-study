@@ -32,6 +32,31 @@ def cosine_similarity(a: List[float], b: List[float]) -> float:
     return dot / (norm_a * norm_b)
 
 
+def _format_node_with_metadata(node: NodeWithScore) -> str:
+    """将节点及其关键元数据格式化为 reranker 可理解的文本"""
+    metadata = node.metadata or {}
+
+    parts = []
+
+    if file_name := metadata.get("file_name"):
+        parts.append(f"[文档: {file_name}]")
+
+    if page_label := metadata.get("page_label"):
+        parts.append(f"[页码: {page_label}]")
+
+    if source := metadata.get("source"):
+        parts.append(f"[来源: {source}]")
+
+    if categories := metadata.get("categories"):
+        if isinstance(categories, list):
+            parts.append(f"[分类: {' | '.join(categories)}]")
+
+    text = node.get_content(metadata_mode=MetadataMode.NONE)
+    if parts:
+        return " ".join(parts) + f"\n{text}"
+    return text
+
+
 class SiliconFlowReranker(BaseNodePostprocessor):
     """
     SiliconFlow 云端 Reranker（默认推荐）
@@ -56,9 +81,7 @@ class SiliconFlowReranker(BaseNodePostprocessor):
             return nodes
 
         query = query_bundle.query_str
-        documents = [
-            node.get_content(metadata_mode=MetadataMode.NONE) for node in nodes
-        ]
+        documents = [_format_node_with_metadata(node) for node in nodes]
 
         payload = {
             "model": self.model,
@@ -162,9 +185,7 @@ class EmbeddingSimilarityReranker(BaseNodePostprocessor):
 
         print(f"   🔄 Embedding Reranker: 计算 {len(nodes)} 个文档的相似度...")
         query = query_bundle.query_str
-        documents = [
-            node.get_content(metadata_mode=MetadataMode.NONE) for node in nodes
-        ]
+        documents = [_format_node_with_metadata(node) for node in nodes]
 
         query_emb = self._get_embedding(query)
         doc_embs = [self._get_embedding(doc) for doc in documents]

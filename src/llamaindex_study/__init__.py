@@ -1,7 +1,5 @@
 """
-LlamaIndex Study - 一个现代化的 LlamaIndex 学习项目
-
-本包提供了文档加载、索引构建、查询等核心功能的封装。
+LlamaIndex Study
 """
 
 __version__ = "0.1.0"
@@ -47,12 +45,28 @@ from llamaindex_study.vector_store import (
     create_vector_store,
     get_default_vector_store,
 )
+from llamaindex_study.callbacks import (
+    setup_callbacks,
+    get_callback_manager,
+    get_token_counter,
+    get_rag_stats,
+    reset_callbacks,
+)
+from llamaindex_study.chat_engine import (
+    ChatService,
+    ChatStore,
+    get_chat_service,
+)
+from llamaindex_study.structured_extractor import (
+    StructuredExtractor,
+    PydanticProgram,
+    TextToJsonExtractor,
+    get_extractor,
+)
 
 __all__ = [
-    # 配置
     "Settings",
     "get_settings",
-    # 日志
     "get_logger",
     "get_app_logger",
     "get_kb_logger",
@@ -62,7 +76,6 @@ __all__ = [
     "configure_all_loggers",
     "get_log_dir",
     "set_log_dir",
-    # Ollama 工具
     "create_ollama_embedding",
     "configure_global_embed_model",
     "configure_embed_model_by_model_id",
@@ -72,19 +85,28 @@ __all__ = [
     "OllamaEndpoint",
     "get_embedding_service",
     "reset_embedding_service",
-    # 文档处理
     "DocumentReader",
     "SmartDocumentProcessor",
     "load_and_split",
-    # 索引和查询
     "IndexBuilder",
     "QueryEngineWrapper",
     "create_query_engine",
-    # 向量存储
     "VectorStoreType",
     "LanceDBVectorStore",
     "ChromaVectorStore",
     "QdrantVectorStore",
     "create_vector_store",
     "get_default_vector_store",
+    "setup_callbacks",
+    "get_callback_manager",
+    "get_token_counter",
+    "get_rag_stats",
+    "reset_callbacks",
+    "ChatService",
+    "ChatStore",
+    "get_chat_service",
+    "StructuredExtractor",
+    "PydanticProgram",
+    "TextToJsonExtractor",
+    "get_extractor",
 ]
