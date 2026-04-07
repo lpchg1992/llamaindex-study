@@ -524,8 +524,9 @@ def handle_kb_topics_local(args: argparse.Namespace) -> int:
             time.sleep(1)
         return False
 
-    def extract_with_retry(text, max_retries=3):
+    def extract_with_retry(text, max_retries=5, initial_delay=2.0, backoff_factor=1.5):
         prompt = EXTRACT_PROMPT.format(text=text[:2000])
+        delay = initial_delay
         for attempt in range(max_retries):
             try:
                 resp = client.post(
@@ -545,8 +546,11 @@ def handle_kb_topics_local(args: argparse.Namespace) -> int:
                             keywords.append(line)
                     return keywords
                 elif resp.status_code == 503:
-                    print(f"  [模型加载中，重试 {attempt + 1}/{max_retries}]")
-                    time.sleep(2)
+                    print(
+                        f"  [模型加载中，重试 {attempt + 1}/{max_retries}，等待 {delay:.1f}s]"
+                    )
+                    time.sleep(delay)
+                    delay *= backoff_factor
                 else:
                     return []
             except Exception as e:

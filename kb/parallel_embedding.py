@@ -76,12 +76,27 @@ class ParallelEmbeddingProcessor:
             return
         self._initialized = True
 
+        self._executor = ThreadPoolExecutor(max_workers=4)
+        self._models: Dict[str, OllamaEmbedder] = {}
+        self._lock = threading.Lock()
+        self._model_name: str = EMBEDDING_MODEL
+        self._consecutive_failures: Dict[str, int] = {}
+        self._chunk_queue: deque = deque()
+        self._results: Dict[int, EmbeddingResult] = {}
+        self._pending_count = 0
+
         self.endpoints = self._load_embedding_endpoints()
         if not self.endpoints:
             endpoint_configs = settings.get_ollama_endpoints()
             self.endpoints = [
                 EmbeddingEndpoint(name, url) for name, url in endpoint_configs
             ]
+
+        for ep in self.endpoints:
+            self._consecutive_failures[ep.name] = 0
+
+        self._stats: Dict[str, int] = {ep.name: 0 for ep in self.endpoints}
+        self._failures: Dict[str, int] = {ep.name: 0 for ep in self.endpoints}
 
         if len(self.endpoints) == 1:
             logger.info(
@@ -90,19 +105,6 @@ class ParallelEmbeddingProcessor:
         else:
             endpoint_info = ", ".join(f"{ep.name}:{ep.url}" for ep in self.endpoints)
             logger.info(f"多端点并行模式: {endpoint_info}")
-
-        self._executor = ThreadPoolExecutor(max_workers=len(self.endpoints))
-        self._models: Dict[str, OllamaEmbedder] = {}
-        self._stats: Dict[str, int] = {ep.name: 0 for ep in self.endpoints}
-        self._failures: Dict[str, int] = {ep.name: 0 for ep in self.endpoints}
-        self._consecutive_failures: Dict[str, int] = {
-            ep.name: 0 for ep in self.endpoints
-        }
-        self._lock = threading.Lock()
-        self._chunk_queue: deque = deque()
-        self._results: Dict[int, EmbeddingResult] = {}
-        self._pending_count = 0
-        self._model_name: str = EMBEDDING_MODEL
 
         # 健康检查任务
         self._health_check_task: Optional[asyncio.Task] = None
@@ -153,13 +155,15 @@ class ParallelEmbeddingProcessor:
                 model_name=model_name,
             )
 
-            if self._health_check(base_url, model_name):
+            is_healthy = self._health_check(base_url, model_name)
+            if is_healthy:
                 ep.is_healthy = True
                 logger.debug(f"端点健康检查通过: {ep.name} ({base_url})")
             else:
-                ep.is_healthy = False
+                ep.is_healthy = True
+                self._consecutive_failures[ep.name] = 0
                 logger.warning(
-                    f"端点健康检查失败: {ep.name} ({base_url})，已标记为不健康"
+                    f"端点 {ep.name} ({base_url}) 初始检查未通过，将在健康检查循环中重试"
                 )
 
             endpoints.append(ep)
@@ -185,28 +189,54 @@ class ParallelEmbeddingProcessor:
         )
         return endpoints
 
-    def _health_check(self, url: str, model_name: str, timeout: float = 5.0) -> bool:
-        """验证端点是否可用（发送小文本测试）"""
+    def _health_check_with_retry(self, url: str, model_name: str) -> bool:
+        """验证端点是否可用（带 503 重试机制）"""
         import httpx
 
-        try:
-            response = httpx.post(
-                f"{url}/api/embeddings",
-                json={"model": model_name, "prompt": "health check test"},
-                timeout=timeout,
-            )
-            return response.status_code == 200
-        except Exception as e:
-            logger.debug(f"健康检查失败 {url}: {e}")
-            return False
+        max_retries = 3
+        initial_delay = 2.0
+        backoff_factor = 1.5
+        delay = initial_delay
+
+        for attempt in range(max_retries):
+            try:
+                response = httpx.post(
+                    f"{url}/api/embeddings",
+                    json={"model": model_name, "prompt": "health check test"},
+                    timeout=10.0,
+                )
+                if response.status_code == 200:
+                    return True
+                elif response.status_code == 503:
+                    logger.debug(
+                        f"端点 {url} 模型加载中 (尝试 {attempt + 1}/{max_retries})，等待 {delay:.1f}s"
+                    )
+                    time.sleep(delay)
+                    delay *= backoff_factor
+                else:
+                    return False
+            except Exception as e:
+                logger.debug(f"健康检查失败 {url}: {e}")
+                if attempt == max_retries - 1:
+                    return False
+                time.sleep(delay)
+                delay *= backoff_factor
+        return False
+
+    def _health_check(self, url: str, model_name: str, timeout: float = 5.0) -> bool:
+        """验证端点是否可用（发送小文本测试）- 兼容旧接口"""
+        return self._health_check_with_retry(url, model_name)
 
     async def _health_check_loop(self):
         """持续健康检查循环 - 定期检查所有端点的健康状态"""
         while True:
             try:
                 for ep in self.endpoints:
+                    if ep.url == "siliconflow://":
+                        continue
+
                     is_healthy = await asyncio.get_event_loop().run_in_executor(
-                        None, lambda: self._sync_health_check(ep)
+                        None, lambda e=ep: self._sync_health_check_with_retry(e)
                     )
 
                     with self._lock:
@@ -216,6 +246,17 @@ class ParallelEmbeddingProcessor:
                             ep.is_healthy = True
                             ep.last_error = None
                             self._consecutive_failures[ep.name] = 0
+                        else:
+                            self._consecutive_failures[ep.name] += 1
+                            if (
+                                self._consecutive_failures[ep.name]
+                                >= self._failure_threshold
+                            ):
+                                if ep.is_healthy:
+                                    logger.warning(
+                                        f"[{ep.name}] 连续 {self._consecutive_failures[ep.name]} 次健康检查失败，标记为不健康"
+                                    )
+                                ep.is_healthy = False
 
             except asyncio.CancelledError:
                 break
@@ -225,16 +266,39 @@ class ParallelEmbeddingProcessor:
             await asyncio.sleep(self._health_check_interval)
 
     def _sync_health_check(self, ep: EmbeddingEndpoint) -> bool:
-        """同步健康检查（在线程池中运行）"""
-        try:
-            response = httpx.post(
-                f"{ep.url}/api/embeddings",
-                json={"model": ep.model_name or self._model_name, "prompt": "health"},
-                timeout=10.0,
-            )
-            return response.status_code == 200
-        except Exception:
-            return False
+        """同步健康检查（在线程池中运行）- 兼容旧接口"""
+        return self._sync_health_check_with_retry(ep)
+
+    def _sync_health_check_with_retry(self, ep: EmbeddingEndpoint) -> bool:
+        """同步健康检查（带 503 重试机制）"""
+        max_retries = 3
+        initial_delay = 2.0
+        backoff_factor = 1.5
+        delay = initial_delay
+
+        for attempt in range(max_retries):
+            try:
+                response = httpx.post(
+                    f"{ep.url}/api/embeddings",
+                    json={
+                        "model": ep.model_name or self._model_name,
+                        "prompt": "health",
+                    },
+                    timeout=10.0,
+                )
+                if response.status_code == 200:
+                    return True
+                elif response.status_code == 503:
+                    time.sleep(delay)
+                    delay *= backoff_factor
+                else:
+                    return False
+            except Exception:
+                if attempt == max_retries - 1:
+                    return False
+                time.sleep(delay)
+                delay *= backoff_factor
+        return False
 
     def set_model_by_model_id(self, model_id: str) -> None:
         """根据模型ID设置当前使用的 embedding 模型
@@ -374,39 +438,61 @@ class ParallelEmbeddingProcessor:
         规则：
         - 只从 is_healthy=True 的端点中选择
         - SiliconFlow 端点始终视为健康（跳过健康检查）
-        - 如果所有 Ollama 端点都不健康但 SiliconFlow 可用，返回 SiliconFlow
+        - 如果所有 Ollama 端点都不健康但 SiliconFlow 可用，尝试重新检查 Ollama 后再决定
         - 绝不会强制使用 unhealthy 的 Ollama 端点
         """
         with self._lock:
-            healthy_eps = [ep for ep in self.endpoints if ep.is_healthy]
-            if not healthy_eps:
-                sf_ep = next(
-                    (ep for ep in self.endpoints if ep.url == "siliconflow://"), None
-                )
-                if sf_ep:
-                    logger.warning("所有 Ollama 端点不健康，回退到 SiliconFlow")
-                    return sf_ep
-                logger.error("无可用端点（包含 SiliconFlow）")
-                return self.endpoints[0]
+            healthy_eps = [
+                ep
+                for ep in self.endpoints
+                if ep.is_healthy and ep.url != "siliconflow://"
+            ]
 
-            best_ep = healthy_eps[0]
-            best_score = float("inf")
+            if healthy_eps:
+                best_ep = healthy_eps[0]
+                best_score = float("inf")
 
-            for ep in healthy_eps:
-                if ep.inflight >= 3:
-                    continue
-                if len(healthy_eps) > 1 and ep.total_time > 0:
-                    throughput = ep.chunks_completed / ep.total_time
-                    score = 1.0 / throughput if throughput > 0 else float("inf")
-                    score += ep.inflight * 0.5
-                else:
-                    score = ep.inflight
+                for ep in healthy_eps:
+                    if ep.inflight >= 3:
+                        continue
+                    if len(healthy_eps) > 1 and ep.total_time > 0:
+                        throughput = ep.chunks_completed / ep.total_time
+                        score = 1.0 / throughput if throughput > 0 else float("inf")
+                        score += ep.inflight * 0.5
+                    else:
+                        score = ep.inflight
 
-                if score < best_score:
-                    best_score = score
-                    best_ep = ep
+                    if score < best_score:
+                        best_score = score
+                        best_ep = ep
 
-            return best_ep
+                return best_ep
+
+            unhealthy_eps = [
+                ep
+                for ep in self.endpoints
+                if not ep.is_healthy and ep.url != "siliconflow://"
+            ]
+            if unhealthy_eps:
+                logger.warning(f"所有 Ollama 端点不健康，尝试重新检查...")
+                for ep in unhealthy_eps:
+                    is_healthy = self._sync_health_check_with_retry(ep)
+                    if is_healthy:
+                        ep.is_healthy = True
+                        ep.last_error = None
+                        self._consecutive_failures[ep.name] = 0
+                        logger.info(f"[{ep.name}] 重新检查成功，标记为健康")
+                        return ep
+
+            sf_ep = next(
+                (ep for ep in self.endpoints if ep.url == "siliconflow://"), None
+            )
+            if sf_ep:
+                logger.warning("所有 Ollama 端点不健康，回退到 SiliconFlow")
+                return sf_ep
+
+            logger.error("无可用端点（包含 SiliconFlow）")
+            return self.endpoints[0]
 
     async def get_embedding(self, text: str, ep_name: str) -> EmbeddingResult:
         """异步获取单个 embedding"""

@@ -1040,7 +1040,7 @@ SILICONFLOW_MODEL=Pro/deepseek-ai/DeepSeek-V3.2
 OLLAMA_EMBED_MODEL=bge-m3
 EMBEDDING_DIM=1024
 OLLAMA_LOCAL_URL=http://localhost:11434
-OLLAMA_REMOTE_URL=http://192.168.31.169:11434
+OLLAMA_REMOTE_URL=
 
 # ==================== 存储配置 ====================
 OBSIDIAN_VAULT_ROOT=~/Documents/Obsidian Vault
@@ -1072,9 +1072,9 @@ DEFAULT_VAULT_ROOT = Path.home() / "Documents" / "Obsidian Vault"
 EMBEDDING_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "bge-m3")
 EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "1024"))
 DEFAULT_LOCAL_URL = os.getenv("OLLAMA_LOCAL_URL", "http://localhost:11434")
-DEFAULT_REMOTE_URL = os.getenv("OLLAMA_REMOTE_URL", "http://localhost:11434")
-MAX_RETRIES = 3
-RETRY_DELAY = 1.0
+DEFAULT_REMOTE_URL = os.getenv("OLLAMA_REMOTE_URL", "")
+MAX_RETRIES = 5
+RETRY_DELAY = 2.0
 
 # kb/task_executor.py
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "512"))

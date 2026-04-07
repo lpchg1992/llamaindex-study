@@ -82,8 +82,8 @@ class Settings:
         self.ollama_embed_model: str = os.getenv(
             "OLLAMA_EMBED_MODEL", self._DEFAULT_OLLAMA_EMBED_MODEL
         )
-        self.ollama_max_retries: int = int(os.getenv("MAX_RETRIES", "3"))
-        self.ollama_retry_delay: float = float(os.getenv("RETRY_DELAY", "1.0"))
+        self.ollama_max_retries: int = int(os.getenv("MAX_RETRIES", "5"))
+        self.ollama_retry_delay: float = float(os.getenv("RETRY_DELAY", "2.0"))
         self.ollama_short_text_threshold: int = int(
             os.getenv("OLLAMA_SHORT_TEXT_THRESHOLD", "600")
         )

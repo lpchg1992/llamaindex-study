@@ -1147,8 +1147,8 @@ CLI 工具读取以下环境变量（参见 `.env.example`）：
 | `SILICONFLOW_API_KEY` | 硅基流动 API Key | - |
 | `SILICONFLOW_MODEL` | LLM 模型 | `Pro/deepseek-ai/DeepSeek-V3.2` |
 | `OLLAMA_EMBED_MODEL` | Embedding 模型 | `bge-m3` |
-| `OLLAMA_LOCAL_URL` | 本地 Ollama | `http://localhost:11434` |
-| `OLLAMA_REMOTE_URL` | 远程 Ollama | 空（禁用） |
+| `OLLAMA_LOCAL_URL` | 本地 Ollama（仅作 fallback） | `http://localhost:11434` |
+| `OLLAMA_REMOTE_URL` | 备用 Ollama（仅作 fallback） | 空 |
 | `OBSIDIAN_VAULT_ROOT` | Obsidian Vault 根目录 | `~/Documents/Obsidian Vault` |
 | `PERSIST_DIR` | 向量存储目录（通用 KB） | `/Volumes/online/llamaindex` |
 | `ZOTERO_PERSIST_DIR` | Zotero 存储目录 | `/Volumes/online/llamaindex/zotero` |

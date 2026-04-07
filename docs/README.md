@@ -224,8 +224,8 @@ curl -X POST "http://localhost:37241/query" \
 | `SILICONFLOW_MODEL` | `Pro/deepseek-ai/DeepSeek-V3.2` | LLM 模型 |
 | `OLLAMA_EMBED_MODEL` | `bge-m3` | Embedding 模型 |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | 默认 Ollama 地址 |
-| `OLLAMA_LOCAL_URL` | `http://localhost:11434` | 本地 Ollama |
-| `OLLAMA_REMOTE_URL` | 空 | 远程 Ollama，留空表示禁用 |
+| `OLLAMA_LOCAL_URL` | `http://localhost:11434` | 本地 Ollama（仅作 fallback） |
+| `OLLAMA_REMOTE_URL` | 空 | 备用 Ollama（仅作 fallback） |
 | `OBSIDIAN_VAULT_ROOT` | `~/Documents/Obsidian Vault` | Vault 目录 |
 | `PERSIST_DIR` | `/Volumes/online/llamaindex` | 向量存储目录 |
 | `ZOTERO_PERSIST_DIR` | `/Volumes/online/llamaindex/zotero` | Zotero 存储目录 |
@@ -233,7 +233,7 @@ curl -X POST "http://localhost:37241/query" \
 | `CHUNK_SIZE` | `1024` | 分块大小 |
 | `CHUNK_OVERLAP` | `100` | 分块重叠 |
 | `HIERARCHICAL_CHUNK_SIZES` | `2048,1024,512` | 层级分块各层大小 |
-| `MAX_RETRIES` | `3` | 最大重试次数 |
+| `MAX_RETRIES` | `5` | 最大重试次数 |
 | `MAX_CONCURRENT_TASKS` | `10` | 最大并发 |
 
 ## 常见问题
@@ -241,8 +241,8 @@ curl -X POST "http://localhost:37241/query" \
 ### Q: 如何添加新的数据源？
 参见 [ARCHITECTURE.md - 扩展指南](../docs/ARCHITECTURE.md#扩展指南)
 
-### Q: 如何配置多个 Ollama 端点？
-设置 `OLLAMA_LOCAL_URL` 和 `OLLAMA_REMOTE_URL` 环境变量
+### Q: Embedding 端点如何选择？
+端点配置基于数据库中的 `vendor` 和 `model` 表，通过健康检查自动选择。所有 Ollama 端点均通过健康检查动态调度，全部失败时自动 fallback 到 SiliconFlow。
 
 ### Q: 如何禁用增量同步？
 在导入参数中设置 `rebuild=True` 或使用 `--rebuild` 参数
