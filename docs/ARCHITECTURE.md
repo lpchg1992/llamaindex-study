@@ -1037,10 +1037,9 @@ SILICONFLOW_API_KEY=your_api_key
 SILICONFLOW_MODEL=Pro/deepseek-ai/DeepSeek-V3.2
 
 # ==================== Embedding 配置 ====================
+# 注意: Ollama 供应商和模型通过 CLI/API 管理，不要在此配置
 OLLAMA_EMBED_MODEL=bge-m3
 EMBEDDING_DIM=1024
-OLLAMA_LOCAL_URL=http://localhost:11434
-OLLAMA_REMOTE_URL=
 
 # ==================== 存储配置 ====================
 OBSIDIAN_VAULT_ROOT=~/Documents/Obsidian Vault
@@ -1071,8 +1070,6 @@ DEFAULT_VAULT_ROOT = Path.home() / "Documents" / "Obsidian Vault"
 # kb/parallel_embedding.py
 EMBEDDING_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "bge-m3")
 EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "1024"))
-DEFAULT_LOCAL_URL = os.getenv("OLLAMA_LOCAL_URL", "http://localhost:11434")
-DEFAULT_REMOTE_URL = os.getenv("OLLAMA_REMOTE_URL", "")
 MAX_RETRIES = 5
 RETRY_DELAY = 2.0
 

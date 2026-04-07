@@ -222,10 +222,7 @@ curl -X POST "http://localhost:37241/query" \
 |------|--------|------|
 | `SILICONFLOW_API_KEY` | - | 硅基流动 API Key |
 | `SILICONFLOW_MODEL` | `Pro/deepseek-ai/DeepSeek-V3.2` | LLM 模型 |
-| `OLLAMA_EMBED_MODEL` | `bge-m3` | Embedding 模型 |
-| `OLLAMA_BASE_URL` | `http://localhost:11434` | 默认 Ollama 地址 |
-| `OLLAMA_LOCAL_URL` | `http://localhost:11434` | 本地 Ollama（仅作 fallback） |
-| `OLLAMA_REMOTE_URL` | 空 | 备用 Ollama（仅作 fallback） |
+| `OLLAMA_EMBED_MODEL` | `bge-m3` | Embedding 模型（需先添加供应商） |
 | `OBSIDIAN_VAULT_ROOT` | `~/Documents/Obsidian Vault` | Vault 目录 |
 | `PERSIST_DIR` | `/Volumes/online/llamaindex` | 向量存储目录 |
 | `ZOTERO_PERSIST_DIR` | `/Volumes/online/llamaindex/zotero` | Zotero 存储目录 |
@@ -235,6 +232,8 @@ curl -X POST "http://localhost:37241/query" \
 | `HIERARCHICAL_CHUNK_SIZES` | `2048,1024,512` | 层级分块各层大小 |
 | `MAX_RETRIES` | `5` | 最大重试次数 |
 | `MAX_CONCURRENT_TASKS` | `10` | 最大并发 |
+
+> **注意**: Ollama 供应商和模型通过 CLI/API 管理，参见 `vendor add` / `model add` 命令。
 
 ## 常见问题
 

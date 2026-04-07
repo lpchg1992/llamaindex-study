@@ -55,10 +55,7 @@ Chunk 队列：
 
 端点配置基于数据库中的 `vendor` 和 `model` 表，通过健康检查动态选择。所有 Ollama 端点均通过健康检查调度，全部失败时自动 fallback 到 SiliconFlow。
 
-配置文件（环境变量，仅作 fallback）：
-- 本地: `OLLAMA_LOCAL_URL` (默认: `http://localhost:11434`)
-- 备用: `OLLAMA_REMOTE_URL` (默认: 空)
-- 重试次数: `MAX_RETRIES` (默认: 5)
+> **注意**: Ollama 供应商和端点通过 CLI/API 管理，参见 `vendor add` / `model add` 命令。
 
 ### 任务队列
 
@@ -1066,9 +1063,8 @@ curl -X POST "http://localhost:37241/search" \
 |------|--------|------|
 | `OLLAMA_EMBED_MODEL` | `bge-m3` | Embedding 模型名称 |
 | `EMBEDDING_DIM` | `1024` | Embedding 向量维度 |
-| `OLLAMA_BASE_URL` | `http://localhost:11434` | 默认 Ollama 地址 |
-| `OLLAMA_LOCAL_URL` | `http://localhost:11434` | 本地 Ollama（仅作 fallback） |
-| `OLLAMA_REMOTE_URL` | 空 | 备用 Ollama（仅作 fallback） |
+
+> **注意**: Ollama 供应商通过 CLI/API 管理（`vendor add` / `model add`），端点配置存储在数据库中。
 
 ### 任务处理配置
 

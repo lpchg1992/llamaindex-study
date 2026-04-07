@@ -283,46 +283,21 @@ class ModelRegistry:
         )
 
     def _seed_default_vendors(self, vendor_db):
-        """填充默认供应商（支持多端点 Ollama）"""
+        """填充默认供应商（仅 SiliconFlow，Ollama 需通过 CLI/API 管理）"""
         settings = get_settings()
-        vendors = [
-            {
-                "vendor_id": "siliconflow",
-                "name": "SiliconFlow",
-                "api_base": settings.siliconflow_base_url,
-                "api_key": settings.siliconflow_api_key,
-            },
-        ]
 
-        # Ollama 端点：ollama = 本地，ollama_home = 远端
-        if settings.ollama_local_url:
-            vendor_db.upsert(
-                vendor_id="ollama",
-                name="Ollama",
-                api_base=settings.ollama_local_url,
-                api_key=None,
-            )
-        if (
-            settings.ollama_remote_url
-            and settings.ollama_remote_url != settings.ollama_local_url
-        ):
-            vendor_db.upsert(
-                vendor_id="ollama_home",
-                name="Ollama Home",
-                api_base=settings.ollama_remote_url,
-                api_key=None,
-            )
-        if not settings.ollama_local_url and not settings.ollama_remote_url:
-            vendor_db.upsert(
-                vendor_id="ollama",
-                name="Ollama",
-                api_base=settings.ollama_base_url,
-                api_key=None,
-            )
+        # SiliconFlow 是必须的（用于 reranker 和 fallback embedding）
+        vendor_db.upsert(
+            vendor_id="siliconflow",
+            name="SiliconFlow",
+            api_base=settings.siliconflow_base_url,
+            api_key=settings.siliconflow_api_key,
+        )
 
-        for v in vendors:
-            vendor_db.upsert(**v)
-        logger.debug(f"已填充默认供应商: {[v['vendor_id'] for v in vendors]}")
+        logger.debug("已填充默认供应商: [siliconflow]")
+        logger.debug(
+            "注意: Ollama 供应商需通过 CLI 'vendor add' 或 API POST /vendors 添加"
+        )
 
     def _load_defaults_from_config(self):
         """从配置加载默认模型（支持多端点 embedding）"""
