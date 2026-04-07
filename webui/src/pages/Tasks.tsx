@@ -1,8 +1,10 @@
 import { useState } from 'react'
-import { useKBTasks, useCancelTask, usePauseTask, useResumeTask, usePauseAllTasks, useResumeAllTasks, useDeleteAllTasks, useCleanupTasks } from '@/api/hooks'
+import { useKBTasks, useCancelTask, usePauseTask, useResumeTask, usePauseAllTasks, useResumeAllTasks, useDeleteAllTasks, useCleanupTasks, useTask, useDeleteTask } from '@/api/hooks'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import {
   Select,
   SelectContent,
@@ -15,16 +17,195 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
+  DialogFooter,
+  DialogDescription,
 } from '@/components/ui/dialog'
-import { Pause, Play, X, RefreshCw, Loader2, PauseCircle, PlayCircle, Trash2, Wrench } from 'lucide-react'
+import { ScrollArea } from '@/components/ui/scroll-area'
+import { Pause, Play, X, RefreshCw, Loader2, PauseCircle, PlayCircle, Trash2, Wrench, Eye, Info, AlertTriangle } from 'lucide-react'
 import { toast } from 'sonner'
 import type { TaskResponse } from '@/types/api'
 
-function TaskCard({ task }: { task: TaskResponse }) {
+interface TaskDetailDialogProps {
+  taskId: string
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}
+
+function TaskDetailDialog({ taskId, open, onOpenChange }: TaskDetailDialogProps) {
+  const { data: task, isLoading } = useTask(taskId)
+
+  if (!open) return null
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl max-h-[80vh]">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Eye className="h-5 w-5" />
+            Task Details
+          </DialogTitle>
+          <DialogDescription>
+            Task ID: {taskId}
+          </DialogDescription>
+        </DialogHeader>
+        {isLoading ? (
+          <div className="flex items-center justify-center py-8">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          </div>
+        ) : task ? (
+          <ScrollArea className="h-[60vh]">
+            <div className="space-y-4 p-1">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label className="text-muted-foreground">Task ID</Label>
+                  <p className="font-mono text-sm break-all">{task.task_id}</p>
+                </div>
+                <div>
+                  <Label className="text-muted-foreground">Status</Label>
+                  <div className="mt-1">
+                    <Badge className={
+                      task.status === 'completed' ? 'bg-green-500' :
+                      task.status === 'failed' ? 'bg-red-500' :
+                      task.status === 'running' ? 'bg-blue-500' :
+                      task.status === 'paused' ? 'bg-orange-500' :
+                      task.status === 'cancelled' ? 'bg-gray-500' : 'bg-yellow-500'
+                    }>
+                      {task.status}
+                    </Badge>
+                  </div>
+                </div>
+                <div>
+                  <Label className="text-muted-foreground">Knowledge Base</Label>
+                  <p className="font-mono text-sm">{task.kb_id || 'N/A'}</p>
+                </div>
+                <div>
+                  <Label className="text-muted-foreground">Progress</Label>
+                  <p className="font-medium">{task.progress}%</p>
+                </div>
+              </div>
+
+              {task.result && (
+                <div>
+                  <Label className="text-muted-foreground">Result</Label>
+                  <div className="mt-1 p-3 bg-muted rounded-lg">
+                    <pre className="text-xs whitespace-pre-wrap break-all">
+                      {JSON.stringify(task.result, null, 2)}
+                    </pre>
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <Label className="text-muted-foreground">Message</Label>
+                <p className="text-sm mt-1">{task.message || 'No message'}</p>
+              </div>
+
+              {task.error && (
+                <div>
+                  <Label className="text-destructive">Error</Label>
+                  <p className="text-sm text-destructive mt-1 p-3 bg-destructive/10 rounded-lg">
+                    {task.error}
+                  </p>
+                </div>
+              )}
+            </div>
+          </ScrollArea>
+        ) : (
+          <p className="text-center text-muted-foreground py-8">Task not found</p>
+        )}
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+interface DeleteTaskDialogProps {
+  task: TaskResponse | null
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onConfirm: (cleanup: boolean) => void
+  isDeleting: boolean
+}
+
+function DeleteTaskDialog({ task, open, onOpenChange, onConfirm, isDeleting }: DeleteTaskDialogProps) {
+  const [confirmText, setConfirmText] = useState('')
+  const taskId = task?.task_id || ''
+
+  const handleOpenChange = (newOpen: boolean) => {
+    if (!newOpen) setConfirmText('')
+    onOpenChange(newOpen)
+  }
+
+  const isConfirmed = confirmText === taskId
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-destructive">
+            <AlertTriangle className="h-5 w-5" />
+            Delete Task
+          </DialogTitle>
+          <DialogDescription>
+            This action cannot be undone.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4 py-4">
+          <div className="p-3 bg-muted rounded-lg">
+            <div className="grid grid-cols-2 gap-2 text-sm">
+              <div><span className="text-muted-foreground">KB:</span> <span className="font-mono">{task?.kb_id}</span></div>
+              <div><span className="text-muted-foreground">Status:</span> <Badge>{task?.status}</Badge></div>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="delete-confirm">Type task ID to confirm deletion</Label>
+            <Input
+              id="delete-confirm"
+              value={confirmText}
+              onChange={(e) => setConfirmText(e.target.value)}
+              placeholder={taskId}
+              className="font-mono"
+            />
+            <p className="text-xs text-muted-foreground">
+              Task ID: <code className="bg-muted px-1 rounded">{taskId}</code>
+            </p>
+          </div>
+        </div>
+        <DialogFooter className="gap-2">
+          <Button variant="outline" onClick={() => handleOpenChange(false)} disabled={isDeleting}>
+            Cancel
+          </Button>
+          <Button
+            variant="destructive"
+            onClick={() => onConfirm(false)}
+            disabled={!isConfirmed || isDeleting}
+          >
+            {isDeleting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+            Delete Task
+          </Button>
+          {task?.status === 'failed' || task?.status === 'cancelled' ? (
+            <Button
+              variant="destructive"
+              onClick={() => onConfirm(true)}
+              disabled={!isConfirmed || isDeleting}
+              className="bg-orange-600 hover:bg-orange-700"
+            >
+              {isDeleting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Delete + Cleanup
+            </Button>
+          ) : null}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function TaskCard({ task, onShowDetails }: { task: TaskResponse; onShowDetails: (taskId: string) => void }) {
   const cancelTask = useCancelTask()
   const pauseTask = usePauseTask()
   const resumeTask = useResumeTask()
+  const deleteTask = useDeleteTask()
+  const [deleteDialog, setDeleteDialog] = useState(false)
 
   const statusColors: Record<string, string> = {
     pending: 'bg-yellow-500',
@@ -38,80 +219,108 @@ function TaskCard({ task }: { task: TaskResponse }) {
   const handlePause = async () => {
     try {
       await pauseTask.mutateAsync(task.task_id)
+      toast.success('Task paused')
     } catch (error) {
-      console.error('Failed to pause:', error)
+      toast.error('Failed to pause task')
     }
   }
 
   const handleResume = async () => {
     try {
       await resumeTask.mutateAsync(task.task_id)
+      toast.success('Task resumed')
     } catch (error) {
-      console.error('Failed to resume:', error)
+      toast.error('Failed to resume task')
     }
   }
 
   const handleCancel = async () => {
-    if (!confirm('Cancel this task?')) return
     try {
       await cancelTask.mutateAsync(task.task_id)
+      toast.success('Task cancelled')
     } catch (error) {
-      console.error('Failed to cancel:', error)
+      toast.error('Failed to cancel task')
     }
   }
 
   return (
-    <Card>
-      <CardHeader className="pb-2">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <CardTitle className="text-sm font-mono">{task.task_id.slice(0, 8)}...</CardTitle>
-            <Badge className={statusColors[task.status]}>{task.status}</Badge>
-          </div>
-          <div className="flex gap-1">
-            {task.status === 'running' && (
-              <Button variant="ghost" size="icon" onClick={handlePause}>
-                <Pause className="h-4 w-4" />
+    <>
+      <Card>
+        <CardHeader className="pb-2">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => onShowDetails(task.task_id)}>
+                <Info className="h-4 w-4" />
               </Button>
-            )}
-            {task.status === 'paused' && (
-              <Button variant="ghost" size="icon" onClick={handleResume}>
-                <Play className="h-4 w-4" />
-              </Button>
-            )}
-            {(task.status === 'pending' || task.status === 'running' || task.status === 'paused') && (
-              <Button variant="ghost" size="icon" onClick={handleCancel}>
-                <X className="h-4 w-4" />
-              </Button>
+              <CardTitle className="text-sm font-mono">{task.task_id.slice(0, 8)}...</CardTitle>
+              <Badge className={statusColors[task.status]}>{task.status}</Badge>
+            </div>
+            <div className="flex gap-1">
+              {task.status === 'running' && (
+                <Button variant="ghost" size="icon" onClick={handlePause} title="Pause task">
+                  <Pause className="h-4 w-4" />
+                </Button>
+              )}
+              {task.status === 'paused' && (
+                <Button variant="ghost" size="icon" onClick={handleResume} title="Resume task">
+                  <Play className="h-4 w-4" />
+                </Button>
+              )}
+              {(task.status === 'pending' || task.status === 'running' || task.status === 'paused') && (
+                <Button variant="ghost" size="icon" onClick={handleCancel} title="Cancel task">
+                  <X className="h-4 w-4" />
+                </Button>
+              )}
+              {(task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled') && (
+                <Button variant="ghost" size="icon" onClick={() => setDeleteDialog(true)} title="Delete task">
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              )}
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-2 text-sm">
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">KB:</span>
+              <span className="font-mono">{task.kb_id || 'N/A'}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Progress:</span>
+              <span>{task.progress}%</span>
+            </div>
+            <p className="text-xs text-muted-foreground line-clamp-2">{task.message}</p>
+            {task.error && (
+              <p className="text-xs text-red-500 line-clamp-2">Error: {task.error}</p>
             )}
           </div>
-        </div>
-      </CardHeader>
-      <CardContent>
-        <div className="space-y-2 text-sm">
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">KB:</span>
-            <span className="font-mono">{task.kb_id}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">Progress:</span>
-            <span>{task.progress}%</span>
-          </div>
-          <p className="text-xs text-muted-foreground">{task.message}</p>
-          {task.error && (
-            <p className="text-xs text-red-500">Error: {task.error}</p>
+          {task.status === 'running' && (
+            <div className="mt-3 h-2 w-full rounded-full bg-secondary">
+              <div
+                className="h-2 rounded-full bg-primary transition-all"
+                style={{ width: `${task.progress}%` }}
+              />
+            </div>
           )}
-        </div>
-        {task.status === 'running' && (
-          <div className="mt-3 h-2 w-full rounded-full bg-secondary">
-            <div
-              className="h-2 rounded-full bg-primary transition-all"
-              style={{ width: `${task.progress}%` }}
-            />
-          </div>
-        )}
-      </CardContent>
-    </Card>
+        </CardContent>
+      </Card>
+
+      <DeleteTaskDialog
+        task={task}
+        open={deleteDialog}
+        onOpenChange={setDeleteDialog}
+        onConfirm={async (cleanup) => {
+          try {
+            await deleteTask.mutateAsync({ taskId: task.task_id, cleanup })
+            toast.success('Task deleted')
+            setDeleteDialog(false)
+          } catch (error) {
+            toast.error('Failed to delete task')
+          }
+        }}
+        isDeleting={deleteTask.isPending}
+      />
+    </>
   )
 }
 
@@ -126,6 +335,8 @@ export function Tasks() {
   const deleteAllTasks = useDeleteAllTasks()
   const cleanupTasks = useCleanupTasks()
   const [batchDialog, setBatchDialog] = useState<string>('')
+  const [detailDialog, setDetailDialog] = useState<string | null>(null)
+  const [deleteAllConfirm, setDeleteAllConfirm] = useState('')
 
   const handlePauseAll = async () => {
     try {
@@ -148,10 +359,10 @@ export function Tasks() {
   }
 
   const handleDeleteAll = async (cleanup: boolean) => {
-    if (!confirm(`Delete all ${statusFilter === 'all' ? '' : statusFilter} tasks?${cleanup ? ' This will also clean up knowledge base data.' : ''}`)) return
     try {
       const result = await deleteAllTasks.mutateAsync({ status: statusFilter, cleanup })
       toast.success(result.message)
+      setBatchDialog('')
       refetch()
     } catch (error) {
       toast.error('Failed to delete tasks')
@@ -171,10 +382,10 @@ export function Tasks() {
   return (
     <div className="p-6">
       <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Tasks</h1>
-        <div className="flex gap-2">
+        <h1 className="text-2xl font-bold">Task Management</h1>
+        <div className="flex gap-2 flex-wrap">
           <Select value={statusFilter} onValueChange={setStatusFilter}>
-            <SelectTrigger className="w-32">
+            <SelectTrigger className="w-36">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -183,56 +394,118 @@ export function Tasks() {
               <SelectItem value="running">Running</SelectItem>
               <SelectItem value="completed">Completed</SelectItem>
               <SelectItem value="failed">Failed</SelectItem>
+              <SelectItem value="cancelled">Cancelled</SelectItem>
+              <SelectItem value="paused">Paused</SelectItem>
             </SelectContent>
           </Select>
-          <Button variant="outline" onClick={() => refetch()}>
+
+          <Button variant="outline" onClick={() => refetch()} title="Refresh the task list">
             <RefreshCw className="mr-2 h-4 w-4" />
             Refresh
           </Button>
-          
-          <Button variant="outline" onClick={handlePauseAll} disabled={pauseAllTasks.isPending}>
-            {pauseAllTasks.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PauseCircle className="mr-2 h-4 w-4" />}
-            Pause All
-          </Button>
-          
-          <Button variant="outline" onClick={handleResumeAll} disabled={resumeAllTasks.isPending}>
-            {resumeAllTasks.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PlayCircle className="mr-2 h-4 w-4" />}
-            Resume All
-          </Button>
 
-          <Dialog open={batchDialog === 'delete'} onOpenChange={(open) => !open && setBatchDialog('')}>
-            <DialogTrigger asChild>
-              <Button variant="destructive" onClick={() => setBatchDialog('delete')}>
-                <Trash2 className="mr-2 h-4 w-4" />
-                Delete
-              </Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Delete Tasks</DialogTitle>
-              </DialogHeader>
-              <div className="space-y-4">
-                <p className="text-sm text-muted-foreground">
-                  This will delete all {statusFilter === 'all' ? '' : statusFilter} tasks. You can also choose to clean up associated knowledge base data.
-                </p>
-                <div className="flex gap-2">
-                  <Button variant="outline" onClick={() => { handleDeleteAll(false); setBatchDialog('') }}>
-                    Delete Tasks Only
-                  </Button>
-                  <Button variant="destructive" onClick={() => { handleDeleteAll(true); setBatchDialog('') }}>
-                    Delete with Cleanup
-                  </Button>
-                </div>
-              </div>
-            </DialogContent>
-          </Dialog>
+          <div className="relative group">
+            <Button variant="outline" onClick={handlePauseAll} disabled={pauseAllTasks.isPending} title="Pause all running tasks">
+              {pauseAllTasks.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PauseCircle className="mr-2 h-4 w-4" />}
+              Pause All
+            </Button>
+            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-2 bg-popover border rounded-lg text-xs whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none z-50 shadow-md">
+              Pause all running tasks. Tasks can be resumed later.
+              <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-popover"></div>
+            </div>
+          </div>
 
-          <Button variant="outline" onClick={handleCleanup} disabled={cleanupTasks.isPending} title="Clean up orphan tasks">
-            {cleanupTasks.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Wrench className="mr-2 h-4 w-4" />}
-            Cleanup
-          </Button>
+          <div className="relative group">
+            <Button variant="outline" onClick={handleResumeAll} disabled={resumeAllTasks.isPending} title="Resume all paused tasks">
+              {resumeAllTasks.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PlayCircle className="mr-2 h-4 w-4" />}
+              Resume All
+            </Button>
+            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-2 bg-popover border rounded-lg text-xs whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none z-50 shadow-md">
+              Resume all paused tasks.
+              <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-popover"></div>
+            </div>
+          </div>
+
+          <div className="relative group">
+            <Button variant="destructive" onClick={() => setBatchDialog('delete')} title="Delete tasks with confirmation">
+              <Trash2 className="mr-2 h-4 w-4" />
+              Delete
+            </Button>
+            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-2 bg-popover border rounded-lg text-xs whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none z-50 shadow-md">
+              Delete selected tasks. Requires typing "delete" to confirm.
+              <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-popover"></div>
+            </div>
+          </div>
+
+          <div className="relative group">
+            <Button variant="outline" onClick={handleCleanup} disabled={cleanupTasks.isPending} title="Clean up orphan tasks">
+              {cleanupTasks.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Wrench className="mr-2 h-4 w-4" />}
+              Cleanup
+            </Button>
+            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-2 bg-popover border rounded-lg text-xs whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none z-50 shadow-md">
+              Remove orphan tasks (tasks whose processes have crashed).
+              <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-popover"></div>
+            </div>
+          </div>
         </div>
       </div>
+
+      <Dialog open={batchDialog === 'delete'} onOpenChange={(open) => !open && setBatchDialog('')}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <AlertTriangle className="h-5 w-5" />
+              Delete Tasks
+            </DialogTitle>
+            <DialogDescription>
+              This will delete all {statusFilter === 'all' ? 'tasks' : `${statusFilter} tasks`}. This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="p-3 bg-muted rounded-lg text-sm">
+              <p><strong>Status filter:</strong> {statusFilter === 'all' ? 'All tasks' : statusFilter}</p>
+              <p className="text-muted-foreground mt-1">
+                {statusFilter === 'failed' || statusFilter === 'cancelled' ? 'These tasks may have cleanup data available.' : ''}
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="batch-delete-confirm">Type "delete" to confirm</Label>
+              <Input
+                id="batch-delete-confirm"
+                value={deleteAllConfirm}
+                onChange={(e) => setDeleteAllConfirm(e.target.value)}
+                placeholder="delete"
+                className="font-mono"
+              />
+            </div>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => { setBatchDialog(''); setDeleteAllConfirm('') }}>
+              Cancel
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => { handleDeleteAll(false); setDeleteAllConfirm('') }}
+              disabled={deleteAllConfirm !== 'delete'}
+            >
+              Delete Tasks Only
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => { handleDeleteAll(true); setDeleteAllConfirm('') }}
+              disabled={deleteAllConfirm !== 'delete'}
+            >
+              Delete + Cleanup KB Data
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <TaskDetailDialog
+        taskId={detailDialog || ''}
+        open={detailDialog !== null}
+        onOpenChange={(open) => !open && setDetailDialog(null)}
+      />
 
       {isLoading ? (
         <div className="flex items-center justify-center py-12">
@@ -241,11 +514,16 @@ export function Tasks() {
       ) : tasks && tasks.length > 0 ? (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {tasks.map((task) => (
-            <TaskCard key={task.task_id} task={task} />
+            <TaskCard key={task.task_id} task={task} onShowDetails={setDetailDialog} />
           ))}
         </div>
       ) : (
-        <p className="text-center text-muted-foreground">No tasks found</p>
+        <div className="text-center py-12">
+          <p className="text-muted-foreground">No tasks found</p>
+          <p className="text-sm text-muted-foreground mt-1">
+            {statusFilter === 'all' ? 'Start an import or query to see tasks here' : `No ${statusFilter} tasks`}
+          </p>
+        </div>
       )}
     </div>
   )
