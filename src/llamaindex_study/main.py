@@ -1676,6 +1676,120 @@ def handle_admin_delete(args: argparse.Namespace) -> int:
     return 0
 
 
+def handle_admin_restart_scheduler(args: argparse.Namespace) -> int:
+    import signal
+    import subprocess
+
+    from kb.task_executor import get_scheduler_pid_file
+
+    pid_file = get_scheduler_pid_file()
+
+    if pid_file.exists():
+        with open(pid_file, "r") as f:
+            old_pid = int(f.read().strip())
+        try:
+            os.kill(old_pid, 0)
+            print(f"停止现有调度器 (PID: {old_pid})...")
+            os.kill(old_pid, signal.SIGTERM)
+            time.sleep(1)
+            try:
+                os.kill(old_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        except (ProcessLookupError, OSError):
+            print("现有调度器进程已不存在")
+
+    print("启动新的调度器...")
+    subprocess.Popen(
+        ["uv", "run", "python", "-m", "kb.scheduler"],
+        cwd=str(PROJECT_ROOT),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    print("调度器已重启")
+    return 0
+
+
+def handle_admin_restart_api(args: argparse.Namespace) -> int:
+    import signal
+    import subprocess
+
+    from llamaindex_study.config import get_settings
+
+    settings = get_settings()
+    api_port = getattr(settings, "api_port", 37241)
+    pid_file = PROJECT_ROOT / ".api.pid"
+    watchdog_pid_file = PROJECT_ROOT / ".api_watchdog.pid"
+
+    def get_pid_from_file(path: Path) -> Optional[int]:
+        if path.exists():
+            with open(path, "r") as f:
+                return int(f.read().strip())
+        return None
+
+    def kill_pid(pid: int, sig: signal.Signals) -> bool:
+        try:
+            os.kill(pid, sig)
+            return True
+        except (ProcessLookupError, OSError):
+            return False
+
+    old_api_pid = get_pid_from_file(pid_file)
+    old_watchdog_pid = get_pid_from_file(watchdog_pid_file)
+
+    if old_watchdog_pid and kill_pid(old_watchdog_pid, signal.SIGTERM):
+        print(f"停止现有 watchdog (PID: {old_watchdog_pid})...")
+        time.sleep(1)
+        kill_pid(old_watchdog_pid, signal.SIGKILL)
+
+    if old_api_pid and kill_pid(old_api_pid, signal.SIGTERM):
+        print(f"停止现有 API (PID: {old_api_pid})...")
+        time.sleep(1)
+        kill_pid(old_api_pid, signal.SIGKILL)
+
+    try:
+        import socket
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(1)
+        result = sock.connect_ex(("localhost", api_port))
+        sock.close()
+        if result == 0:
+            print(f"警告: 端口 {api_port} 仍被占用，尝试强制清理...")
+            subprocess.run(
+                f"lsof -ti:{api_port} | xargs kill -9 2>/dev/null || true",
+                shell=True,
+            )
+            time.sleep(2)
+    except Exception:
+        pass
+
+    if pid_file.exists():
+        pid_file.unlink()
+    if watchdog_pid_file.exists():
+        watchdog_pid_file.unlink()
+
+    print("启动新的 API 服务...")
+    subprocess.Popen(
+        ["uv", "run", "python", "api.py"],
+        cwd=str(PROJECT_ROOT),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+    time.sleep(3)
+
+    new_pid = get_pid_from_file(pid_file)
+    if new_pid:
+        print(f"API 服务已启动 (PID: {new_pid}, Port: {api_port})")
+    else:
+        print(f"API 服务已启动 (Port: {api_port})")
+
+    return 0
+
+
 CONFIG_OPTION_DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "SILICONFLOW_API_KEY": ("LLM", "硅基流动 API 密钥"),
     "SILICONFLOW_BASE_URL": ("LLM", "硅基流动 API 地址"),
@@ -2459,13 +2573,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     task_watch.set_defaults(handler=handle_task_watch)
 
-    task_scheduler = task_sub.add_parser(
-        "restart",
-        help="重启调度器",
-        description="停止现有调度器并启动新的调度器。用于加载新代码或解决调度器无响应的问题。",
-    )
-    task_scheduler.set_defaults(handler=handle_scheduler_restart)
-
     category_parser = subparsers.add_parser("category", help="分类规则与分类辅助")
     category_sub = category_parser.add_subparsers(
         dest="category_command", required=True
@@ -2518,6 +2625,20 @@ def build_parser() -> argparse.ArgumentParser:
     admin_delete.add_argument("kb_id")
     admin_delete.add_argument("--yes", action="store_true")
     admin_delete.set_defaults(handler=handle_admin_delete)
+
+    admin_restart_scheduler = admin_sub.add_parser(
+        "restart-scheduler",
+        help="重启任务调度器",
+        description="停止现有调度器并启动新的调度器。用于加载新代码或解决调度器无响应的问题。",
+    )
+    admin_restart_scheduler.set_defaults(handler=handle_admin_restart_scheduler)
+
+    admin_restart_api = admin_sub.add_parser(
+        "restart-api",
+        help="重启 API 服务",
+        description="停止现有 API 服务并启动新的 API 服务。用于加载新代码或解决 API 无响应的问题。",
+    )
+    admin_restart_api.set_defaults(handler=handle_admin_restart_api)
 
     config_parser = subparsers.add_parser("config", help="配置管理")
     config_sub = config_parser.add_subparsers(dest="config_command", required=True)
