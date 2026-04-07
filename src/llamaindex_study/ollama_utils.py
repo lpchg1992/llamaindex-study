@@ -6,8 +6,9 @@ Ollama 工具模块
 
 import asyncio
 import logging
+import threading
 import time
-from typing import Any, List, Optional
+from typing import Any, Callable, List, Optional
 
 from llama_index.embeddings.ollama import OllamaEmbedding
 from llama_index.llms.ollama import Ollama
@@ -16,8 +17,121 @@ from llama_index.core.constants import DEFAULT_NUM_OUTPUTS, DEFAULT_CONTEXT_WIND
 logger = logging.getLogger(__name__)
 
 
+class _PerURLQueue:
+    """单个 Ollama URL 的请求队列"""
+
+    def __init__(self):
+        self._semaphore = threading.Semaphore(1)
+        self._active_requests = 0
+        self._total_requests = 0
+        self._total_wait_time = 0.0
+        self._request_lock = threading.Lock()
+
+    def acquire(self) -> float:
+        start_time = time.time()
+        self._semaphore.acquire()
+        wait_time = time.time() - start_time
+        with self._request_lock:
+            self._active_requests += 1
+            self._total_requests += 1
+            self._total_wait_time += wait_time
+        return wait_time
+
+    def release(self):
+        with self._request_lock:
+            self._active_requests -= 1
+        self._semaphore.release()
+
+    def call_with_queue(self, func: Callable[..., Any], *args, **kwargs) -> Any:
+        self.acquire()
+        try:
+            return func(*args, **kwargs)
+        finally:
+            self.release()
+
+    @property
+    def stats(self) -> dict:
+        with self._request_lock:
+            avg_wait = (
+                self._total_wait_time / self._total_requests
+                if self._total_requests > 0
+                else 0
+            )
+            return {
+                "active_requests": self._active_requests,
+                "total_requests": self._total_requests,
+                "average_wait_time": avg_wait,
+            }
+
+
+class OllamaRequestQueue:
+    """Ollama LLM 请求队列，按 URL 组织确保对不同 Ollama 服务的串行访问
+
+    由于 Ollama 默认 OLLAMA_NUM_PARALLEL=1，高并发请求会导致 503 错误。
+    此队列通过信号量控制，确保同一时间只有一个请求访问同一 Ollama 服务，
+    避免因并发竞争导致的 503 错误。
+    不同 URL 的 Ollama 实例相互独立。
+    """
+
+    _instance: Optional["OllamaRequestQueue"] = None
+    _lock = threading.Lock()
+
+    def __new__(cls) -> "OllamaRequestQueue":
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+                    cls._instance._initialized = False
+        return cls._instance
+
+    def __init__(self):
+        if self._initialized:
+            return
+        self._initialized = True
+        self._queues: dict[str, _PerURLQueue] = {}
+        self._queues_lock = threading.Lock()
+
+    def _get_queue(self, url: str) -> _PerURLQueue:
+        with self._queues_lock:
+            if url not in self._queues:
+                self._queues[url] = _PerURLQueue()
+            return self._queues[url]
+
+    def call_with_queue(
+        self, url: str, func: Callable[..., Any], *args, **kwargs
+    ) -> Any:
+        queue = self._get_queue(url)
+        wait_time = queue.acquire()
+        logger.debug(
+            f"OllamaRequestQueue[{url}]: 请求获得访问权限 (等待 {wait_time:.2f}s)"
+        )
+        try:
+            return func(*args, **kwargs)
+        finally:
+            queue.release()
+            logger.debug(f"OllamaRequestQueue[{url}]: 请求释放访问权限")
+
+    def get_stats(self, url: str) -> dict:
+        queue = self._get_queue(url)
+        return queue.stats
+
+    def get_all_stats(self) -> dict[str, dict]:
+        with self._queues_lock:
+            return {url: q.stats for url, q in self._queues.items()}
+
+
+_ollama_request_queue: Optional[OllamaRequestQueue] = None
+
+
+def get_ollama_request_queue() -> OllamaRequestQueue:
+    global _ollama_request_queue
+    if _ollama_request_queue is None:
+        _ollama_request_queue = OllamaRequestQueue()
+    return _ollama_request_queue
+
+
 class OllamaEmbedder(OllamaEmbedding):
-    """Ollama Embedding 封装类，继承自 OllamaEmbedding，支持 503 重试"""
+    """Ollama Embedding 封装类，继承自 OllamaEmbedding，支持 503 重试和请求队列"""
 
     def __init__(
         self,
@@ -28,25 +142,27 @@ class OllamaEmbedder(OllamaEmbedding):
         backoff_factor: float = 1.5,
     ):
         super().__init__(model_name=model_name, base_url=base_url)
+        self._base_url = base_url
         self._max_retries = max_retries
         self._initial_delay = initial_delay
         self._backoff_factor = backoff_factor
 
     def _call_with_retry(self, method, *args, **kwargs):
-        """带重试的调用"""
+        """带重试的调用，使用请求队列确保串行访问"""
         last_error: BaseException = Exception("Unknown error")
         delay = self._initial_delay
+        queue = get_ollama_request_queue()
 
         for attempt in range(self._max_retries):
             try:
-                return method(*args, **kwargs)
+                return queue.call_with_queue(self._base_url, method, *args, **kwargs)
             except Exception as e:
                 last_error = e
                 error_str = str(e).lower()
 
                 if "503" in error_str or "service unavailable" in error_str:
                     logger.warning(
-                        f"Embedding 模型加载中 (尝试 {attempt + 1}/{self._max_retries})，"
+                        f"Embedding[{self._base_url}] 模型加载中 (尝试 {attempt + 1}/{self._max_retries})，"
                         f"等待 {delay:.1f}s: {e}"
                     )
                     time.sleep(delay)
@@ -199,25 +315,25 @@ class RetryableOllama(Ollama):
         self._backoff_factor = backoff_factor
 
     def _call_with_retry(self, method_name: str, *args, **kwargs) -> Any:
-        """带重试的调用"""
         import time
         import logging
 
         logger = logging.getLogger(__name__)
         last_error: BaseException = Exception("Unknown error")
         delay = self._initial_delay
+        queue = get_ollama_request_queue()
 
         for attempt in range(self._max_retries):
             try:
                 method = getattr(super(), method_name)
-                return method(*args, **kwargs)
+                return queue.call_with_queue(self.base_url, method, *args, **kwargs)
             except Exception as e:
                 last_error = e
                 error_str = str(e).lower()
 
                 if "503" in error_str or "service unavailable" in error_str:
                     logger.warning(
-                        f"Ollama 模型加载中 (尝试 {attempt + 1}/{self._max_retries})，"
+                        f"Ollama[{self.base_url}] 模型加载中 (尝试 {attempt + 1}/{self._max_retries})，"
                         f"等待 {delay:.1f}s: {e}"
                     )
                     time.sleep(delay)
