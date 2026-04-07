@@ -118,7 +118,7 @@ class ParallelEmbeddingProcessor:
 **端点发现流程**：
 1. 从 `ModelRegistry` 获取所有 `embedding` 类型模型
 2. 查询每个模型关联的 `Vendor`，获取 `api_base`（端点 URL）
-3. 对每个端点执行健康检查（`/api/embeddings`）
+3. 对每个端点执行健康检查（`GET /api/tags`）
 4. 标记健康/不健康状态，供任务分发参考
 
 ### 4. 动态健康检查与恢复机制
@@ -274,9 +274,7 @@ class ParallelEmbeddingProcessor:
         """验证端点是否可用"""
         import httpx
         try:
-            response = httpx.post(f"{url}/api/embeddings",
-                                  json={"model": model_name, "prompt": "test"},
-                                  timeout=5.0)
+            response = httpx.get(f"{url}/api/tags", timeout=5.0)
             return response.status_code == 200
         except Exception:
             return False
@@ -296,7 +294,7 @@ class ParallelEmbeddingProcessor:
 **端点发现流程**：
 1. 从 `ModelRegistry` 获取所有 `embedding` 类型模型
 2. 查询每个模型关联的 `Vendor`，获取 `api_base`（端点 URL）
-3. 对每个端点执行健康检查（`/api/embeddings`）
+3. 对每个端点执行健康检查（`GET /api/tags`）
 4. 标记健康/不健康状态，供任务分发参考
 
 **组件关系**：
