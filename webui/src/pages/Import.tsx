@@ -1,10 +1,11 @@
 import { useState } from 'react'
-import { useKBs, useIngestFile, useIngestObsidian, useIngestZotero } from '@/api/hooks'
+import { useKBs, useIngestFile, useIngestObsidian, useIngestZotero, useZoteroCollections, useSearchZoteroCollections, useObsidianVaults } from '@/api/hooks'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Badge } from '@/components/ui/badge'
 import {
   Select,
   SelectContent,
@@ -12,8 +13,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Upload, FolderOpen, Book, FileText, Loader2 } from 'lucide-react'
-import { toast } from '@/lib/toast'
+import { ScrollArea } from '@/components/ui/scroll-area'
+import { Upload, FolderOpen, Book, FileText, Loader2, Search, RefreshCw } from 'lucide-react'
+import { toast } from 'sonner'
+import type { ZoteroCollection } from '@/types/api'
 
 export function Import() {
   const { data: kbs } = useKBs()
@@ -98,6 +101,40 @@ export function Import() {
     }
   }
 
+  const { data: zoteroCollections, isLoading: collectionsLoading, refetch: refetchCollections } = useZoteroCollections()
+  const searchCollections = useSearchZoteroCollections()
+  const [searchQuery, setSearchQuery] = useState('')
+  const [selectedCollection, setSelectedCollection] = useState<ZoteroCollection | null>(null)
+
+  const handleSearchCollections = async () => {
+    if (!searchQuery.trim()) {
+      refetchCollections()
+      return
+    }
+    try {
+      await searchCollections.mutateAsync(searchQuery)
+    } catch (error) {
+      console.error('Search failed:', error)
+    }
+  }
+
+  const displayedCollections = searchQuery.trim() 
+    ? searchCollections.data?.collections || [] 
+    : zoteroCollections?.collections || []
+
+  const handleSelectCollection = (collection: ZoteroCollection) => {
+    setSelectedCollection(collection)
+    setCollectionName(collection.collectionName)
+  }
+
+  const { data: obsidianVaults, isLoading: vaultsLoading, refetch: refetchVaults } = useObsidianVaults()
+  const [selectedVault, setSelectedVault] = useState<string>('')
+
+  const handleSelectVault = (vaultPath: string) => {
+    setSelectedVault(vaultPath)
+    setVaultPath(vaultPath)
+  }
+
   return (
     <div className="p-6">
       <h1 className="mb-6 text-2xl font-bold">Import Documents</h1>
@@ -180,13 +217,43 @@ export function Import() {
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-2">
-                <Label>Vault Path</Label>
+                <Label>Select Vault</Label>
+                <div className="flex gap-2">
+                  <Select value={selectedVault} onValueChange={handleSelectVault}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Choose a vault..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {vaultsLoading ? (
+                        <div className="flex items-center justify-center py-2">
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        </div>
+                      ) : obsidianVaults?.vaults && obsidianVaults.vaults.length > 0 ? (
+                        obsidianVaults.vaults.map((vault) => (
+                          <SelectItem key={vault.name} value={vault.path}>
+                            {vault.name} ({vault.note_count || 0} notes)
+                          </SelectItem>
+                        ))
+                      ) : (
+                        <div className="p-2 text-sm text-muted-foreground">No vaults found</div>
+                      )}
+                    </SelectContent>
+                  </Select>
+                  <Button variant="outline" onClick={() => refetchVaults()} disabled={vaultsLoading}>
+                    <RefreshCw className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Or Enter Vault Path Manually</Label>
                 <Input
                   placeholder="~/Documents/Obsidian Vault"
                   value={vaultPath}
-                  onChange={(e) => setVaultPath(e.target.value)}
+                  onChange={(e) => { setVaultPath(e.target.value); setSelectedVault('') }}
                 />
               </div>
+              
               <div className="space-y-2">
                 <Label>Folder Path (optional)</Label>
                 <Input
@@ -223,14 +290,70 @@ export function Import() {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label>Collection Name</Label>
+              <div className="flex gap-2">
                 <Input
-                  placeholder="My Collection"
-                  value={collectionName}
-                  onChange={(e) => setCollectionName(e.target.value)}
+                  placeholder="Search collections..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleSearchCollections()}
                 />
+                <Button variant="outline" onClick={handleSearchCollections} disabled={searchCollections.isPending}>
+                  <Search className="h-4 w-4" />
+                </Button>
+                <Button variant="ghost" onClick={() => { setSearchQuery(''); refetchCollections() }} disabled={collectionsLoading}>
+                  <RefreshCw className="h-4 w-4" />
+                </Button>
               </div>
+              
+              <ScrollArea className="h-64">
+                {collectionsLoading || searchCollections.isPending ? (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                  </div>
+                ) : displayedCollections.length > 0 ? (
+                  <div className="space-y-2">
+                    {displayedCollections.map((collection) => (
+                      <div
+                        key={collection.collectionID}
+                        className={`p-3 border rounded-lg cursor-pointer transition-colors ${
+                          selectedCollection?.collectionID === collection.collectionID
+                            ? 'border-primary bg-primary/5'
+                            : 'hover:border-primary/50'
+                        }`}
+                        onClick={() => handleSelectCollection(collection)}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-medium">{collection.collectionName}</span>
+                          {collection.numItems !== undefined && (
+                            <Badge variant="secondary">{collection.numItems} items</Badge>
+                          )}
+                        </div>
+                        {collection.parentCollectionID && (
+                          <p className="text-xs text-muted-foreground mt-1">
+                            Parent ID: {collection.parentCollectionID}
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-center text-muted-foreground py-8">
+                    {searchQuery ? 'No collections found' : 'No collections available'}
+                  </p>
+                )}
+              </ScrollArea>
+
+              {selectedCollection && (
+                <div className="p-3 bg-muted rounded-lg">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm">Selected: <strong>{selectedCollection.collectionName}</strong></span>
+                    <Button variant="ghost" size="sm" onClick={() => { setSelectedCollection(null); setCollectionName('') }}>
+                      Clear
+                    </Button>
+                  </div>
+                </div>
+              )}
+
               <div className="flex items-center space-x-2">
                 <Button
                   variant="outline"
