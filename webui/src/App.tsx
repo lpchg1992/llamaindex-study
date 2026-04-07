@@ -10,6 +10,9 @@ import { Tasks } from '@/pages/Tasks'
 import { Evaluate } from '@/pages/Evaluate'
 import { Models } from '@/pages/Models'
 import { Settings } from '@/pages/Settings'
+import { LanceDBPage } from '@/pages/LanceDB'
+import { ChatPage } from '@/pages/Chat'
+import { ObservabilityPage } from '@/pages/Observability'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -35,6 +38,9 @@ function App() {
             <Route path="/evaluate" element={<Evaluate />} />
             <Route path="/models" element={<Models />} />
             <Route path="/settings" element={<Settings />} />
+            <Route path="/lancedb" element={<LanceDBPage />} />
+            <Route path="/chat" element={<ChatPage />} />
+            <Route path="/observability" element={<ObservabilityPage />} />
           </Route>
         </Routes>
       </BrowserRouter>

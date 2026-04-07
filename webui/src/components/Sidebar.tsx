@@ -11,6 +11,9 @@ import {
   Cpu,
   ChevronLeft,
   ChevronRight,
+  HardDrive,
+  MessagesSquare,
+  Activity,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useState } from 'react'
@@ -21,10 +24,13 @@ const navItems = [
   { to: '/knowledge-base', icon: Database, label: 'Knowledge Base' },
   { to: '/search', icon: Search, label: 'Search' },
   { to: '/query', icon: MessageSquare, label: 'Query' },
+  { to: '/chat', icon: MessagesSquare, label: 'Chat' },
   { to: '/import', icon: Upload, label: 'Import' },
   { to: '/tasks', icon: ListTodo, label: 'Tasks' },
   { to: '/evaluate', icon: LineChart, label: 'Evaluate' },
   { to: '/models', icon: Cpu, label: 'Models' },
+  { to: '/lancedb', icon: HardDrive, label: 'LanceDB' },
+  { to: '/observability', icon: Activity, label: 'Observability' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ]
 
