@@ -36,6 +36,9 @@ import type {
   ModelCreateRequest,
   InitializeKBResponse,
   RefreshTopicsRequest,
+  SystemSettings,
+  SettingsUpdateRequest,
+  RestartResponse,
 } from '@/types/api'
 
 const API_BASE = ''
@@ -699,6 +702,56 @@ export function useRebuildDocstore() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['kbs'] })
+    },
+  })
+}
+
+export function useSettings() {
+  return useQuery<SystemSettings>({
+    queryKey: ['settings'],
+    queryFn: async () => {
+      const { data } = await apiClient.get(`${API_BASE}/settings`)
+      return data
+    },
+  })
+}
+
+export function useUpdateSettings() {
+  const queryClient = useQueryClient()
+  return useMutation<SystemSettings, Error, SettingsUpdateRequest>({
+    mutationFn: async (req: SettingsUpdateRequest) => {
+      const { data } = await apiClient.put<SystemSettings>(`${API_BASE}/settings`, req)
+      return data
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['settings'] })
+    },
+  })
+}
+
+export function useRestartScheduler() {
+  const queryClient = useQueryClient()
+  return useMutation<RestartResponse, Error, void>({
+    mutationFn: async () => {
+      const { data } = await apiClient.post<RestartResponse>(`${API_BASE}/admin/restart-scheduler`)
+      return data
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['tasks'] })
+    },
+  })
+}
+
+export function useReloadConfig() {
+  const queryClient = useQueryClient()
+  return useMutation<RestartResponse, Error, void>({
+    mutationFn: async () => {
+      const { data } = await apiClient.post<RestartResponse>(`${API_BASE}/admin/reload-config`)
+      return data
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['settings'] })
+      queryClient.invalidateQueries({ queryKey: ['models'] })
     },
   })
 }

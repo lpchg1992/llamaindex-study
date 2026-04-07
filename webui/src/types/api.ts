@@ -334,3 +334,49 @@ export interface ExtractResponse {
   data: Record<string, unknown>
   error?: string
 }
+
+// Settings
+export interface SystemSettings {
+  llm_mode: string
+  default_llm_model: string | null
+  ollama_embed_model: string
+  ollama_base_url: string
+  top_k: number
+  use_hybrid_search: boolean
+  use_auto_merging: boolean
+  use_hyde: boolean
+  use_multi_query: boolean
+  num_multi_queries: number
+  hybrid_search_alpha: number
+  chunk_strategy: string
+  chunk_size: number
+  chunk_overlap: number
+  use_reranker: boolean
+  rerank_model: string
+  response_mode: string
+}
+
+export interface SettingsUpdateRequest {
+  llm_mode?: string
+  default_llm_model?: string | null
+  ollama_embed_model?: string
+  ollama_base_url?: string
+  top_k?: number
+  use_hybrid_search?: boolean
+  use_auto_merging?: boolean
+  use_hyde?: boolean
+  use_multi_query?: boolean
+  num_multi_queries?: number
+  hybrid_search_alpha?: number
+  chunk_strategy?: string
+  chunk_size?: number
+  chunk_overlap?: number
+  use_reranker?: boolean
+  rerank_model?: string
+  response_mode?: string
+}
+
+export interface RestartResponse {
+  status: string
+  message: string
+}
