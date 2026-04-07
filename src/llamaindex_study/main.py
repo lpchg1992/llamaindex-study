@@ -1984,7 +1984,7 @@ def build_parser() -> argparse.ArgumentParser:
     search_parser.add_argument(
         "--embed-model-id",
         default=None,
-        help="使用的Embedding模型ID (如 ollama/bge-m3:latest)",
+        help="使用的Embedding模型ID（如 ollama/bge-m3:latest），默认已启用本地Ollama模型的503重试",
     )
     search_parser.add_argument(
         "--model-id",
@@ -2021,14 +2021,14 @@ def build_parser() -> argparse.ArgumentParser:
         dest="use_hyde",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="启用 HyDE 查询转换（生成假设性答案辅助检索）",
+        help="启用 HyDE 查询转换（生成假设性答案辅助检索），可与 --multi-query、--auto-merging 同时使用",
     )
     query_parser.add_argument(
         "--multi-query",
         dest="use_multi_query",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="启用多查询转换（生成多个查询变体减少遗漏）",
+        help="启用多查询转换（生成多个查询变体减少遗漏），可与 --hyde、--auto-merging 同时使用",
     )
     query_parser.add_argument(
         "--num-multi-queries",
@@ -2071,7 +2071,7 @@ def build_parser() -> argparse.ArgumentParser:
     query_parser.add_argument(
         "--embed-model-id",
         default=None,
-        help="使用的Embedding模型ID (如 ollama/bge-m3:latest)",
+        help="使用的Embedding模型ID（如 ollama/bge-m3:latest），默认已启用本地Ollama模型的503重试",
     )
     query_parser.set_defaults(handler=handle_query)
 
