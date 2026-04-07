@@ -811,8 +811,13 @@ def get_kb_info(kb_id: str):
 
 
 @app.delete("/kbs/{kb_id}")
-def delete_kb(kb_id: str):
+def delete_kb(kb_id: str, req: DangerousOperationRequest):
     """删除知识库"""
+    info = KnowledgeBaseService.get_info(kb_id)
+    if not info:
+        raise HTTPException(status_code=404, detail=f"知识库不存在: {kb_id}")
+    if req.confirmation_name != kb_id:
+        raise HTTPException(status_code=400, detail="知识库名称不匹配，操作已取消")
     if KnowledgeBaseService.delete(kb_id):
         return {"status": "deleted", "kb_id": kb_id}
     raise HTTPException(status_code=404, detail=f"知识库 {kb_id} 不存在")
@@ -1477,6 +1482,14 @@ class RepairRequest(BaseModel):
     )
 
 
+class DangerousOperationRequest(BaseModel):
+    """需要输入知识库名称确认的危险操作请求"""
+
+    confirmation_name: str = Field(
+        ..., description="输入知识库名称以确认操作（区分大小写）"
+    )
+
+
 @app.post("/kbs/{kb_id}/consistency/repair")
 def repair_consistency(kb_id: str, req: RepairRequest):
     """修复知识库一致性"""
@@ -1502,13 +1515,15 @@ def repair_all_consistency(
 
 
 @app.post("/kbs/{kb_id}/docstore/rebuild")
-def rebuild_docstore(kb_id: str):
+def rebuild_docstore(kb_id: str, req: DangerousOperationRequest):
     """从 LanceDB 数据重建 docstore"""
     from kb.services import VectorStoreService
 
     info = KnowledgeBaseService.get_info(kb_id)
     if not info:
         raise HTTPException(status_code=404, detail=f"知识库不存在: {kb_id}")
+    if req.confirmation_name != kb_id:
+        raise HTTPException(status_code=400, detail="知识库名称不匹配，操作已取消")
 
     vs = VectorStoreService.get_vector_store(kb_id)
     nodes = vs.rebuild_docstore()
@@ -1703,10 +1718,16 @@ def add_category_rule(
 
 
 @app.post("/kbs/{kb_id}/initialize")
-def initialize_kb(kb_id: str, async_mode: bool = True):
+def initialize_kb(kb_id: str, req: DangerousOperationRequest, async_mode: bool = True):
     """初始化知识库（清空所有数据）"""
     from kb.task_queue import task_queue
     from kb.task_executor import task_executor
+
+    info = KnowledgeBaseService.get_info(kb_id)
+    if not info:
+        raise HTTPException(status_code=404, detail=f"知识库不存在: {kb_id}")
+    if req.confirmation_name != kb_id:
+        raise HTTPException(status_code=400, detail="知识库名称不匹配，操作已取消")
 
     if async_mode:
         task_id = task_queue.submit_task(
