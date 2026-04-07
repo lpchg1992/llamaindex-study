@@ -774,7 +774,7 @@ class SearchService:
         if index is None:
             return []
 
-        base_retriever = index.as_retriever(similarity_top_k=top_k * 3)
+        base_retriever = index.as_retriever(similarity_top_k=top_k * 5)
 
         _use_auto_merging = (
             use_auto_merging
@@ -796,6 +796,7 @@ class SearchService:
                     merger = AutoMergingRetriever(
                         base_retriever,
                         index.storage_context,
+                        simple_ratio_thresh=0.25,
                         verbose=False,
                     )
                     retriever = merger
@@ -812,14 +813,49 @@ class SearchService:
 
         results = retriever.retrieve(query)
 
+        # Post-process: prefer parent nodes over children for longer context
+        if _use_auto_merging:
+            results = SearchService._prefer_parent_nodes(results)
+
         return [
             {
-                "text": r.text[:500],
+                "text": r.text,
                 "score": r.score,
                 "metadata": r.metadata or {},
             }
             for r in results[:top_k]
         ]
+
+    @staticmethod
+    def _prefer_parent_nodes(results: List) -> List:
+        if not results:
+            return results
+
+        parent_ids = set()
+        child_to_parent = {}
+
+        for r in results:
+            node = getattr(r, "node", None)
+            if node and hasattr(node, "parent_node") and node.parent_node:
+                parent_id = node.parent_node.node_id
+                child_to_parent[node.node_id] = parent_id
+                parent_ids.add(parent_id)
+
+        if not parent_ids:
+            return results
+
+        nodes_to_remove = set()
+        for child_id, parent_id in child_to_parent.items():
+            if parent_id in parent_ids:
+                nodes_to_remove.add(child_id)
+
+        filtered = [
+            r
+            for r in results
+            if getattr(r.node, "node_id", None) not in nodes_to_remove
+        ]
+        filtered.sort(key=lambda x: x.score, reverse=True)
+        return filtered
 
     @staticmethod
     def _create_hybrid_retriever(

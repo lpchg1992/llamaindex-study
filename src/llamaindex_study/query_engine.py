@@ -103,6 +103,7 @@ class QueryEngineWrapper:
                     merger = AutoMergingRetriever(
                         base_retriever,
                         storage_context,
+                        simple_ratio_thresh=0.25,
                         verbose=True,
                     )
                     logger.info("启用 Auto-Merging Retriever")

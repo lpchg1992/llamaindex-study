@@ -701,6 +701,88 @@ class RetryableOllama(Ollama):
 
 # 默认降级模型配置
 FALLBACK_OLLAMA_MODEL = "lfm2.5-thinking:latest"
+FALLBACK_SILICONFLOW_MODEL = "Pro/deepseek-ai/DeepSeek-V3.2"
+
+
+class OllamaWithSiliconFlowFallback:
+    """Ollama LLM 封装类，支持降级到 SiliconFlow
+
+    当 Ollama 调用失败时，自动降级到 SiliconFlow 云端模型。
+    """
+
+    def __init__(self, primary_llm: Any):
+        self._primary_llm = primary_llm
+        self._fallback_llm: Optional[Any] = None
+
+    def _get_fallback_llm(self) -> Any:
+        if self._fallback_llm is None:
+            settings = get_settings()
+            from llama_index.llms.openai import OpenAI
+            from llama_index.llms.openai.utils import ALL_AVAILABLE_MODELS
+
+            model_name = FALLBACK_SILICONFLOW_MODEL
+            if model_name not in ALL_AVAILABLE_MODELS:
+                ALL_AVAILABLE_MODELS[model_name] = 128000
+            try:
+                import tiktoken
+
+                tiktoken.encoding_for_model(model_name)
+            except (KeyError, ImportError):
+                import tiktoken.model as tm
+
+                tm.MODEL_TO_ENCODING[model_name] = "cl100k_base"
+
+            self._fallback_llm = OpenAI(
+                model=model_name,
+                api_key=settings.siliconflow_api_key or "",
+                api_base=settings.siliconflow_base_url,
+            )
+        return self._fallback_llm
+
+    def _call_with_fallback(self, method_name: str, *args, **kwargs) -> Any:
+        try:
+            method = getattr(self._primary_llm, method_name)
+            return method(*args, **kwargs)
+        except Exception as e:
+            logger.warning(f"Ollama LLM 调用失败，降级到 SiliconFlow: {e}")
+            fallback_llm = self._get_fallback_llm()
+            method = getattr(fallback_llm, method_name)
+            return method(*args, **kwargs)
+
+    def complete(self, prompt: str, **kwargs) -> Any:
+        return self._call_with_fallback("complete", prompt, **kwargs)
+
+    def completion(self, prompt: str, **kwargs) -> Any:
+        return self._call_with_fallback("completion", prompt, **kwargs)
+
+    def chat(self, messages: Any, **kwargs) -> Any:
+        return self._call_with_fallback("chat", messages, **kwargs)
+
+    def stream_complete(self, prompt: str, **kwargs) -> Any:
+        return self._call_with_fallback("stream_complete", prompt, **kwargs)
+
+    def stream_chat(self, messages: Any, **kwargs) -> Any:
+        return self._call_with_fallback("stream_chat", messages, **kwargs)
+
+    async def acomplete(self, prompt: str, **kwargs) -> Any:
+        return self._call_with_fallback("acomplete", prompt, **kwargs)
+
+    async def achat(self, messages: Any, **kwargs) -> Any:
+        return self._call_with_fallback("achat", messages, **kwargs)
+
+    async def astream_complete(self, prompt: str, **kwargs) -> Any:
+        return self._call_with_fallback("astream_complete", prompt, **kwargs)
+
+    async def astream_chat(self, messages: Any, **kwargs) -> Any:
+        return self._call_with_fallback("astream_chat", messages, **kwargs)
+
+    @property
+    def model(self) -> str:
+        return self._primary_llm.model
+
+    @property
+    def base_url(self) -> str:
+        return self._primary_llm.base_url
 
 
 class RetryableSiliconFlowLLM:
@@ -769,6 +851,11 @@ class RetryableSiliconFlowLLM:
             ]
         )
 
+    def _is_service_unavailable_error(self, error: Exception) -> bool:
+        """判断是否为服务不可用错误（503），这类错误只需等待重试"""
+        error_str = str(error).lower()
+        return "503" in error_str or "service unavailable" in error_str
+
     def _get_fallback_llm(self) -> Any:
         """获取降级用的 Ollama LLM"""
         if self._fallback_llm is None:
@@ -783,18 +870,32 @@ class RetryableSiliconFlowLLM:
         return self._fallback_llm
 
     def _call_with_retry(self, method_name: str, *args, **kwargs) -> Any:
-        """带重试的调用，失败后降级到 Ollama"""
+        """带重试的调用，失败后降级到 Ollama
+
+        错误处理策略：
+        - 503/服务不可用：等待后重试，不切换
+        - 其它可重试错误（连接断开等）：等待重试，耗尽后切换到 Ollama
+        - 非重试错误：直接切换到 Ollama
+        """
         last_error: BaseException = Exception("Unknown error")
         delay = self._initial_delay
+        service_unavailable = False
 
-        # 尝试主 LLM (SiliconFlow)
         for attempt in range(self._max_retries):
             try:
                 method = getattr(self._primary_llm, method_name)
                 return method(*args, **kwargs)
             except Exception as e:
                 last_error = e
-                if self._is_retryable_error(e):
+                if self._is_service_unavailable_error(e):
+                    service_unavailable = True
+                    logger.warning(
+                        f"SiliconFlow 服务不可用 (尝试 {attempt + 1}/{self._max_retries})，"
+                        f"等待 {delay:.1f}s: {e}"
+                    )
+                    time.sleep(delay)
+                    delay *= self._backoff_factor
+                elif self._is_retryable_error(e):
                     logger.warning(
                         f"SiliconFlow LLM 调用失败 (尝试 {attempt + 1}/{self._max_retries})，"
                         f"等待 {delay:.1f}s: {e}"
@@ -802,11 +903,12 @@ class RetryableSiliconFlowLLM:
                     time.sleep(delay)
                     delay *= self._backoff_factor
                 else:
-                    # 非重试错误，直接降级
-                    logger.warning(f"SiliconFlow LLM 非重试错误，降级到 Ollama: {e}")
+                    logger.warning(f"SiliconFlow LLM 错误，降级到 Ollama: {e}")
                     break
 
-        # 重试耗尽，降级到 Ollama
+        if service_unavailable:
+            raise last_error
+
         logger.info(f"SiliconFlow LLM 重试耗尽，降级到 Ollama ({self._fallback_model})")
         self._use_fallback = True
         fallback_llm = self._get_fallback_llm()
@@ -897,17 +999,15 @@ def create_llm(
             base_url = (
                 vendor_info.get("api_base") if vendor_info else None
             ) or get_settings().ollama_base_url
-            return RetryableOllama(
+            primary_llm = RetryableOllama(
                 model=model_info["name"],
                 base_url=base_url,
                 max_retries=5,
                 initial_delay=2.0,
                 backoff_factor=1.5,
             )
+            return OllamaWithSiliconFlowFallback(primary_llm)
         else:
-            from llama_index.llms.openai import OpenAI
-            from llama_index.llms.openai.utils import ALL_AVAILABLE_MODELS
-
             api_key = (
                 vendor_info.get("api_key") if vendor_info else None
             ) or get_settings().siliconflow_api_key
@@ -915,22 +1015,13 @@ def create_llm(
                 vendor_info.get("api_base") if vendor_info else None
             ) or get_settings().siliconflow_base_url
 
-            model_name = model_info["name"]
-            if model_name not in ALL_AVAILABLE_MODELS:
-                ALL_AVAILABLE_MODELS[model_name] = 128000
-            try:
-                import tiktoken
-
-                tiktoken.encoding_for_model(model_name)
-            except (KeyError, ImportError):
-                import tiktoken.model as tm
-
-                tm.MODEL_TO_ENCODING[model_name] = "cl100k_base"
-
-            return OpenAI(
-                model=model_name,
+            return RetryableSiliconFlowLLM(
+                model=model_info["name"],
                 api_key=api_key or "",
                 api_base=api_base or "",
+                max_retries=3,
+                initial_delay=2.0,
+                backoff_factor=1.5,
             )
 
     from llama_index.llms.openai import OpenAI
@@ -940,23 +1031,27 @@ def create_llm(
 
     if mode == "ollama":
         ollama_model = model or settings.ollama_llm_model
-        return RetryableOllama(
+        primary_llm = RetryableOllama(
             model=ollama_model,
             base_url=settings.ollama_base_url,
             max_retries=5,
             initial_delay=2.0,
             backoff_factor=1.5,
         )
+        return OllamaWithSiliconFlowFallback(primary_llm)
     else:
         configure_llamaindex_for_siliconflow()
         return LlamaSettings.llm
 
 
-def configure_llm_by_model_id(model_id: str) -> None:
-    """根据模型ID配置全局 LLM
+def configure_llm_by_model_id(model_id: str) -> Any:
+    """根据模型ID创建 LLM 实例
 
     Args:
         model_id: 模型ID (如 siliconflow/DeepSeek-V3.2, ollama/lfm2.5-instruct)
+
+    Returns:
+        LLM 实例
     """
     from llamaindex_study.config import get_model_registry
     from kb.database import init_vendor_db
@@ -966,7 +1061,8 @@ def configure_llm_by_model_id(model_id: str) -> None:
     if not model_info:
         raise ValueError(f"模型不存在: {model_id}")
 
-    LlamaSettings.llm = create_llm(model_id=model_id)
+    llm = create_llm(model_id=model_id)
+    return llm
 
 
 def configure_embed_model_by_model_id(model_id: str) -> OllamaEmbedding:
