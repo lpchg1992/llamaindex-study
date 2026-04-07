@@ -875,6 +875,10 @@ class SearchService:
         mode: str = "vector",
         embed_model_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
+        from llamaindex_study.config import get_model_registry
+
+        registry = get_model_registry()
+
         if embed_model_id:
             from llamaindex_study.ollama_utils import configure_embed_model_by_model_id
 
@@ -883,7 +887,18 @@ class SearchService:
 
             get_parallel_processor().set_model_by_model_id(embed_model_id)
         else:
-            configure_global_embed_model()
+            default_embed = registry.get_default("embedding")
+            if default_embed:
+                from llamaindex_study.ollama_utils import (
+                    configure_embed_model_by_model_id,
+                )
+
+                configure_embed_model_by_model_id(default_embed["id"])
+                from kb.parallel_embedding import get_parallel_processor
+
+                get_parallel_processor().set_model_by_model_id(default_embed["id"])
+            else:
+                configure_global_embed_model()
 
         all_results = []
         for kb_id in kb_ids:
@@ -1391,10 +1406,20 @@ class QueryRouter:
         model_id: Optional[str] = None,
         embed_model_id: Optional[str] = None,
     ) -> Dict[str, Any]:
+        from llamaindex_study.config import get_model_registry
+
+        registry = get_model_registry()
+
         if model_id:
             from llamaindex_study.ollama_utils import configure_llm_by_model_id
 
             configure_llm_by_model_id(model_id)
+        else:
+            default_llm = registry.get_default("llm")
+            if default_llm:
+                from llamaindex_study.ollama_utils import configure_llm_by_model_id
+
+                configure_llm_by_model_id(default_llm["id"])
 
         if embed_model_id:
             from llamaindex_study.ollama_utils import configure_embed_model_by_model_id
@@ -1403,6 +1428,17 @@ class QueryRouter:
             from kb.parallel_embedding import get_parallel_processor
 
             get_parallel_processor().set_model_by_model_id(embed_model_id)
+        else:
+            default_embed = registry.get_default("embedding")
+            if default_embed:
+                from llamaindex_study.ollama_utils import (
+                    configure_embed_model_by_model_id,
+                )
+
+                configure_embed_model_by_model_id(default_embed["id"])
+                from kb.parallel_embedding import get_parallel_processor
+
+                get_parallel_processor().set_model_by_model_id(default_embed["id"])
 
         if not kb_ids:
             return {

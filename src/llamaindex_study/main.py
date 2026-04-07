@@ -912,6 +912,7 @@ def handle_search(args: argparse.Namespace) -> int:
     auto_mode = getattr(args, "auto", False)
     kb_ids = getattr(args, "kb_ids", None)
     exclude = getattr(args, "exclude", None)
+    retrieval_mode = getattr(args, "retrieval_mode", "vector")
 
     if auto_mode and kb_ids:
         print("错误: --auto 与 --kb-ids 不能同时使用", file=sys.stderr)
@@ -935,6 +936,7 @@ def handle_search(args: argparse.Namespace) -> int:
             use_auto_merging=use_auto_merging,
             model_id=model_id,
             embed_model_id=embed_model_id,
+            retrieval_mode=retrieval_mode,
         )
     else:
         kb_id_list = [k.strip() for k in kb_ids.split(",") if k.strip()]
@@ -946,6 +948,7 @@ def handle_search(args: argparse.Namespace) -> int:
             query,
             top_k=args.top_k,
             use_auto_merging=use_auto_merging,
+            mode=retrieval_mode,
             embed_model_id=embed_model_id,
         )
     print_json(result)
@@ -2106,6 +2109,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--model-id",
         default=None,
         help="使用的LLM模型ID (如 ollama/lfm2.5-instruct:1.2b)，不填则使用默认Ollama模型",
+    )
+    search_parser.add_argument(
+        "--retrieval-mode",
+        choices=["vector", "hybrid"],
+        default="vector",
+        help="检索模式（vector=向量检索，hybrid=混合搜索）",
     )
     search_parser.add_argument(
         "--auto-merging",
