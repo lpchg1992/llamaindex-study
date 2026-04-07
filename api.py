@@ -1797,6 +1797,42 @@ def delete_table(kb_id: str):
     raise HTTPException(status_code=404, detail=f"知识库 {kb_id} 不存在")
 
 
+@app.post("/admin/restart-scheduler")
+def restart_scheduler():
+    """重启任务调度器"""
+    global _scheduler_ref
+
+    if _scheduler_ref is not None and not _scheduler_ref.done():
+        _scheduler_ref.cancel()
+        logger.info("调度器任务已取消")
+
+    async def start_new_scheduler():
+        from kb.task_executor import TaskScheduler
+
+        scheduler = TaskScheduler()
+        return asyncio.create_task(scheduler.run())
+
+    _scheduler_ref = asyncio.get_event_loop().create_task(start_new_scheduler())
+    logger.info("调度器重启任务已提交")
+
+    return {"status": "restarting", "message": "调度器正在重启..."}
+
+
+@app.post("/admin/reload-config")
+def reload_config():
+    """重新加载配置（使部分设置生效）"""
+    from llamaindex_study.config import get_model_registry
+
+    try:
+        registry = get_model_registry()
+        registry.reload()
+        logger.info("模型注册表已重新加载")
+        return {"status": "success", "message": "配置已重新加载"}
+    except Exception as e:
+        logger.error(f"配置重载失败: {e}")
+        raise HTTPException(status_code=500, detail=f"配置重载失败: {str(e)}")
+
+
 @app.get("/lance/tables")
 def lance_list_tables():
     """列出所有知识库的 LanceDB 表"""
@@ -2169,6 +2205,179 @@ class TextToJsonRequest(BaseModel):
     text: str
     fields: List[str]
     prompt_template: Optional[str] = None
+
+
+# ============== Settings API ==============
+
+
+class SystemSettings(BaseModel):
+    """系统设置（仅包含可动态修改的部分）"""
+
+    # LLM
+    llm_mode: str = Field("ollama", description="LLM模式: ollama/siliconflow")
+    default_llm_model: Optional[str] = Field(None, description="默认LLM模型")
+
+    # Embedding
+    ollama_embed_model: str = Field("bge-m3", description="Ollama embedding模型")
+    ollama_base_url: str = Field("http://localhost:11434", description="Ollama服务地址")
+
+    # Retrieval
+    top_k: int = Field(5, ge=1, le=100, description="检索返回数量")
+    use_hybrid_search: bool = Field(False, description="启用混合搜索")
+    use_auto_merging: bool = Field(False, description="启用Auto-Merging")
+    use_hyde: bool = Field(False, description="启用HyDE查询")
+    use_multi_query: bool = Field(False, description="启用多查询转换")
+    num_multi_queries: int = Field(3, ge=1, le=10, description="多查询变体数量")
+    hybrid_search_alpha: float = Field(0.5, ge=0, le=1, description="混合搜索向量权重")
+
+    # Chunk
+    chunk_strategy: str = Field(
+        "hierarchical", description="分块策略: hierarchical/sentence/semantic"
+    )
+    chunk_size: int = Field(1024, ge=100, le=4096, description="分块大小")
+    chunk_overlap: int = Field(100, ge=0, le=500, description="分块重叠")
+
+    # Reranker
+    use_reranker: bool = Field(True, description="启用Reranker")
+    rerank_model: str = Field("Pro/BAAI/bge-reranker-v2-m3", description="Reranker模型")
+
+    # Response
+    response_mode: str = Field("compact", description="答案生成模式")
+
+
+class SettingsUpdateRequest(BaseModel):
+    """设置更新请求"""
+
+    # LLM
+    llm_mode: Optional[str] = Field(None, description="LLM模式: ollama/siliconflow")
+    default_llm_model: Optional[str] = Field(None, description="默认LLM模型")
+
+    # Embedding
+    ollama_embed_model: Optional[str] = Field(None, description="Ollama embedding模型")
+    ollama_base_url: Optional[str] = Field(None, description="Ollama服务地址")
+
+    # Retrieval
+    top_k: Optional[int] = Field(None, ge=1, le=100, description="检索返回数量")
+    use_hybrid_search: Optional[bool] = Field(None, description="启用混合搜索")
+    use_auto_merging: Optional[bool] = Field(None, description="启用Auto-Merging")
+    use_hyde: Optional[bool] = Field(None, description="启用HyDE查询")
+    use_multi_query: Optional[bool] = Field(None, description="启用多查询转换")
+    num_multi_queries: Optional[int] = Field(
+        None, ge=1, le=10, description="多查询变体数量"
+    )
+    hybrid_search_alpha: Optional[float] = Field(
+        None, ge=0, le=1, description="混合搜索向量权重"
+    )
+
+    # Chunk
+    chunk_strategy: Optional[str] = Field(
+        None, description="分块策略: hierarchical/sentence/semantic"
+    )
+    chunk_size: Optional[int] = Field(None, ge=100, le=4096, description="分块大小")
+    chunk_overlap: Optional[int] = Field(None, ge=0, le=500, description="分块重叠")
+
+    # Reranker
+    use_reranker: Optional[bool] = Field(None, description="启用Reranker")
+    rerank_model: Optional[str] = Field(None, description="Reranker模型")
+
+    # Response
+    response_mode: Optional[str] = Field(None, description="答案生成模式")
+
+
+@app.get("/settings", response_model=SystemSettings)
+def get_settings():
+    """获取系统设置"""
+    from llamaindex_study.config import get_settings
+
+    s = get_settings()
+    registry = None
+    try:
+        from llamaindex_study.config import get_model_registry
+
+        registry = get_model_registry()
+        registry._ensure_loaded()
+    except Exception:
+        pass
+
+    default_llm = None
+    if registry:
+        default_llm_model = registry.get_default("llm")
+        if default_llm_model:
+            default_llm = default_llm_model["id"]
+
+    return SystemSettings(
+        llm_mode=s.llm_mode,
+        default_llm_model=default_llm,
+        ollama_embed_model=s.ollama_embed_model,
+        ollama_base_url=s.ollama_base_url,
+        top_k=s.top_k,
+        use_hybrid_search=s.use_hybrid_search,
+        use_auto_merging=s.use_auto_merging,
+        use_hyde=s.use_hyde,
+        use_multi_query=s.use_multi_query,
+        num_multi_queries=s.num_multi_queries,
+        hybrid_search_alpha=s.hybrid_search_alpha,
+        chunk_strategy=s.chunk_strategy,
+        chunk_size=s.chunk_size,
+        chunk_overlap=s.chunk_overlap,
+        use_reranker=s.use_reranker,
+        rerank_model=s.rerank_model,
+        response_mode=s.response_mode,
+    )
+
+
+@app.put("/settings", response_model=SystemSettings)
+def update_settings(req: SettingsUpdateRequest):
+    """更新系统设置（仅更新提供的字段）"""
+    import os
+    from llamaindex_study.config import get_settings
+
+    s = get_settings()
+    updates = req.model_dump(exclude_unset=True)
+
+    # 只允许更新特定的设置项（安全限制）
+    allowed_updates = {
+        "top_k",
+        "use_hybrid_search",
+        "use_auto_merging",
+        "use_hyde",
+        "use_multi_query",
+        "num_multi_queries",
+        "hybrid_search_alpha",
+        "chunk_strategy",
+        "chunk_size",
+        "chunk_overlap",
+        "use_reranker",
+        "response_mode",
+    }
+
+    # LLM 和 Embedding 相关的设置需要特殊处理（需要重启才能生效）
+    runtime_updates = {
+        "llm_mode": "LLM_MODE",
+        "default_llm_model": None,  # 需通过数据库更新
+        "ollama_embed_model": "OLLAMA_EMBED_MODEL",
+        "ollama_base_url": "OLLAMA_BASE_URL",
+        "rerank_model": "RERANK_MODEL",
+    }
+
+    applied = []
+    skipped = []
+
+    for key, value in updates.items():
+        if key in allowed_updates:
+            # 直接更新运行时设置
+            if hasattr(s, key):
+                setattr(s, key, value)
+                applied.append(key)
+        elif key in runtime_updates:
+            env_var = runtime_updates[key]
+            if env_var:
+                os.environ[env_var] = str(value)
+            applied.append(f"{key} (需重启生效)")
+
+    logger.info(f"设置已更新: {applied}, 跳过: {skipped}")
+
+    return get_settings()
 
 
 @app.post("/extract/fields", response_model=Dict[str, Any])
