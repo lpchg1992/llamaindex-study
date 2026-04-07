@@ -784,6 +784,11 @@ class OllamaWithSiliconFlowFallback:
     def base_url(self) -> str:
         return self._primary_llm.base_url
 
+    @property
+    def metadata(self) -> Any:
+        """返回当前使用的 LLM 的 metadata"""
+        return self._primary_llm.metadata
+
 
 class RetryableSiliconFlowLLM:
     """SiliconFlow LLM 封装类，支持 503 重试和降级到 Ollama
