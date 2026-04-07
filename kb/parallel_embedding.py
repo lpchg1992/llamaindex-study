@@ -190,7 +190,7 @@ class ParallelEmbeddingProcessor:
         return endpoints
 
     def _health_check_with_retry(self, url: str, model_name: str) -> bool:
-        """验证端点是否可用（带 503 重试机制）"""
+        """验证端点是否可用（仅检查 Ollama 服务是否启动）"""
         import httpx
 
         max_retries = 3
@@ -200,16 +200,12 @@ class ParallelEmbeddingProcessor:
 
         for attempt in range(max_retries):
             try:
-                response = httpx.post(
-                    f"{url}/api/embeddings",
-                    json={"model": model_name, "prompt": "health check test"},
-                    timeout=10.0,
-                )
+                response = httpx.get(f"{url}/api/tags", timeout=10.0)
                 if response.status_code == 200:
                     return True
                 elif response.status_code == 503:
                     logger.debug(
-                        f"端点 {url} 模型加载中 (尝试 {attempt + 1}/{max_retries})，等待 {delay:.1f}s"
+                        f"端点 {url} 服务加载中 (尝试 {attempt + 1}/{max_retries})，等待 {delay:.1f}s"
                     )
                     time.sleep(delay)
                     delay *= backoff_factor
@@ -270,7 +266,7 @@ class ParallelEmbeddingProcessor:
         return self._sync_health_check_with_retry(ep)
 
     def _sync_health_check_with_retry(self, ep: EmbeddingEndpoint) -> bool:
-        """同步健康检查（带 503 重试机制）"""
+        """同步健康检查（仅检查 Ollama 服务是否启动）"""
         max_retries = 3
         initial_delay = 2.0
         backoff_factor = 1.5
@@ -278,14 +274,7 @@ class ParallelEmbeddingProcessor:
 
         for attempt in range(max_retries):
             try:
-                response = httpx.post(
-                    f"{ep.url}/api/embeddings",
-                    json={
-                        "model": ep.model_name or self._model_name,
-                        "prompt": "health",
-                    },
-                    timeout=10.0,
-                )
+                response = httpx.get(f"{ep.url}/api/tags", timeout=10.0)
                 if response.status_code == 200:
                     return True
                 elif response.status_code == 503:
