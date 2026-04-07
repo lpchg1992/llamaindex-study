@@ -65,7 +65,7 @@ import asyncio
 import threading
 from dataclasses import asdict
 from pathlib import Path
-from typing import List, Optional, Dict, Literal
+from typing import List, Optional, Dict, Literal, Any
 import markdown
 
 from fastapi import FastAPI, HTTPException, Query
@@ -187,6 +187,9 @@ class SearchRequest(BaseModel):
     )
     use_auto_merging: Optional[bool] = Field(
         None, description="启用 Auto-Merging（合并子节点到父节点）"
+    )
+    retrieval_mode: Literal["vector", "hybrid"] = Field(
+        "vector", description="检索模式: vector(向量检索), hybrid(混合搜索)"
     )
 
 
@@ -1020,6 +1023,7 @@ def search(req: SearchRequest):
             mode="auto",
             model_id=req.model_id,
             embed_model_id=req.embed_model_id,
+            retrieval_mode=req.retrieval_mode,
         )
         return [SearchResult(**r) for r in result.get("results", [])]
 
@@ -1031,6 +1035,7 @@ def search(req: SearchRequest):
         top_k=req.top_k,
         use_auto_merging=req.use_auto_merging,
         embed_model_id=req.embed_model_id,
+        mode=req.retrieval_mode,
     )
     return [SearchResult(**r) for r in results]
 
@@ -1968,6 +1973,197 @@ async def websocket_endpoint(websocket):
             await websocket.send_text(f"收到: {data}")
     except Exception as e:
         logger.debug(f"WebSocket 连接关闭: {e}")
+
+
+class ChatRequest(BaseModel):
+    message: str
+    session_id: Optional[str] = None
+
+
+class ChatResponse(BaseModel):
+    response: str
+    session_id: str
+    kb_id: str
+    history: List[dict]
+
+
+class ChatHistoryRequest(BaseModel):
+    session_id: str
+    limit: int = 10
+
+
+@app.post("/chat/{kb_id}", response_model=ChatResponse)
+def chat(kb_id: str, req: ChatRequest):
+    from llamaindex_study.chat_engine import get_chat_service
+    from kb.services import SearchService
+
+    chat_service = get_chat_service()
+
+    def query_func(query: str) -> str:
+        result = SearchService.query(
+            kb_id=kb_id,
+            query=query,
+            top_k=5,
+        )
+        return result.get("response", "")
+
+    session_id = req.session_id or f"chat_{kb_id}"
+
+    result = chat_service.chat(
+        session_id=session_id,
+        message=req.message,
+        kb_id=kb_id,
+        query_func=query_func,
+    )
+
+    return ChatResponse(**result)
+
+
+@app.get("/chat/{kb_id}/sessions")
+def list_chat_sessions(kb_id: str):
+    from llamaindex_study.chat_engine import get_chat_service
+
+    chat_service = get_chat_service()
+    sessions = chat_service._chat_store.list_sessions(kb_id=kb_id)
+    return {
+        "sessions": [
+            {
+                "session_id": s.session_id,
+                "created_at": s.created_at,
+                "updated_at": s.updated_at,
+                "message_count": len(s.messages),
+            }
+            for s in sessions
+        ]
+    }
+
+
+@app.get("/chat/{kb_id}/history/{session_id}")
+def get_chat_history(kb_id: str, session_id: str, limit: int = 10):
+    from llamaindex_study.chat_engine import get_chat_service
+
+    chat_service = get_chat_service()
+    history = chat_service.get_session_history(session_id, limit)
+    return {"session_id": session_id, "history": history}
+
+
+@app.delete("/chat/{kb_id}/sessions/{session_id}")
+def delete_chat_session(kb_id: str, session_id: str):
+    from llamaindex_study.chat_engine import get_chat_service
+
+    chat_service = get_chat_service()
+    success = chat_service.delete_session(session_id)
+    return {"deleted": success, "session_id": session_id}
+
+
+@app.get("/observability/stats")
+def get_observability_stats():
+    from llamaindex_study.callbacks import (
+        setup_callbacks,
+        get_token_counter,
+        get_rag_stats,
+        format_token_stats,
+        format_rag_stats,
+    )
+
+    setup_callbacks()
+
+    token_counter = get_token_counter()
+    rag_stats = get_rag_stats()
+
+    if token_counter:
+        token_counts = {
+            "prompt_tokens": token_counter.prompt_llm_token_count,
+            "completion_tokens": token_counter.completion_llm_token_count,
+            "total_tokens": token_counter.total_llm_token_count,
+            "embedding_tokens": token_counter.total_embedding_token_count,
+        }
+    else:
+        token_counts = {}
+
+    return {
+        "token_stats": token_counts,
+        "token_stats_formatted": format_token_stats(token_counts),
+        "rag_stats": rag_stats.to_dict() if rag_stats else {},
+        "rag_stats_formatted": format_rag_stats(rag_stats) if rag_stats else "",
+    }
+
+
+@app.post("/observability/reset")
+def reset_observability():
+    from llamaindex_study.callbacks import reset_callbacks, setup_callbacks
+
+    setup_callbacks()
+    reset_callbacks()
+    return {"status": "reset"}
+
+
+@app.get("/observability/traces")
+def get_traces(limit: int = 100):
+    from llamaindex_study.callbacks import setup_callbacks, get_rag_stats
+
+    setup_callbacks()
+    rag_stats = get_rag_stats()
+
+    if not rag_stats:
+        return {"traces": [], "total": 0}
+
+    traces = rag_stats.trace_events[-limit:]
+    return {"traces": traces, "total": len(rag_stats.trace_events)}
+
+
+class ExtractRequest(BaseModel):
+    text: str
+    schema_definition: Dict[str, Any]
+    prompt_template: Optional[str] = None
+
+
+class ExtractResponse(BaseModel):
+    data: Dict[str, Any]
+    error: Optional[str] = None
+
+
+@app.post("/extract", response_model=ExtractResponse)
+def extract_structured(req: ExtractRequest):
+    from llamaindex_study.structured_extractor import get_extractor
+
+    extractor = get_extractor()
+
+    try:
+        result = extractor.extract(
+            text=req.text,
+            schema=req.schema_definition,
+            prompt_template=req.prompt_template,
+        )
+
+        if "error" in result:
+            return ExtractResponse(data={}, error=result["error"])
+
+        return ExtractResponse(data=result)
+    except Exception as e:
+        return ExtractResponse(data={}, error=str(e))
+
+
+class TextToJsonRequest(BaseModel):
+    text: str
+    fields: List[str]
+    prompt_template: Optional[str] = None
+
+
+@app.post("/extract/fields", response_model=Dict[str, Any])
+def extract_fields(req: TextToJsonRequest):
+    from llamaindex_study.structured_extractor import TextToJsonExtractor
+
+    extractor = TextToJsonExtractor()
+
+    try:
+        return extractor.extract(
+            text=req.text,
+            fields=req.fields,
+            prompt_template=req.prompt_template,
+        )
+    except Exception as e:
+        return {f: None for f in req.fields}
 
 
 if __name__ == "__main__":

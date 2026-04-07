@@ -630,6 +630,11 @@ curl -X POST "http://localhost:37241/search" \
 curl -X POST "http://localhost:37241/search" \
   -H "Content-Type: application/json" \
   -d '{"query": "Python 异步编程", "route_mode": "auto", "model_id": "ollama/lfm2.5-instruct:1.2b"}'
+
+# 混合搜索模式
+curl -X POST "http://localhost:37241/search" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "Python 异步编程", "kb_ids": "tech_tools", "retrieval_mode": "hybrid"}'
 ```
 
 **请求参数说明：**
@@ -639,6 +644,7 @@ curl -X POST "http://localhost:37241/search" \
 | `query` | string | 必填 | 查询内容 |
 | `route_mode` | enum | `"general"` | 路由模式：`general` 或 `auto` |
 | `top_k` | int | `5` | 返回结果数量 |
+| `retrieval_mode` | enum | `"vector"` | 检索模式：`vector` 或 `hybrid` |
 | `model_id` | string | null | 使用的模型ID（如 `siliconflow/DeepSeek-V3.2`, `ollama/lfm2.5-instruct`），不填则使用默认模型（Ollama） |
 | `embed_model_id` | string | null | 使用的 Embedding 模型ID（如 `ollama/bge-m3:latest`） |
 | `kb_ids` | string | null | 指定知识库 ID（逗号分隔，`route_mode=general` 时必填） |

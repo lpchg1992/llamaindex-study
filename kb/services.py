@@ -1174,6 +1174,7 @@ class QueryRouter:
         use_auto_merging: Optional[bool] = None,
         model_id: Optional[str] = None,
         embed_model_id: Optional[str] = None,
+        retrieval_mode: str = "vector",
     ) -> Dict[str, Any]:
         if mode == "all":
             all_kbs = KnowledgeBaseService.list_all()
@@ -1193,6 +1194,7 @@ class QueryRouter:
                     query,
                     top_k=top_k,
                     use_auto_merging=use_auto_merging,
+                    mode=retrieval_mode,
                     embed_model_id=embed_model_id,
                 )
                 for r in results:
