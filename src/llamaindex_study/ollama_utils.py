@@ -311,6 +311,154 @@ class RetryableOllama(Ollama):
         )
 
 
+# 默认降级模型配置
+FALLBACK_OLLAMA_MODEL = "lfm2.5-thinking:latest"
+
+
+class RetryableSiliconFlowLLM:
+    """SiliconFlow LLM 封装类，支持 503 重试和降级到 Ollama
+
+    当 SiliconFlow 返回 503 或服务不可用时，自动重试指定次数。
+    如果重试失败，则降级到本地 Ollama 模型 (lfm2.5-thinking:latest)。
+    """
+
+    def __init__(
+        self,
+        model: str,
+        api_key: str,
+        api_base: str,
+        max_retries: int = 3,
+        initial_delay: float = 2.0,
+        backoff_factor: float = 1.5,
+        fallback_model: str = FALLBACK_OLLAMA_MODEL,
+    ):
+        from llama_index.llms.openai import OpenAI
+
+        self._primary_llm = OpenAI(
+            model=model,
+            api_key=api_key,
+            api_base=api_base,
+        )
+        self._model = model
+        self._api_key = api_key
+        self._api_base = api_base
+        self._max_retries = max_retries
+        self._initial_delay = initial_delay
+        self._backoff_factor = backoff_factor
+        self._fallback_model = fallback_model
+        self._fallback_llm: Optional[Any] = None
+        self._use_fallback = False
+
+    def _is_retryable_error(self, error: Exception) -> bool:
+        """判断是否为可重试的错误"""
+        error_str = str(error).lower()
+        return any(
+            keyword in error_str
+            for keyword in [
+                "503",
+                "service unavailable",
+                "rate limit",
+                "timeout",
+                "connection",
+                "network",
+            ]
+        )
+
+    def _get_fallback_llm(self) -> Any:
+        """获取降级用的 Ollama LLM"""
+        if self._fallback_llm is None:
+            settings = get_settings()
+            self._fallback_llm = RetryableOllama(
+                model=self._fallback_model,
+                base_url=settings.ollama_base_url,
+                max_retries=5,
+                initial_delay=2.0,
+                backoff_factor=1.5,
+            )
+        return self._fallback_llm
+
+    def _call_with_retry(self, method_name: str, *args, **kwargs) -> Any:
+        """带重试的调用，失败后降级到 Ollama"""
+        last_error: BaseException = Exception("Unknown error")
+        delay = self._initial_delay
+
+        # 尝试主 LLM (SiliconFlow)
+        for attempt in range(self._max_retries):
+            try:
+                method = getattr(self._primary_llm, method_name)
+                return method(*args, **kwargs)
+            except Exception as e:
+                last_error = e
+                if self._is_retryable_error(e):
+                    logger.warning(
+                        f"SiliconFlow LLM 调用失败 (尝试 {attempt + 1}/{self._max_retries})，"
+                        f"等待 {delay:.1f}s: {e}"
+                    )
+                    time.sleep(delay)
+                    delay *= self._backoff_factor
+                else:
+                    # 非重试错误，直接降级
+                    logger.warning(f"SiliconFlow LLM 非重试错误，降级到 Ollama: {e}")
+                    break
+
+        # 重试耗尽，降级到 Ollama
+        logger.info(f"SiliconFlow LLM 重试耗尽，降级到 Ollama ({self._fallback_model})")
+        self._use_fallback = True
+        fallback_llm = self._get_fallback_llm()
+        method = getattr(fallback_llm, method_name)
+        return method(*args, **kwargs)
+
+    def complete(self, prompt: str, **kwargs) -> Any:
+        return self._call_with_retry("complete", prompt, **kwargs)
+
+    def completion(self, prompt: str, **kwargs) -> Any:
+        return self._call_with_retry("completion", prompt, **kwargs)
+
+    def predict(self, prompt: str, **kwargs) -> Any:
+        return self._call_with_retry("predict", prompt, **kwargs)
+
+    def stream_complete(self, prompt: str, **kwargs) -> Any:
+        return self._call_with_retry("stream_complete", prompt, **kwargs)
+
+    def chat(self, messages: Any, **kwargs) -> Any:
+        return self._call_with_retry("chat", messages, **kwargs)
+
+    def stream_chat(self, messages: Any, **kwargs) -> Any:
+        return self._call_with_retry("stream_chat", messages, **kwargs)
+
+    async def acomplete(self, prompt: str, **kwargs) -> Any:
+        return self._call_with_retry("acomplete", prompt, **kwargs)
+
+    async def achat(self, messages: Any, **kwargs) -> Any:
+        return self._call_with_retry("achat", messages, **kwargs)
+
+    async def astream_complete(self, prompt: str, **kwargs) -> Any:
+        return self._call_with_retry("astream_complete", prompt, **kwargs)
+
+    async def astream_chat(self, messages: Any, **kwargs) -> Any:
+        return self._call_with_retry("astream_chat", messages, **kwargs)
+
+    @property
+    def metadata(self) -> Any:
+        """返回当前使用的 LLM 的 metadata"""
+        if self._use_fallback:
+            return self._get_fallback_llm().metadata
+        from llama_index.core.base.llms.types import LLMMetadata
+
+        return LLMMetadata(
+            context_window=128000,
+            num_output=DEFAULT_NUM_OUTPUTS,
+            model_name=self._model,
+            is_chat_model=True,
+            is_function_calling_model=False,
+        )
+
+    def __repr__(self) -> str:
+        if self._use_fallback:
+            return f"RetryableSiliconFlowLLM(fallback={self._fallback_model})"
+        return f"RetryableSiliconFlowLLM(primary={self._model})"
+
+
 def create_llm(
     model_id: Optional[str] = None,
     mode: Optional[str] = None,
@@ -340,7 +488,7 @@ def create_llm(
         vendor_db = init_vendor_db()
         vendor_info = vendor_db.get(vendor_id) if vendor_id else None
 
-        if vendor_id == "ollama":
+        if vendor_id.startswith("ollama"):
             base_url = (
                 vendor_info.get("api_base") if vendor_info else None
             ) or get_settings().ollama_base_url
@@ -358,12 +506,14 @@ def create_llm(
             api_base = (
                 vendor_info.get("api_base") if vendor_info else None
             ) or get_settings().siliconflow_base_url
-            _configure_siliconflow_llm(
+            return RetryableSiliconFlowLLM(
                 model=model_info["name"],
-                api_key=api_key,
-                api_base=api_base,
+                api_key=api_key or "",
+                api_base=api_base or "",
+                max_retries=3,
+                initial_delay=2.0,
+                backoff_factor=1.5,
             )
-            return LlamaSettings.llm
 
     from llama_index.llms.openai import OpenAI
 
@@ -402,7 +552,7 @@ def configure_llm_by_model_id(model_id: str) -> None:
     vendor_db = init_vendor_db()
     vendor_info = vendor_db.get(vendor_id) if vendor_id else None
 
-    if vendor_id == "ollama":
+    if vendor_id.startswith("ollama"):
         settings = get_settings()
         base_url = (
             vendor_info.get("api_base") if vendor_info else None
@@ -422,10 +572,13 @@ def configure_llm_by_model_id(model_id: str) -> None:
         api_base = (
             vendor_info.get("api_base") if vendor_info else None
         ) or get_settings().siliconflow_base_url
-        _configure_siliconflow_llm(
+        LlamaSettings.llm = RetryableSiliconFlowLLM(
             model=model_info["name"],
-            api_key=api_key,
-            api_base=api_base,
+            api_key=api_key or "",
+            api_base=api_base or "",
+            max_retries=3,
+            initial_delay=2.0,
+            backoff_factor=1.5,
         )
 
 
