@@ -153,8 +153,9 @@ trap cleanup EXIT
 
 case "${1:-start}" in
     start)
+        exec >> "$LOG_DIR/api_watchdog.log" 2>&1
+
         check_uv
-        acquire_lock
 
         if [ -f "$PROJECT_DIR/api.py" ] && [ -f "$PROJECT_DIR/pyproject.toml" ]; then
             log_info "Starting LlamaIndex RAG API..."
@@ -164,16 +165,22 @@ case "${1:-start}" in
         fi
 
         cleanup_all
+        acquire_lock
+
+        log_info "Starting LlamaIndex RAG API..."
         start_api
 
         log_info "Watchdog started - monitoring every 30 seconds"
+
         while true; do
             sleep 30
             if ! check_api_health; then
                 log_warn "API not responding, restarting..."
                 start_api
             fi
-        done
+        done &
+        disown
+        exit 0
         ;;
 
     stop)
@@ -192,7 +199,8 @@ case "${1:-start}" in
                 log_warn "API not responding, restarting..."
                 start_api
             fi
-        done
+        done &
+        disown
         ;;
 
     status)
