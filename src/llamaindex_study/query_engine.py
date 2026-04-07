@@ -121,7 +121,7 @@ class QueryEngineWrapper:
             from llama_index.core.retrievers import QueryFusionRetriever
             from llama_index.retrievers.bm25 import BM25Retriever
 
-            docstore = self.index.docstore
+            docstore = self.index.storage_context.docstore
             if not docstore or len(docstore.docs) == 0:
                 logger.warning(
                     "混合搜索：docstore 为空，无法使用 BM25，回退到纯向量检索"

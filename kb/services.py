@@ -834,7 +834,7 @@ class SearchService:
             from llama_index.retrievers.bm25 import BM25Retriever
 
             # 检查 docstore 是否有数据（从 LanceDB 只加载向量时不包含 docstore）
-            docstore = index.docstore
+            docstore = index.storage_context.docstore
             if not docstore or len(docstore.docs) == 0:
                 logger.warning(
                     "混合搜索：docstore 为空（可能使用 LanceDB 向量索引创建），"

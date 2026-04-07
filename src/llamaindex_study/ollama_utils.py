@@ -18,7 +18,7 @@ from llama_index.core.constants import DEFAULT_NUM_OUTPUTS, DEFAULT_CONTEXT_WIND
 logger = logging.getLogger(__name__)
 
 # 默认配置
-DEFAULT_TIMEOUT = 120.0
+DEFAULT_TIMEOUT = 300.0
 DEFAULT_MAX_CONCURRENT = 2
 CIRCUIT_BREAKER_FAILURE_THRESHOLD = 5
 CIRCUIT_BREAKER_RECOVERY_TIMEOUT = 60.0
@@ -517,8 +517,27 @@ class RetryableOllama(Ollama):
         except TimeoutError:
             raise
         except Exception as e:
+            error_type_name = type(e).__name__
+            retryable_types = {
+                "ConnectionError",
+                "TimeoutError",
+                "RemoteDisconnected",
+                "ConnectionResetError",
+                "BrokenPipeError",
+            }
+            if error_type_name in retryable_types:
+                raise RetryableError(str(e)) from e
             error_str = str(e).lower()
-            if "503" in error_str or "service unavailable" in error_str:
+            if any(
+                kw in error_str
+                for kw in [
+                    "503",
+                    "service unavailable",
+                    "remote end closed",
+                    "connection reset",
+                    "broken pipe",
+                ]
+            ):
                 raise RetryableError(str(e)) from e
             raise
 
@@ -531,20 +550,23 @@ class RetryableOllama(Ollama):
         for attempt in range(self._max_retries):
             try:
                 method = getattr(super(), method_name)
-                return self._call_with_queue(method, *args, **kwargs)
-            except RetryableError as e:
-                last_error = e
-                logger.warning(
-                    f"Ollama[{self.base_url}] 模型加载中 (尝试 {attempt + 1}/{self._max_retries})，"
-                    f"等待 {delay:.1f}s: {e}"
-                )
-                time.sleep(delay)
-                delay *= self._backoff_factor
-            except (CircuitBreakerOpenError, TimeoutError):
-                raise
+                return method(*args, **kwargs)
             except Exception as e:
-                error_str = str(e).lower()
-                if "503" in error_str or "service unavailable" in error_str:
+                error_type_name = type(e).__name__
+                retryable_types = {
+                    "ConnectionError",
+                    "TimeoutError",
+                    "RemoteDisconnected",
+                    "ConnectionResetError",
+                    "BrokenPipeError",
+                }
+                isRetryable = (
+                    error_type_name in retryable_types
+                    or "503" in str(e).lower()
+                    or "service unavailable" in str(e).lower()
+                    or "remote end closed" in str(e).lower()
+                )
+                if isRetryable:
                     last_error = e
                     logger.warning(
                         f"Ollama[{self.base_url}] 模型加载中 (尝试 {attempt + 1}/{self._max_retries})，"
@@ -717,6 +739,20 @@ class RetryableSiliconFlowLLM:
 
     def _is_retryable_error(self, error: Exception) -> bool:
         """判断是否为可重试的错误"""
+        error_type_name = type(error).__name__
+
+        retryable_type_names = {
+            "ConnectionError",
+            "TimeoutError",
+            "HTTPError",
+            "MaxRetryError",
+            "RemoteDisconnected",
+            "ConnectionResetError",
+            "BrokenPipeError",
+        }
+        if error_type_name in retryable_type_names:
+            return True
+
         error_str = str(error).lower()
         return any(
             keyword in error_str
@@ -727,6 +763,9 @@ class RetryableSiliconFlowLLM:
                 "timeout",
                 "connection",
                 "network",
+                "remote end closed",
+                "connection reset",
+                "broken pipe",
             ]
         )
 
@@ -866,19 +905,32 @@ def create_llm(
                 backoff_factor=1.5,
             )
         else:
+            from llama_index.llms.openai import OpenAI
+            from llama_index.llms.openai.utils import ALL_AVAILABLE_MODELS
+
             api_key = (
                 vendor_info.get("api_key") if vendor_info else None
             ) or get_settings().siliconflow_api_key
             api_base = (
                 vendor_info.get("api_base") if vendor_info else None
             ) or get_settings().siliconflow_base_url
-            return RetryableSiliconFlowLLM(
-                model=model_info["name"],
+
+            model_name = model_info["name"]
+            if model_name not in ALL_AVAILABLE_MODELS:
+                ALL_AVAILABLE_MODELS[model_name] = 128000
+            try:
+                import tiktoken
+
+                tiktoken.encoding_for_model(model_name)
+            except (KeyError, ImportError):
+                import tiktoken.model as tm
+
+                tm.MODEL_TO_ENCODING[model_name] = "cl100k_base"
+
+            return OpenAI(
+                model=model_name,
                 api_key=api_key or "",
                 api_base=api_base or "",
-                max_retries=3,
-                initial_delay=2.0,
-                backoff_factor=1.5,
             )
 
     from llama_index.llms.openai import OpenAI
@@ -914,38 +966,7 @@ def configure_llm_by_model_id(model_id: str) -> None:
     if not model_info:
         raise ValueError(f"模型不存在: {model_id}")
 
-    vendor_id = model_info.get("vendor_id", "")
-    vendor_db = init_vendor_db()
-    vendor_info = vendor_db.get(vendor_id) if vendor_id else None
-
-    if vendor_id.startswith("ollama"):
-        settings = get_settings()
-        base_url = (
-            vendor_info.get("api_base") if vendor_info else None
-        ) or settings.ollama_base_url
-        llm = RetryableOllama(
-            model=model_info["name"],
-            base_url=base_url,
-            max_retries=settings.ollama_max_retries,
-            initial_delay=settings.ollama_retry_delay,
-            backoff_factor=1.5,
-        )
-        LlamaSettings.llm = llm
-    else:
-        api_key = (
-            vendor_info.get("api_key") if vendor_info else None
-        ) or get_settings().siliconflow_api_key
-        api_base = (
-            vendor_info.get("api_base") if vendor_info else None
-        ) or get_settings().siliconflow_base_url
-        LlamaSettings.llm = RetryableSiliconFlowLLM(
-            model=model_info["name"],
-            api_key=api_key or "",
-            api_base=api_base or "",
-            max_retries=3,
-            initial_delay=2.0,
-            backoff_factor=1.5,
-        )
+    LlamaSettings.llm = create_llm(model_id=model_id)
 
 
 def configure_embed_model_by_model_id(model_id: str) -> OllamaEmbedding:
