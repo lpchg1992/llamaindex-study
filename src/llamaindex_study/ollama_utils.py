@@ -940,9 +940,6 @@ class RetryableSiliconFlowLLM:
                     logger.warning(f"SiliconFlow LLM 错误，降级到 Ollama: {e}")
                     break
 
-        if service_unavailable:
-            raise last_error
-
         logger.info(f"SiliconFlow LLM 重试耗尽，降级到 Ollama ({self._fallback_model})")
         self._use_fallback = True
         fallback_llm = self._get_fallback_llm()
