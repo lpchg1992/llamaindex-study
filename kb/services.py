@@ -1028,7 +1028,7 @@ class SearchService:
         return {
             "response": str(response),
             "sources": [
-                {"text": r.text[:200], "score": r.score} for r in response.source_nodes
+                {"text": r.text, "score": r.score} for r in response.source_nodes
             ],
         }
 
@@ -1302,7 +1302,7 @@ class QueryRouter:
                     sources.append(
                         {
                             "kb_id": kb_id,
-                            "text": r["text"][:200],
+                            "text": r["text"],
                             "score": r.get("score", 0),
                         }
                     )
@@ -1316,15 +1316,15 @@ class QueryRouter:
                 "kbs_queried": kb_ids,
             }
 
-        context_text = "\n\n".join(contexts[:10])
+        context_text = "\n\n".join(contexts[: top_k * 3])
         prompt = f"""基于以下上下文信息回答用户问题。如果上下文中没有相关信息，请说明。
 
-上下文：
-{context_text}
+        上下文：
+        {context_text}
 
-用户问题：{query}
+        用户问题：{query}
 
-回答："""
+        回答："""
 
         try:
             from llamaindex_study.ollama_utils import create_llm
@@ -1339,7 +1339,7 @@ class QueryRouter:
 
         return {
             "response": answer,
-            "sources": sources[:top_k],
+            "sources": sources[: top_k * 3],
             "kbs_queried": kb_ids,
         }
 
