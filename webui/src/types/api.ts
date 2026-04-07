@@ -8,6 +8,20 @@ export interface KBInfo {
   chunk_strategy?: string
 }
 
+export interface KBUpdateRequest {
+  name?: string
+  description?: string
+  chunk_strategy?: string
+}
+
+export interface TopicUpdateRequest {
+  topics: string[]
+}
+
+export interface DangerousOperationRequest {
+  confirmation_name: string
+}
+
 export interface TaskResponse {
   task_id: string
   status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused'
@@ -137,4 +151,186 @@ export interface TopicInfo {
   kb_id: string
   topics: string[]
   topic_count: number
+}
+
+// Zotero
+export interface ZoteroCollection {
+  collectionID: string
+  collectionName: string
+  parentCollectionID?: string
+  numItems?: number
+}
+
+export interface ZoteroCollectionsResponse {
+  collections: ZoteroCollection[]
+}
+
+// Obsidian
+export interface ObsidianVault {
+  name: string
+  path: string
+  exists: boolean
+  note_count?: number
+}
+
+export interface ObsidianVaultsResponse {
+  vaults: ObsidianVault[]
+}
+
+// LanceDB
+export interface LanceTableStats {
+  kb_id: string
+  table_name?: string
+  row_count: number
+  size_mb: number
+}
+
+export interface LanceDocSummary {
+  doc_id: string
+  source: string
+  doc_hash: string
+  node_count: number
+  created_at: string
+}
+
+export interface LanceNode {
+  node_id: string
+  doc_id: string
+  text: string
+  metadata: Record<string, unknown>
+  score?: number
+}
+
+export interface LanceDuplicate {
+  source: string
+  doc_ids: string[]
+  count: number
+}
+
+// Chat
+export interface ChatMessage {
+  role: 'user' | 'assistant'
+  content: string
+  timestamp?: string
+}
+
+export interface ChatSession {
+  session_id: string
+  created_at: string
+  updated_at: string
+  message_count: number
+}
+
+export interface ChatHistoryResponse {
+  session_id: string
+  history: ChatMessage[]
+}
+
+export interface ChatSessionsResponse {
+  sessions: ChatSession[]
+}
+
+export interface ChatResponse {
+  response: string
+  session_id: string
+  kb_id: string
+  history: ChatMessage[]
+}
+
+// Observability
+export interface TokenStats {
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  embedding_tokens: number
+}
+
+export interface RAGStats {
+  total_queries: number
+  total_retrievals: number
+  avg_latency_ms: number
+}
+
+export interface ObservabilityStats {
+  token_stats: TokenStats
+  token_stats_formatted: string
+  rag_stats: RAGStats
+  rag_stats_formatted: string
+}
+
+export interface TraceEvent {
+  timestamp: string
+  event_type: string
+  duration_ms: number
+  metadata?: Record<string, unknown>
+}
+
+export interface TracesResponse {
+  traces: TraceEvent[]
+  total: number
+}
+
+// Consistency
+export interface ConsistencyCheckResult {
+  kb_id: string
+  is_consistent: boolean
+  issues: string[]
+  details?: Record<string, unknown>
+}
+
+export interface ConsistencyRepairResult {
+  kb_id: string
+  mode: string
+  repaired: number
+  deleted: number
+  message: string
+}
+
+// Task batch operations
+export interface TaskBatchResult {
+  affected: number
+  message: string
+}
+
+// Vendor & Model requests
+export interface VendorCreateRequest {
+  id: string
+  name: string
+  api_base?: string
+  api_key?: string
+  is_active?: boolean
+}
+
+export interface ModelCreateRequest {
+  id: string
+  vendor_id: string
+  name?: string
+  type: 'llm' | 'embedding' | 'reranker'
+  is_active?: boolean
+  is_default?: boolean
+  config?: Record<string, unknown>
+}
+
+// Initialize KB
+export interface InitializeKBResponse {
+  status: string
+  task_id?: string
+  message: string
+}
+
+// Refresh Topics
+export interface RefreshTopicsRequest {
+  has_new_docs?: boolean
+}
+
+// Extract
+export interface ExtractRequest {
+  text: string
+  schema_definition: Record<string, unknown>
+  prompt_template?: string
+}
+
+export interface ExtractResponse {
+  data: Record<string, unknown>
+  error?: string
 }
