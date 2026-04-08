@@ -15,6 +15,10 @@ from llamaindex_study.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _remove_surrogates(text: str) -> str:
+    return "".join(c for c in text if not (0xD800 <= ord(c) <= 0xDFFF))
+
+
 class KeywordExtractor:
     """关键词提取器"""
 
@@ -43,6 +47,7 @@ class KeywordExtractor:
 
             settings = get_settings()
 
+            text = _remove_surrogates(text[:4000])
             prompt = (
                 "你是一个专业的知识库主题分析助手。请从以下文档内容中提取15-25个主题词。\n"
                 "要求：\n"
@@ -51,7 +56,7 @@ class KeywordExtractor:
                 "3. 优先提取能体现学科领域特色的专业词汇\n"
                 "4. 用换行符分隔，每行一个词\n\n"
                 "---文档内容---\n"
-                f"{text[:4000]}\n"
+                f"{text}\n"
                 "---文档结束---\n\n"
                 "主题词（每行一个）："
             )

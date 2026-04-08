@@ -13,12 +13,48 @@ import time
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any
 
-from llamaindex_study.config import get_settings
+from llamaindex_study.config import get_settings, get_model_registry
 from llamaindex_study.logger import get_logger
 
 logger = get_logger(__name__)
 
 EMBEDDING_DIM = 1024
+
+
+def _remove_surrogates(text: str) -> str:
+    """Remove lone surrogate characters that cannot be encoded as UTF-8.
+
+    Surrogates (U+D800-U+DFFF) are only valid in UTF-16, not UTF-8.
+    When text contains unpaired surrogates, Python's JSON encoder fails.
+    """
+    return "".join(c for c in text if not (0xD800 <= ord(c) <= 0xDFFF))
+
+
+def get_default_embedding_from_registry() -> tuple[str, str]:
+    """Get default embedding model name and URL from the model registry.
+
+    Returns:
+        (model_name, base_url) - raw model name for Ollama API and base URL
+    """
+    from kb.database import init_vendor_db
+
+    registry = get_model_registry()
+    model = registry.get_default("embedding")
+    if not model:
+        raise RuntimeError(
+            "No default embedding model found in registry. "
+            "Please add an embedding model via CLI: python -m src.llamaindex_study.main model add --name bge-m3 --vendor ollama --type embedding"
+        )
+
+    vendor_db = init_vendor_db()
+    vendor_info = vendor_db.get(model["vendor_id"])
+    base_url = (
+        vendor_info["api_base"]
+        if vendor_info and vendor_info.get("api_base")
+        else get_settings().ollama_base_url
+    )
+
+    return model["name"], base_url
 
 
 class SiliconFlowEmbedding:
@@ -77,6 +113,7 @@ class SiliconFlowEmbedding:
         if not texts:
             return []
 
+        texts = [_remove_surrogates(t) for t in texts]
         payload = {"model": self.model, "input": texts}
         headers = {
             "Content-Type": "application/json",
@@ -164,15 +201,20 @@ class OllamaEmbeddingService:
         初始化 Embedding 服务
 
         Args:
-            model: 默认模型名称
-            endpoints: 端点列表（如果为 None，使用默认端点）
+            model: 默认模型名称（如果为 None，从模型注册表获取默认）
+            endpoints: 端点列表（如果为 None，使用注册表配置）
             batch_size: 批量大小
             timeout: 请求超时时间
         """
         settings = get_settings()
 
-        self.default_model = model or settings.ollama_embed_model
-        self.default_url = settings.ollama_base_url
+        if model:
+            self.default_model = model
+        else:
+            model_name, base_url = get_default_embedding_from_registry()
+            self.default_model = model_name
+            self.default_url = base_url
+
         self.batch_size = batch_size
         self.timeout = timeout
 
@@ -180,14 +222,15 @@ class OllamaEmbeddingService:
         if endpoints:
             self.endpoints = endpoints
         else:
-            # 使用配置中的端点 + 默认远程端点
-            self.endpoints = [self.DEFAULT_LOCAL, self.DEFAULT_REMOTE]
+            _, base_url = get_default_embedding_from_registry()
+            local_ep = OllamaEndpoint(
+                name="本地", url=base_url, model=self.default_model
+            )
+            self.endpoints = [local_ep]
 
         # 更新端点配置
         for ep in self.endpoints:
             ep.model = self.default_model
-            if ep.url == "http://localhost:11434":
-                ep.url = self.default_url
 
         # 选择最佳端点
         self._best_endpoint: Optional[OllamaEndpoint] = None
@@ -227,6 +270,8 @@ class OllamaEmbeddingService:
         import httpx
         import json
 
+        text = _remove_surrogates(text[:8192])
+
         # Ollama /api/embed 端点使用 "input" 字段，且模型名需要带 :latest 后缀
         model_name = endpoint.model
         if not model_name.endswith(":latest"):
@@ -234,7 +279,7 @@ class OllamaEmbeddingService:
 
         payload = {
             "model": model_name,
-            "input": text[:8192],  # Ollama 有长度限制
+            "input": text,
         }
 
         start_time = time.time()

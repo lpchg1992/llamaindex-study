@@ -13,6 +13,10 @@ from llamaindex_study.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _remove_surrogates(text: str) -> str:
+    return "".join(c for c in text if not (0xD800 <= ord(c) <= 0xDFFF))
+
+
 class TopicAnalyzer:
     MAX_TOPICS = 30
     TOPIC_THRESHOLD = 0.3
@@ -52,6 +56,7 @@ class TopicAnalyzer:
             combined_text = "\n---\n".join(texts[:30])
             if len(combined_text) > 8000:
                 combined_text = combined_text[:8000]
+            combined_text = _remove_surrogates(combined_text)
 
             prompt = (
                 "你是一个专业的知识库主题分析助手。请从以下文档内容中提取15-25个主题词。\n"
@@ -149,7 +154,10 @@ class TopicAnalyzer:
             scored.append((token, score))
 
         if not scored:
-            scored = [(token, float(tf)) for token, tf in tf_counter.most_common(self.MAX_TOPICS * 2)]
+            scored = [
+                (token, float(tf))
+                for token, tf in tf_counter.most_common(self.MAX_TOPICS * 2)
+            ]
 
         scored.sort(key=lambda x: x[1], reverse=True)
         return scored[: self.MAX_TOPICS]

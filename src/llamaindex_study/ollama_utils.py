@@ -529,9 +529,14 @@ def create_ollama_embedding(
     model: Optional[str] = None,
     base_url: Optional[str] = None,
 ) -> OllamaEmbedder:
+    from llamaindex_study.embedding_service import get_default_embedding_from_registry
+
     settings = get_settings()
+    if model is None:
+        model, resolved_url = get_default_embedding_from_registry()
+        base_url = base_url or resolved_url
     return OllamaEmbedder(
-        model_name=model or settings.ollama_embed_model,
+        model_name=model,
         base_url=base_url or settings.ollama_base_url,
         max_retries=settings.ollama_max_retries,
         initial_delay=settings.ollama_retry_delay,
@@ -545,10 +550,14 @@ def configure_global_embed_model(
     chunk_size: int = 512,
     embed_batch_size: int = 10,
 ) -> OllamaEmbedder:
-    """配置全局 Embedding 模型（默认使用 OllamaEmbedder，带 503 重试）"""
+    from llamaindex_study.embedding_service import get_default_embedding_from_registry
+
     settings = get_settings()
+    if model is None:
+        model, resolved_url = get_default_embedding_from_registry()
+        base_url = base_url or resolved_url
     embed_model = OllamaEmbedder(
-        model_name=model or settings.ollama_embed_model,
+        model_name=model,
         base_url=base_url or settings.ollama_base_url,
         max_retries=settings.ollama_max_retries,
         initial_delay=settings.ollama_retry_delay,

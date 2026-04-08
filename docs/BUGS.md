@@ -29,4 +29,8 @@ A lone surrogate character (U+DC88 high surrogate) exists in the query string or
 **Workaround:**
 Disable reranker temporarily to isolate the issue.
 
-**Status:** Open - investigation in progress
+**Status:** Fixed (2026-04-08) - Added `_remove_surrogates()` sanitization in:
+- `src/llamaindex_study/reranker.py` - `_postprocess_nodes()`, `rerank()`, `EmbeddingSimilarityReranker._get_embedding()`
+- `src/llamaindex_study/embedding_service.py` - `OllamaEmbeddingService._embed_single()`, `SiliconFlowEmbedding.get_text_embeddings()`
+- `kb/keyword_extractor.py` - `_extract_with_llm()`
+- `kb/topic_analyzer.py` - `_llm_extract_topics()`

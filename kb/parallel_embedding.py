@@ -23,8 +23,14 @@ from llamaindex_study.ollama_utils import OllamaEmbedder, create_ollama_embeddin
 logger = get_logger(__name__)
 
 settings = get_settings()
-EMBEDDING_MODEL = settings.ollama_embed_model
 EMBEDDING_DIM = 1024
+
+
+def _get_default_embedding_model_name() -> str:
+    from llamaindex_study.embedding_service import get_default_embedding_from_registry
+
+    model_name, _ = get_default_embedding_from_registry()
+    return model_name
 
 
 # Embedding 结果类型
@@ -79,7 +85,7 @@ class ParallelEmbeddingProcessor:
         self._executor = ThreadPoolExecutor(max_workers=4)
         self._models: Dict[str, OllamaEmbedder] = {}
         self._lock = threading.Lock()
-        self._model_name: str = EMBEDDING_MODEL
+        self._model_name: str = _get_default_embedding_model_name()
         self._consecutive_failures: Dict[str, int] = {}
         self._chunk_queue: deque = deque()
         self._results: Dict[int, EmbeddingResult] = {}

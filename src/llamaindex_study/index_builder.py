@@ -24,12 +24,13 @@ def _configure_embed_model() -> None:
     """
     from llama_index.core import Settings as LlamaSettings
     from llama_index.embeddings.ollama import OllamaEmbedding
+    from llamaindex_study.embedding_service import get_default_embedding_from_registry
 
-    settings = __import__("llamaindex_study.config", fromlist=["get_settings"]).get_settings()
+    model_name, base_url = get_default_embedding_from_registry()
 
     LlamaSettings.embed_model = OllamaEmbedding(
-        model_name=settings.ollama_embed_model,
-        base_url=settings.ollama_base_url,
+        model_name=model_name,
+        base_url=base_url,
     )
 
 

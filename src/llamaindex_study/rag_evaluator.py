@@ -45,14 +45,9 @@ def get_llm_for_evaluation() -> Any:
 
 
 def get_embed_model_for_evaluation() -> Any:
-    """获取用于评估的 Embedding 模型（带 token 追踪）"""
     from llamaindex_study.ollama_utils import create_ollama_embedding
 
-    settings = get_settings()
-    return create_ollama_embedding(
-        model=settings.ollama_embed_model,
-        base_url=settings.ollama_base_url,
-    )
+    return create_ollama_embedding(model=None, base_url=None)
 
 
 class RAGEvaluator:

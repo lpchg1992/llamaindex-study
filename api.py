@@ -70,7 +70,7 @@ import markdown
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 # 添加项目根目录到 path
@@ -162,11 +162,49 @@ RAG 检索增强生成 API，支持任务队列异步处理。
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://127.0.0.1:5174",
+        "http://localhost:5174",
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+        "http://127.0.0.1:37241",
+        "http://localhost:37241",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
+
+
+# ============== Exception Handlers (ensure CORS on errors) ==============
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request, exc):
+    response = JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+    )
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Credentials"] = "true"
+    response.headers["Access-Control-Allow-Methods"] = "*"
+    response.headers["Access-Control-Allow-Headers"] = "*"
+    return response
+
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request, exc):
+    logger.error(f"Unhandled exception: {type(exc).__name__}: {exc}", exc_info=True)
+    response = JSONResponse(
+        status_code=500,
+        content={"detail": f"{type(exc).__name__}: {str(exc)}"},
+    )
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Credentials"] = "true"
+    response.headers["Access-Control-Allow-Methods"] = "*"
+    response.headers["Access-Control-Allow-Headers"] = "*"
+    return response
 
 
 # ============== 数据模型 ==============
@@ -1990,7 +2028,13 @@ def restart_scheduler():
         scheduler = TaskScheduler()
         return asyncio.create_task(scheduler.run())
 
-    _scheduler_ref = asyncio.get_event_loop().create_task(start_new_scheduler())
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+    _scheduler_ref = loop.create_task(start_new_scheduler())
     logger.info("调度器重启任务已提交")
 
     return {"status": "restarting", "message": "调度器正在重启..."}

@@ -22,6 +22,21 @@ from llama_index.core.schema import NodeWithScore, QueryBundle, MetadataMode
 from pydantic import ConfigDict, Field
 
 
+def _remove_surrogates(text: str) -> str:
+    """Remove lone surrogate characters that cannot be encoded as UTF-8.
+
+    Surrogates (U+D800-U+DFFF) are only valid in UTF-16, not UTF-8.
+    When text contains unpaired surrogates, Python's JSON encoder fails
+    with 'surrogates not allowed' error.
+    """
+    return "".join(c for c in text if not (0xD800 <= ord(c) <= 0xDFFF))
+
+
+def _sanitize_for_json(text: str) -> str:
+    """Sanitize text for JSON encoding by removing invalid surrogates."""
+    return _remove_surrogates(text)
+
+
 def _record_reranker_call(
     model_id: str,
     token_count: int,
@@ -123,8 +138,10 @@ class SiliconFlowReranker(BaseNodePostprocessor):
         if not nodes:
             return nodes
 
-        query = query_bundle.query_str
-        documents = [_format_node_with_metadata(node) for node in nodes]
+        query = _sanitize_for_json(query_bundle.query_str)
+        documents = [
+            _sanitize_for_json(_format_node_with_metadata(node)) for node in nodes
+        ]
 
         payload = {
             "model": self.model,
@@ -169,6 +186,8 @@ class SiliconFlowReranker(BaseNodePostprocessor):
     # 独立调用接口（不依赖 LlamaIndex 的 NodeWithScore）
     def rerank(self, query: str, documents: List[str]) -> List[tuple]:
         """对文档列表进行重排序，返回 (文档, 分数) 列表"""
+        query = _sanitize_for_json(query)
+        documents = [_sanitize_for_json(d) for d in documents]
         payload = {
             "model": self.model,
             "query": query,
@@ -217,7 +236,8 @@ class EmbeddingSimilarityReranker(BaseNodePostprocessor):
         """调用 Ollama 获取文本的 embedding 向量"""
         import httpx
 
-        payload = {"model": self.embed_model, "prompt": text[:2048]}
+        text = _sanitize_for_json(text[:2048])
+        payload = {"model": self.embed_model, "prompt": text}
         try:
             with httpx.Client(timeout=60.0) as client:
                 response = client.post(
