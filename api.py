@@ -2361,41 +2361,31 @@ def delete_chat_session(kb_id: str, session_id: str):
 def get_observability_stats():
     from llamaindex_study.callbacks import (
         setup_callbacks,
-        get_token_counter,
-        get_rag_stats,
-        format_token_stats,
-        format_rag_stats,
+        get_model_call_stats,
     )
 
     setup_callbacks()
-
-    token_counter = get_token_counter()
-    rag_stats = get_rag_stats()
-
-    if token_counter:
-        token_counts = {
-            "prompt_tokens": token_counter.prompt_llm_token_count,
-            "completion_tokens": token_counter.completion_llm_token_count,
-            "total_tokens": token_counter.total_llm_token_count,
-            "embedding_tokens": token_counter.total_embedding_token_count,
-        }
-    else:
-        token_counts = {}
+    model_stats = get_model_call_stats()
+    stats_data = model_stats.to_dict()
 
     return {
-        "token_stats": token_counts,
-        "token_stats_formatted": format_token_stats(token_counts),
-        "rag_stats": rag_stats.to_dict() if rag_stats else {},
-        "rag_stats_formatted": format_rag_stats(rag_stats) if rag_stats else "",
+        "vendor_stats": stats_data.get("vendors", []),
+        "total_calls": stats_data.get("total_calls", 0),
+        "total_tokens": stats_data.get("total_tokens", 0),
     }
 
 
 @app.post("/observability/reset")
 def reset_observability():
-    from llamaindex_study.callbacks import reset_callbacks, setup_callbacks
+    from llamaindex_study.callbacks import (
+        reset_callbacks,
+        setup_callbacks,
+        reset_model_call_stats,
+    )
 
     setup_callbacks()
     reset_callbacks()
+    reset_model_call_stats()
     return {"status": "reset"}
 
 

@@ -2,9 +2,10 @@
 LlamaIndex 可观测性模块
 """
 
+import threading
 import time
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
@@ -17,6 +18,200 @@ from llama_index.core.callbacks.base_handler import BaseCallbackHandler
 from llamaindex_study.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+@dataclass
+class ModelCallStats:
+    """单个模型的调用统计"""
+
+    vendor_id: str
+    model_type: str  # "llm", "embedding", "reranker"
+    model_id: str
+    call_count: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    error_count: int = 0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    def add_tokens(self, prompt: int = 0, completion: int = 0):
+        self.prompt_tokens += prompt
+        self.completion_tokens += completion
+        self.total_tokens += prompt + completion
+
+    def increment_call(self):
+        self.call_count += 1
+
+    def increment_error(self):
+        self.error_count += 1
+
+
+class ModelCallStatsCollection:
+    """模型调用统计收集器，按 (vendor_id, model_type, model_id) 分组"""
+
+    _lock = threading.Lock()
+
+    def __init__(self):
+        self._stats: Dict[Tuple[str, str, str], ModelCallStats] = {}
+
+    def _make_key(
+        self, vendor_id: str, model_type: str, model_id: str
+    ) -> Tuple[str, str, str]:
+        return (vendor_id, model_type, model_id)
+
+    def get_or_create(
+        self, vendor_id: str, model_type: str, model_id: str
+    ) -> ModelCallStats:
+        key = self._make_key(vendor_id, model_type, model_id)
+        with self._lock:
+            if key not in self._stats:
+                self._stats[key] = ModelCallStats(
+                    vendor_id=vendor_id,
+                    model_type=model_type,
+                    model_id=model_id,
+                )
+            return self._stats[key]
+
+    def record_llm_call(
+        self,
+        vendor_id: str,
+        model_id: str,
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
+        error: bool = False,
+    ):
+        """记录一次 LLM 调用"""
+        stats = self.get_or_create(vendor_id, "llm", model_id)
+        with self._lock:
+            stats.increment_call()
+            stats.add_tokens(prompt=prompt_tokens, completion=completion_tokens)
+            if error:
+                stats.increment_error()
+
+    def record_embedding_call(
+        self,
+        vendor_id: str,
+        model_id: str,
+        token_count: int = 0,
+        error: bool = False,
+    ):
+        """记录一次 Embedding 调用"""
+        stats = self.get_or_create(vendor_id, "embedding", model_id)
+        with self._lock:
+            stats.increment_call()
+            stats.add_tokens(prompt=token_count, completion=0)
+            if error:
+                stats.increment_error()
+
+    def record_reranker_call(
+        self,
+        vendor_id: str,
+        model_id: str,
+        token_count: int = 0,
+        error: bool = False,
+    ):
+        """记录一次 Reranker 调用"""
+        stats = self.get_or_create(vendor_id, "reranker", model_id)
+        with self._lock:
+            stats.increment_call()
+            stats.add_tokens(prompt=token_count, completion=0)
+            if error:
+                stats.increment_error()
+
+    def get_all_stats(self) -> List[Dict[str, Any]]:
+        """获取所有统计，按 vendor_id 分组"""
+        with self._lock:
+            result = []
+            for key, stats in self._stats.items():
+                result.append(stats.to_dict())
+            return result
+
+    def get_by_vendor(self, vendor_id: str) -> List[Dict[str, Any]]:
+        """获取指定供应商的所有统计"""
+        with self._lock:
+            result = []
+            for key, stats in self._stats.items():
+                if stats.vendor_id == vendor_id:
+                    result.append(stats.to_dict())
+            return result
+
+    def get_vendors(self) -> List[str]:
+        """获取所有供应商 ID 列表"""
+        with self._lock:
+            return list(set(s.vendor_id for s in self._stats.values()))
+
+    def reset(self):
+        """重置所有统计"""
+        with self._lock:
+            self._stats.clear()
+
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典，按供应商分组"""
+        with self._lock:
+            vendors = {}
+            for key, stats in self._stats.items():
+                vendor_id = stats.vendor_id
+                if vendor_id not in vendors:
+                    vendors[vendor_id] = {"vendor_id": vendor_id, "models": []}
+                vendors[vendor_id]["models"].append(stats.to_dict())
+
+            # 计算每个供应商的汇总
+            for vendor_id, vendor_data in vendors.items():
+                models = vendor_data["models"]
+                vendor_data["total_calls"] = sum(m["call_count"] for m in models)
+                vendor_data["total_prompt_tokens"] = sum(
+                    m["prompt_tokens"] for m in models
+                )
+                vendor_data["total_completion_tokens"] = sum(
+                    m["completion_tokens"] for m in models
+                )
+                vendor_data["total_tokens"] = sum(m["total_tokens"] for m in models)
+                vendor_data["total_errors"] = sum(m["error_count"] for m in models)
+
+            return {
+                "vendors": list(vendors.values()),
+                "total_calls": sum(v["total_calls"] for v in vendors.values()),
+                "total_tokens": sum(v["total_tokens"] for v in vendors.values()),
+            }
+
+
+# 全局模型调用统计实例
+_model_call_stats: Optional[ModelCallStatsCollection] = None
+
+
+def get_model_call_stats() -> ModelCallStatsCollection:
+    global _model_call_stats
+    if _model_call_stats is None:
+        _model_call_stats = ModelCallStatsCollection()
+    return _model_call_stats
+
+
+def record_model_call(
+    vendor_id: str,
+    model_type: str,
+    model_id: str,
+    prompt_tokens: int = 0,
+    completion_tokens: int = 0,
+    error: bool = False,
+):
+    """记录一次模型调用（全局入口）"""
+    stats = get_model_call_stats()
+    if model_type == "llm":
+        stats.record_llm_call(
+            vendor_id, model_id, prompt_tokens, completion_tokens, error
+        )
+    elif model_type == "embedding":
+        stats.record_embedding_call(vendor_id, model_id, prompt_tokens, error)
+    elif model_type == "reranker":
+        stats.record_reranker_call(vendor_id, model_id, prompt_tokens, error)
+
+
+def reset_model_call_stats():
+    """重置模型调用统计"""
+    stats = get_model_call_stats()
+    stats.reset()
 
 
 @dataclass

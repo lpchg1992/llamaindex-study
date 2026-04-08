@@ -270,18 +270,23 @@ class LanceCRUDService:
 
         table = db.open_table(table_name)
 
-        # 构建查询
-        if doc_id:
-            query = table.query().where(f"doc_id = '{doc_id}'")
-        else:
-            query = table.query()
-
         if text_contains:
-            # LanceDB 支持 full-text search
-            query = query.search(text_contains, query_type="fts")
+            query = table.search(text_contains, query_type="fts")
+            query = query.offset(offset).limit(limit)
+            df = query.to_pandas()
+        else:
+            import pyarrow as pa
+            import pyarrow.compute as pc
 
-        query = query.offset(offset).limit(limit)
-        df = query.to_pandas()
+            arrow_tbl = table.to_arrow()
+
+            if doc_id:
+                arrow_tbl = arrow_tbl.filter(
+                    pc.equal(arrow_tbl["doc_id"], pa.scalar(doc_id))
+                )
+
+            arrow_tbl = arrow_tbl.slice(offset, limit)
+            df = arrow_tbl.to_pandas()
 
         results = []
         for _, row in df.iterrows():
@@ -335,7 +340,7 @@ class LanceCRUDService:
         total = table.count_rows()
 
         for offset in range(0, total, batch_size):
-            df = table.query().offset(offset).limit(batch_size).to_pandas()
+            df = table.to_arrow().slice(offset, batch_size).to_pandas()
 
             for _, row in df.iterrows():
                 text = str(row.get("text", ""))
@@ -383,7 +388,7 @@ class LanceCRUDService:
         table = db.open_table(table_name)
 
         # 使用 distinct 获取唯一的 doc_id
-        df = table.query().select("doc_id").to_pandas()
+        df = table.to_arrow().select(["doc_id"]).to_pandas()
         doc_ids = df["doc_id"].unique().tolist()
 
         if limit:
@@ -657,7 +662,7 @@ class LanceCRUDService:
         nodes_rebuilt = 0
 
         for offset in range(0, total, 5000):
-            batch = table.query().offset(offset).limit(5000).to_pandas()
+            batch = table.to_arrow().slice(offset, 5000).to_pandas()
 
             batch_nodes = []
             for _, row in batch.iterrows():

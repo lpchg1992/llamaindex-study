@@ -49,6 +49,24 @@ class SiliconFlowEmbedding:
             self._client = httpx.Client(timeout=60.0)
         return self._client
 
+    def _estimate_tokens(self, text: str) -> int:
+        return len(text) // 4
+
+    def _record_embedding_call(self, token_count: int, error: bool):
+        try:
+            from llamaindex_study.callbacks import record_model_call
+
+            record_model_call(
+                vendor_id="siliconflow",
+                model_type="embedding",
+                model_id=self.model,
+                prompt_tokens=token_count,
+                completion_tokens=0,
+                error=error,
+            )
+        except Exception:
+            pass
+
     def get_text_embedding(self, text: str) -> List[float]:
         """单条文本 embedding"""
         results = self.get_text_embeddings([text])
@@ -74,17 +92,22 @@ class SiliconFlowEmbedding:
                 logger.error(
                     f"SiliconFlow embedding 失败: {response.status_code} {response.text}"
                 )
+                total_tokens = sum(self._estimate_tokens(t) for t in texts)
+                self._record_embedding_call(total_tokens, True)
                 return [[0.0] * EMBEDDING_DIM for _ in texts]
 
             data = response.json()
             embeddings = data.get("data", [])
-            # 按 input 顺序返回
+            total_tokens = sum(self._estimate_tokens(t) for t in texts)
+            self._record_embedding_call(total_tokens, False)
             embedding_map = {item["index"]: item["embedding"] for item in embeddings}
             return [
                 embedding_map.get(i, [0.0] * EMBEDDING_DIM) for i in range(len(texts))
             ]
         except Exception as e:
             logger.error(f"SiliconFlow embedding 请求异常: {e}")
+            total_tokens = sum(self._estimate_tokens(t) for t in texts)
+            self._record_embedding_call(total_tokens, True)
             return [[0.0] * EMBEDDING_DIM for _ in texts]
 
     def close(self):

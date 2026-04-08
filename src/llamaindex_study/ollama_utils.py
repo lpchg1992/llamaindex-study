@@ -17,6 +17,93 @@ from llama_index.core.constants import DEFAULT_NUM_OUTPUTS, DEFAULT_CONTEXT_WIND
 
 logger = logging.getLogger(__name__)
 
+
+def _record_llm_call(
+    vendor_id: str,
+    model_id: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    error: bool,
+):
+    """记录 LLM 调用统计"""
+    try:
+        from llamaindex_study.callbacks import record_model_call
+
+        record_model_call(
+            vendor_id=vendor_id,
+            model_type="llm",
+            model_id=model_id,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            error=error,
+        )
+    except Exception:
+        pass
+
+
+def _record_embedding_call(
+    vendor_id: str, model_id: str, token_count: int, error: bool
+):
+    """记录 Embedding 调用统计"""
+    try:
+        from llamaindex_study.callbacks import record_model_call
+
+        record_model_call(
+            vendor_id=vendor_id,
+            model_type="embedding",
+            model_id=model_id,
+            prompt_tokens=token_count,
+            completion_tokens=0,
+            error=error,
+        )
+    except Exception:
+        pass
+
+
+def _record_reranker_call(vendor_id: str, model_id: str, token_count: int, error: bool):
+    """记录 Reranker 调用统计"""
+    try:
+        from llamaindex_study.callbacks import record_model_call
+
+        record_model_call(
+            vendor_id=vendor_id,
+            model_type="reranker",
+            model_id=model_id,
+            prompt_tokens=token_count,
+            completion_tokens=0,
+            error=error,
+        )
+    except Exception:
+        pass
+
+
+def _extract_llm_tokens(response: Any) -> tuple[int, int]:
+    """从 LLM 响应中提取 token 数量，返回 (prompt_tokens, completion_tokens)"""
+    prompt_tokens = 0
+    completion_tokens = 0
+
+    if response is None:
+        return prompt_tokens, completion_tokens
+
+    # 尝试从原始响应中提取
+    raw = getattr(response, "raw", None)
+    if raw is None:
+        raw = response
+
+    # 检查 openai 格式的 usage 字段
+    if hasattr(raw, "usage") and raw.usage:
+        usage = raw.usage
+        prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
+        completion_tokens = getattr(usage, "completion_tokens", 0) or 0
+    elif isinstance(raw, dict):
+        usage = raw.get("usage") or {}
+        if usage:
+            prompt_tokens = usage.get("prompt_tokens", 0) or 0
+            completion_tokens = usage.get("completion_tokens", 0) or 0
+
+    return prompt_tokens, completion_tokens
+
+
 # 默认配置
 DEFAULT_TIMEOUT = 300.0
 DEFAULT_MAX_CONCURRENT = 2
@@ -358,26 +445,78 @@ class OllamaEmbedder(OllamaEmbedding):
 
         raise last_error
 
+    def _get_vendor_id(self) -> str:
+        if "localhost" in self._base_url or "127.0.0.1" in self._base_url:
+            return "ollama"
+        return "ollama"
+
+    def _estimate_tokens(self, text: str) -> int:
+        return len(text) // 4
+
     def get_text_embedding(self, text: str) -> List[float]:
-        return self._sync_call_with_retry(super().get_text_embedding, text)
+        try:
+            result = self._sync_call_with_retry(super().get_text_embedding, text)
+            _record_embedding_call(
+                self._get_vendor_id(),
+                self.model_name,
+                self._estimate_tokens(text),
+                False,
+            )
+            return result
+        except Exception as e:
+            _record_embedding_call(self._get_vendor_id(), self.model_name, 0, True)
+            raise
 
     async def aget_text_embedding(self, text: str) -> List[float]:
-        return await self._async_call_with_retry(super().aget_text_embedding, text)
+        try:
+            result = await self._async_call_with_retry(
+                super().aget_text_embedding, text
+            )
+            _record_embedding_call(
+                self._get_vendor_id(),
+                self.model_name,
+                self._estimate_tokens(text),
+                False,
+            )
+            return result
+        except Exception as e:
+            _record_embedding_call(self._get_vendor_id(), self.model_name, 0, True)
+            raise
 
     def get_text_embeddings(self, texts: List[str]) -> List[List[float]]:
         results = []
         for text in texts:
-            result = self._sync_call_with_retry(super().get_text_embedding, text)
-            results.append(result)
+            try:
+                result = self._sync_call_with_retry(super().get_text_embedding, text)
+                _record_embedding_call(
+                    self._get_vendor_id(),
+                    self.model_name,
+                    self._estimate_tokens(text),
+                    False,
+                )
+                results.append(result)
+            except Exception as e:
+                _record_embedding_call(self._get_vendor_id(), self.model_name, 0, True)
+                raise
         return results
 
     async def aget_text_embeddings(self, texts: List[str]) -> List[List[float]]:
         results = []
         for text in texts:
-            result = await self._async_call_with_retry(
-                super().aget_text_embedding, text
-            )
-            results.append(result)
+            try:
+                result = await self._async_call_with_retry(
+                    super().aget_text_embedding, text
+                )
+                _record_embedding_call(
+                    self._get_vendor_id(),
+                    self.model_name,
+                    self._estimate_tokens(text),
+                    False,
+                )
+                results.append(result)
+            except Exception as e:
+                _record_embedding_call(self._get_vendor_id(), self.model_name, 0, True)
+                raise
         return results
 
 
@@ -579,23 +718,93 @@ class RetryableOllama(Ollama):
 
         raise last_error
 
+    def _get_vendor_id(self) -> str:
+        """从 base_url 推断 vendor_id"""
+        if "localhost" in self.base_url or "127.0.0.1" in self.base_url:
+            return "ollama"
+        return "ollama"
+
     def complete(self, prompt: str, **kwargs) -> Any:
-        return self._sync_call_with_retry("complete", prompt, **kwargs)
+        try:
+            response = self._sync_call_with_retry("complete", prompt, **kwargs)
+            prompt_tokens, completion_tokens = _extract_llm_tokens(response)
+            _record_llm_call(
+                self._get_vendor_id(),
+                self.model,
+                prompt_tokens,
+                completion_tokens,
+                False,
+            )
+            return response
+        except Exception as e:
+            _record_llm_call(self._get_vendor_id(), self.model, 0, 0, True)
+            raise
 
     def completion(self, prompt: str, **kwargs) -> Any:
-        return self._sync_call_with_retry("completion", prompt, **kwargs)
+        try:
+            response = self._sync_call_with_retry("completion", prompt, **kwargs)
+            prompt_tokens, completion_tokens = _extract_llm_tokens(response)
+            _record_llm_call(
+                self._get_vendor_id(),
+                self.model,
+                prompt_tokens,
+                completion_tokens,
+                False,
+            )
+            return response
+        except Exception as e:
+            _record_llm_call(self._get_vendor_id(), self.model, 0, 0, True)
+            raise
 
     def predict(self, prompt: str, **kwargs) -> Any:
-        return self._sync_call_with_retry("predict", prompt, **kwargs)
+        try:
+            response = self._sync_call_with_retry("predict", prompt, **kwargs)
+            prompt_tokens, completion_tokens = _extract_llm_tokens(response)
+            _record_llm_call(
+                self._get_vendor_id(),
+                self.model,
+                prompt_tokens,
+                completion_tokens,
+                False,
+            )
+            return response
+        except Exception as e:
+            _record_llm_call(self._get_vendor_id(), self.model, 0, 0, True)
+            raise
 
     def stream_complete(self, prompt: str, **kwargs) -> Any:
-        return self._sync_call_with_retry("stream_complete", prompt, **kwargs)
+        try:
+            response = self._sync_call_with_retry("stream_complete", prompt, **kwargs)
+            _record_llm_call(self._get_vendor_id(), self.model, 0, 0, False)
+            return response
+        except Exception as e:
+            _record_llm_call(self._get_vendor_id(), self.model, 0, 0, True)
+            raise
 
     def chat(self, messages: Any, **kwargs) -> Any:
-        return self._sync_call_with_retry("chat", messages, **kwargs)
+        try:
+            response = self._sync_call_with_retry("chat", messages, **kwargs)
+            prompt_tokens, completion_tokens = _extract_llm_tokens(response)
+            _record_llm_call(
+                self._get_vendor_id(),
+                self.model,
+                prompt_tokens,
+                completion_tokens,
+                False,
+            )
+            return response
+        except Exception as e:
+            _record_llm_call(self._get_vendor_id(), self.model, 0, 0, True)
+            raise
 
     def stream_chat(self, messages: Any, **kwargs) -> Any:
-        return self._sync_call_with_retry("stream_chat", messages, **kwargs)
+        try:
+            response = self._sync_call_with_retry("stream_chat", messages, **kwargs)
+            _record_llm_call(self._get_vendor_id(), self.model, 0, 0, False)
+            return response
+        except Exception as e:
+            _record_llm_call(self._get_vendor_id(), self.model, 0, 0, True)
+            raise
 
     async def _async_call_with_retry(self, method_name: str, *args, **kwargs) -> Any:
         import time
@@ -628,22 +837,58 @@ class RetryableOllama(Ollama):
         raise last_error
 
     async def acomplete(self, prompt: str, **kwargs) -> Any:
-        return await self._async_call_with_retry("acomplete", prompt, **kwargs)
+        try:
+            response = await self._async_call_with_retry("acomplete", prompt, **kwargs)
+            prompt_tokens, completion_tokens = _extract_llm_tokens(response)
+            _record_llm_call(
+                self._get_vendor_id(),
+                self.model,
+                prompt_tokens,
+                completion_tokens,
+                False,
+            )
+            return response
+        except Exception as e:
+            _record_llm_call(self._get_vendor_id(), self.model, 0, 0, True)
+            raise
 
     async def achat(self, messages: Any, **kwargs) -> Any:
-        return await self._async_call_with_retry("achat", messages, **kwargs)
+        try:
+            response = await self._async_call_with_retry("achat", messages, **kwargs)
+            prompt_tokens, completion_tokens = _extract_llm_tokens(response)
+            _record_llm_call(
+                self._get_vendor_id(),
+                self.model,
+                prompt_tokens,
+                completion_tokens,
+                False,
+            )
+            return response
+        except Exception as e:
+            _record_llm_call(self._get_vendor_id(), self.model, 0, 0, True)
+            raise
 
     async def astream_complete(self, prompt: str, **kwargs) -> Any:
-        return await self._async_call_with_retry("astream_complete", prompt, **kwargs)
+        try:
+            response = await self._async_call_with_retry(
+                "astream_complete", prompt, **kwargs
+            )
+            _record_llm_call(self._get_vendor_id(), self.model, 0, 0, False)
+            return response
+        except Exception as e:
+            _record_llm_call(self._get_vendor_id(), self.model, 0, 0, True)
+            raise
 
     async def astream_chat(self, messages: Any, **kwargs) -> Any:
-        return await self._async_call_with_retry("astream_chat", messages, **kwargs)
-
-    async def astream_complete(self, prompt: str, **kwargs) -> Any:
-        return self._call_with_retry("astream_complete", prompt, **kwargs)
-
-    async def astream_chat(self, messages: Any, **kwargs) -> Any:
-        return self._call_with_retry("astream_chat", messages, **kwargs)
+        try:
+            response = await self._async_call_with_retry(
+                "astream_chat", messages, **kwargs
+            )
+            _record_llm_call(self._get_vendor_id(), self.model, 0, 0, False)
+            return response
+        except Exception as e:
+            _record_llm_call(self._get_vendor_id(), self.model, 0, 0, True)
+            raise
 
     def get_context_window(self) -> int:
         """获取上下文窗口大小，带重试机制"""
@@ -853,6 +1098,11 @@ class RetryableSiliconFlowLLM:
         self._fallback_llm: Optional[Any] = None
         self._use_fallback = False
 
+    def _get_vendor_id(self) -> str:
+        if self._use_fallback:
+            return "ollama"
+        return "siliconflow"
+
     def _is_retryable_error(self, error: Exception) -> bool:
         """判断是否为可重试的错误"""
         error_type_name = type(error).__name__
@@ -947,34 +1197,136 @@ class RetryableSiliconFlowLLM:
         return method(*args, **kwargs)
 
     def complete(self, prompt: str, **kwargs) -> Any:
-        return self._call_with_retry("complete", prompt, **kwargs)
+        try:
+            response = self._call_with_retry("complete", prompt, **kwargs)
+            prompt_tokens, completion_tokens = _extract_llm_tokens(response)
+            _record_llm_call(
+                self._get_vendor_id(),
+                self._model,
+                prompt_tokens,
+                completion_tokens,
+                False,
+            )
+            return response
+        except Exception as e:
+            _record_llm_call(self._get_vendor_id(), self._model, 0, 0, True)
+            raise
 
     def completion(self, prompt: str, **kwargs) -> Any:
-        return self._call_with_retry("completion", prompt, **kwargs)
+        try:
+            response = self._call_with_retry("completion", prompt, **kwargs)
+            prompt_tokens, completion_tokens = _extract_llm_tokens(response)
+            _record_llm_call(
+                self._get_vendor_id(),
+                self._model,
+                prompt_tokens,
+                completion_tokens,
+                False,
+            )
+            return response
+        except Exception as e:
+            _record_llm_call(self._get_vendor_id(), self._model, 0, 0, True)
+            raise
 
     def predict(self, prompt: str, **kwargs) -> Any:
-        return self._call_with_retry("predict", prompt, **kwargs)
+        try:
+            response = self._call_with_retry("predict", prompt, **kwargs)
+            prompt_tokens, completion_tokens = _extract_llm_tokens(response)
+            _record_llm_call(
+                self._get_vendor_id(),
+                self._model,
+                prompt_tokens,
+                completion_tokens,
+                False,
+            )
+            return response
+        except Exception as e:
+            _record_llm_call(self._get_vendor_id(), self._model, 0, 0, True)
+            raise
 
     def stream_complete(self, prompt: str, **kwargs) -> Any:
-        return self._call_with_retry("stream_complete", prompt, **kwargs)
+        try:
+            response = self._call_with_retry("stream_complete", prompt, **kwargs)
+            _record_llm_call(self._get_vendor_id(), self._model, 0, 0, False)
+            return response
+        except Exception as e:
+            _record_llm_call(self._get_vendor_id(), self._model, 0, 0, True)
+            raise
 
     def chat(self, messages: Any, **kwargs) -> Any:
-        return self._call_with_retry("chat", messages, **kwargs)
+        try:
+            response = self._call_with_retry("chat", messages, **kwargs)
+            prompt_tokens, completion_tokens = _extract_llm_tokens(response)
+            _record_llm_call(
+                self._get_vendor_id(),
+                self._model,
+                prompt_tokens,
+                completion_tokens,
+                False,
+            )
+            return response
+        except Exception as e:
+            _record_llm_call(self._get_vendor_id(), self._model, 0, 0, True)
+            raise
 
     def stream_chat(self, messages: Any, **kwargs) -> Any:
-        return self._call_with_retry("stream_chat", messages, **kwargs)
+        try:
+            response = self._call_with_retry("stream_chat", messages, **kwargs)
+            _record_llm_call(self._get_vendor_id(), self._model, 0, 0, False)
+            return response
+        except Exception as e:
+            _record_llm_call(self._get_vendor_id(), self._model, 0, 0, True)
+            raise
 
     async def acomplete(self, prompt: str, **kwargs) -> Any:
-        return self._call_with_retry("acomplete", prompt, **kwargs)
+        try:
+            response = self._call_with_retry("acomplete", prompt, **kwargs)
+            prompt_tokens, completion_tokens = _extract_llm_tokens(response)
+            _record_llm_call(
+                self._get_vendor_id(),
+                self._model,
+                prompt_tokens,
+                completion_tokens,
+                False,
+            )
+            return response
+        except Exception as e:
+            _record_llm_call(self._get_vendor_id(), self._model, 0, 0, True)
+            raise
 
     async def achat(self, messages: Any, **kwargs) -> Any:
-        return self._call_with_retry("achat", messages, **kwargs)
+        try:
+            response = self._call_with_retry("achat", messages, **kwargs)
+            prompt_tokens, completion_tokens = _extract_llm_tokens(response)
+            _record_llm_call(
+                self._get_vendor_id(),
+                self._model,
+                prompt_tokens,
+                completion_tokens,
+                False,
+            )
+            return response
+        except Exception as e:
+            _record_llm_call(self._get_vendor_id(), self._model, 0, 0, True)
+            raise
 
     async def astream_complete(self, prompt: str, **kwargs) -> Any:
-        return self._call_with_retry("astream_complete", prompt, **kwargs)
+        try:
+            response = self._call_with_retry("astream_complete", prompt, **kwargs)
+            _record_llm_call(self._get_vendor_id(), self._model, 0, 0, False)
+            return response
+        except Exception as e:
+            _record_llm_call(self._get_vendor_id(), self._model, 0, 0, True)
+            raise
 
     async def astream_chat(self, messages: Any, **kwargs) -> Any:
-        return self._call_with_retry("astream_chat", messages, **kwargs)
+        try:
+            response = self._call_with_retry("astream_chat", messages, **kwargs)
+            _record_llm_call(self._get_vendor_id(), self._model, 0, 0, False)
+            return response
+        except Exception as e:
+            _record_llm_call(self._get_vendor_id(), self._model, 0, 0, True)
+            raise
 
     @property
     def metadata(self) -> Any:

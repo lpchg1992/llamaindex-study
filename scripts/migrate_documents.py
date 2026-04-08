@@ -123,9 +123,8 @@ def migrate_kb(kb_id: str, dry_run: bool = False) -> Dict[str, int]:
                 "source_file": Path(record["file_path"]).name,
                 "source_path": record["file_path"],
                 "file_hash": record["hash"],
-                "chunk_count": 0,
+                "doc_id": doc_id,
             }
-        unique_docs[doc_id]["chunk_count"] += 1
 
     logger.info(f"发现 {len(unique_docs)} 个唯一文档")
 
@@ -163,7 +162,7 @@ def migrate_kb(kb_id: str, dry_run: bool = False) -> Dict[str, int]:
         chunk_id_map: Dict[str, str] = {}
 
         while offset < total_rows:
-            batch = table.query().offset(offset).limit(batch_size).to_pandas()
+            batch = table.to_arrow().slice(offset, batch_size).to_pandas()
 
             for _, row in batch.iterrows():
                 try:
@@ -234,7 +233,7 @@ def validate_migration(kb_id: str) -> Dict[str, Any]:
     doc_ids_in_dedup = set(r["doc_id"] for r in dedup_records)
     doc_ids_in_new = set(d["id"] for d in doc_db.get_by_kb(kb_id))
 
-    chunks = chunk_db.get_by_kb(kb_id, limit=100000)
+    chunks = chunk_db.get_by_kb(kb_id, limit=999999999)
     chunk_count = len(chunks)
 
     missing_docs = doc_ids_in_dedup - doc_ids_in_new

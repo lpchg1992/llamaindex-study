@@ -212,6 +212,14 @@ curl -X POST http://localhost:37241/kbs \
 | POST | `/admin/restart-api` | 重启 API 服务 |
 | POST | `/admin/restart-scheduler` | 重启任务调度器 |
 
+### 可观测性
+
+| 方法 | 端点 | 功能 |
+|------|------|------|
+| GET | `/observability/stats` | 获取模型调用统计（按供应商分组） |
+| POST | `/observability/reset` | 重置所有统计 |
+| GET | `/observability/traces` | 获取最近 traces |
+
 ### 检索查询
 
 | 方法 | 端点 | 功能 |
@@ -1162,6 +1170,160 @@ curl -X POST http://localhost:37241/admin/reload-config
 - 重新加载模型注册表（从数据库读取最新的供应商和模型信息）
 - 重新加载运行时设置（从 `.runtime_settings.json` 读取最新值）
 - 对于 LLM/Embedding 设置的修改，仍需要重启服务才能完全生效
+
+---
+
+## 可观测性
+
+### 获取模型调用统计
+
+#### GET /observability/stats - 获取模型调用统计
+
+获取按供应商和模型分组的调用统计信息。
+
+```bash
+curl http://localhost:37241/observability/stats
+```
+
+**响应：**
+```json
+{
+  "vendor_stats": [
+    {
+      "vendor_id": "siliconflow",
+      "models": [
+        {
+          "vendor_id": "siliconflow",
+          "model_type": "llm",
+          "model_id": "Pro/deepseek-ai/DeepSeek-V3.2",
+          "call_count": 10,
+          "prompt_tokens": 5000,
+          "completion_tokens": 2500,
+          "total_tokens": 7500,
+          "error_count": 0
+        },
+        {
+          "vendor_id": "siliconflow",
+          "model_type": "embedding",
+          "model_id": "Pro/BAAI/bge-m3",
+          "call_count": 5,
+          "prompt_tokens": 1200,
+          "completion_tokens": 0,
+          "total_tokens": 1200,
+          "error_count": 0
+        }
+      ],
+      "total_calls": 15,
+      "total_prompt_tokens": 6200,
+      "total_completion_tokens": 2500,
+      "total_tokens": 8700,
+      "total_errors": 0
+    },
+    {
+      "vendor_id": "ollama",
+      "models": [
+        {
+          "vendor_id": "ollama",
+          "model_type": "llm",
+          "model_id": "tomng/lfm2.5-instruct:1.2b",
+          "call_count": 3,
+          "prompt_tokens": 800,
+          "completion_tokens": 400,
+          "total_tokens": 1200,
+          "error_count": 1
+        }
+      ],
+      "total_calls": 3,
+      "total_prompt_tokens": 800,
+      "total_completion_tokens": 400,
+      "total_tokens": 1200,
+      "total_errors": 1
+    }
+  ],
+  "total_calls": 18,
+  "total_tokens": 9900
+}
+```
+
+**统计维度：**
+
+| 字段 | 说明 |
+|------|------|
+| `vendor_stats` | 按供应商分组的统计数据 |
+| `vendor_stats[].vendor_id` | 供应商 ID（如 `ollama`, `siliconflow`） |
+| `vendor_stats[].models` | 该供应商下的所有模型统计 |
+| `model_type` | 模型类型：`llm`、`embedding`、`reranker` |
+| `model_id` | 模型 ID（如 `siliconflow/DeepSeek-V3.2`） |
+| `call_count` | 调用次数 |
+| `prompt_tokens` | 输入 tokens |
+| `completion_tokens` | 输出 tokens（仅 LLM） |
+| `total_tokens` | 总 tokens |
+| `error_count` | 错误次数 |
+| `total_calls` | 该分组内所有调用的总次数 |
+| `total_tokens` | 该分组内所有调用的总 tokens |
+
+**统计覆盖范围：**
+- LLM 调用（`complete`、`chat`、`predict` 等）
+- Embedding 调用（`get_text_embedding`）
+- Reranker 调用
+
+---
+
+### 重置统计
+
+#### POST /observability/reset - 重置所有统计
+
+清除所有模型调用统计和 traces。
+
+```bash
+curl -X POST http://localhost:37241/observability/reset
+```
+
+**响应：**
+```json
+{
+  "status": "reset"
+}
+```
+
+---
+
+### 获取 Traces
+
+#### GET /observability/traces - 获取最近 traces
+
+获取最近的 RAG 执行 traces（限 100 条）。
+
+```bash
+curl "http://localhost:37241/observability/traces?limit=50"
+```
+
+**参数：**
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `limit` | int | 100 | 返回的 trace 数量上限 |
+
+**响应：**
+```json
+{
+  "traces": [
+    {
+      "timestamp": "2024-01-15T10:30:00",
+      "query": "如何优化 Python 性能",
+      "duration_ms": 1250.5,
+      "retrieval_count": 5,
+      "retrieval_scores": [0.95, 0.88, 0.82, 0.75, 0.71],
+      "source_node_count": 3,
+      "llm_input_tokens": 1500,
+      "llm_output_tokens": 300,
+      "embedding_tokens": 200,
+      "total_tokens": 2000
+    }
+  ],
+  "total": 1
+}
+```
 
 ---
 

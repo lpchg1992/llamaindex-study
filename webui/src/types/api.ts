@@ -272,24 +272,31 @@ export interface ChatResponse {
 }
 
 // Observability
-export interface TokenStats {
+export interface ModelStats {
+  vendor_id: string
+  model_type: string
+  model_id: string
+  call_count: number
   prompt_tokens: number
   completion_tokens: number
   total_tokens: number
-  embedding_tokens: number
+  error_count: number
 }
 
-export interface RAGStats {
-  total_queries: number
-  total_retrievals: number
-  avg_latency_ms: number
+export interface VendorStats {
+  vendor_id: string
+  models: ModelStats[]
+  total_calls: number
+  total_prompt_tokens: number
+  total_completion_tokens: number
+  total_tokens: number
+  total_errors: number
 }
 
 export interface ObservabilityStats {
-  token_stats: TokenStats
-  token_stats_formatted: string
-  rag_stats: RAGStats
-  rag_stats_formatted: string
+  vendor_stats: VendorStats[]
+  total_calls: number
+  total_tokens: number
 }
 
 export interface TraceEvent {
