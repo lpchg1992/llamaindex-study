@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useModels, useVendors, useCreateVendor, useDeleteVendor, useUpdateVendor, useCreateModel, useDeleteModel, useUpdateModel, useSetDefaultModel } from '@/api/hooks'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -22,9 +22,24 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Cpu, User, Plus, Trash2, Star, Pencil } from 'lucide-react'
+import { Cpu, User, Plus, Trash2, Star, Pencil, Settings2 } from 'lucide-react'
 import { toast } from 'sonner'
 import type { VendorInfo, ModelInfo, VendorCreateRequest, ModelCreateRequest } from '@/types/api'
+
+type VendorType = 'cloud' | 'local'
+
+function getDefaultModelConfig(type: string): Record<string, unknown> {
+  switch (type) {
+    case 'llm':
+      return { temperature: 0.7, max_tokens: 2048, top_p: 0.9 }
+    case 'embedding':
+      return { dimensions: 1024, batch_size: 32, pooling: 'mean' }
+    case 'reranker':
+      return { top_k: 10, normalize: true }
+    default:
+      return {}
+  }
+}
 
 function VendorDialog({
   open,
@@ -39,11 +54,31 @@ function VendorDialog({
   onSave: (data: VendorCreateRequest) => void
   mode: 'create' | 'edit'
 }) {
+  const [vendorType, setVendorType] = useState<VendorType>(
+    vendor?.api_key ? 'cloud' : 'local'
+  )
+  
   const [formData, setFormData] = useState<VendorCreateRequest>(
     vendor
       ? { id: vendor.id, name: vendor.name, api_base: vendor.api_base || '', api_key: vendor.api_key || '', is_active: vendor.is_active }
       : { id: '', name: '', api_base: '', api_key: '', is_active: true }
   )
+
+  useEffect(() => {
+    if (vendor) {
+      setFormData({
+        id: vendor.id,
+        name: vendor.name,
+        api_base: vendor.api_base || '',
+        api_key: vendor.api_key || '',
+        is_active: vendor.is_active,
+      })
+      setVendorType(vendor.api_key ? 'cloud' : 'local')
+    } else {
+      setFormData({ id: '', name: '', api_base: '', api_key: '', is_active: true })
+      setVendorType('cloud')
+    }
+  }, [vendor])
 
   const handleSave = () => {
     if (!formData.id || !formData.name) return
@@ -61,6 +96,28 @@ function VendorDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 py-4">
+          <div className="space-y-2">
+            <Label htmlFor="vendor-type">Vendor Type</Label>
+            <Select value={vendorType} onValueChange={(v: VendorType) => setVendorType(v)}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="cloud">
+                  <div className="flex flex-col items-start">
+                    <span>Cloud Provider</span>
+                    <span className="text-xs text-muted-foreground">Requires API key (e.g., SiliconFlow, OpenAI)</span>
+                  </div>
+                </SelectItem>
+                <SelectItem value="local">
+                  <div className="flex flex-col items-start">
+                    <span>Local Provider</span>
+                    <span className="text-xs text-muted-foreground">No API key needed (e.g., Ollama)</span>
+                  </div>
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
           <div className="space-y-2">
             <Label htmlFor="vendor-id">Vendor ID</Label>
             <Input
@@ -84,21 +141,28 @@ function VendorDialog({
             <Label htmlFor="vendor-base">API Base URL</Label>
             <Input
               id="vendor-base"
-              placeholder="https://api.siliconflow.cn/v1"
+              placeholder={vendorType === 'cloud' ? 'https://api.siliconflow.cn/v1' : 'http://localhost:11434'}
               value={formData.api_base || ''}
               onChange={(e) => setFormData({ ...formData, api_base: e.target.value })}
             />
+            {vendorType === 'local' && (
+              <p className="text-xs text-muted-foreground">
+                Local providers typically use http://localhost:11434
+              </p>
+            )}
           </div>
-          <div className="space-y-2">
-            <Label htmlFor="vendor-key">API Key</Label>
-            <Input
-              id="vendor-key"
-              type="password"
-              placeholder="sk-..."
-              value={formData.api_key || ''}
-              onChange={(e) => setFormData({ ...formData, api_key: e.target.value })}
-            />
-          </div>
+          {vendorType === 'cloud' && (
+            <div className="space-y-2">
+              <Label htmlFor="vendor-key">API Key</Label>
+              <Input
+                id="vendor-key"
+                type="password"
+                placeholder="sk-..."
+                value={formData.api_key || ''}
+                onChange={(e) => setFormData({ ...formData, api_key: e.target.value })}
+              />
+            </div>
+          )}
           <div className="flex items-center space-x-2">
             <Switch
               id="vendor-active"
@@ -136,11 +200,44 @@ function ModelDialog({
   onSave: (data: { modelId: string; data: ModelCreateRequest }) => void
   mode: 'create' | 'edit'
 }) {
+  const [showAdvanced, setShowAdvanced] = useState(false)
+  
   const [formData, setFormData] = useState<ModelCreateRequest>(
     model
-      ? { id: model.id, vendor_id: model.vendor_id, name: model.name, type: model.type, is_active: model.is_active, is_default: model.is_default }
-      : { id: '', vendor_id: '', name: '', type: 'llm', is_active: true, is_default: false }
+      ? { 
+          id: model.id, 
+          vendor_id: model.vendor_id, 
+          name: model.name, 
+          type: model.type, 
+          is_active: model.is_active, 
+          is_default: model.is_default,
+          config: model.config || getDefaultModelConfig(model.type)
+        }
+      : { id: '', vendor_id: '', name: '', type: 'llm', is_active: true, is_default: false, config: getDefaultModelConfig('llm') }
   )
+
+  useEffect(() => {
+    if (model) {
+      setFormData({
+        id: model.id,
+        vendor_id: model.vendor_id,
+        name: model.name,
+        type: model.type,
+        is_active: model.is_active,
+        is_default: model.is_default,
+        config: model.config || getDefaultModelConfig(model.type),
+      })
+    } else {
+      setFormData({ id: '', vendor_id: '', name: '', type: 'llm', is_active: true, is_default: false, config: getDefaultModelConfig('llm') })
+    }
+  }, [model])
+
+  const updateConfig = (key: string, value: unknown) => {
+    setFormData(prev => ({
+      ...prev,
+      config: { ...prev.config, [key]: value }
+    }))
+  }
 
   const handleSave = () => {
     if (!formData.id || !formData.vendor_id || !formData.type) return
@@ -148,16 +245,164 @@ function ModelDialog({
     onOpenChange(false)
   }
 
+  const getConfigValue = <T,>(key: string, defaultValue: T): T => {
+    const val = formData.config?.[key]
+    return (val as T) ?? defaultValue
+  }
+
+  const renderModelConfig = () => {
+    switch (formData.type) {
+      case 'llm':
+        return (
+          <div className="space-y-3 border-t pt-3">
+            <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+              <Settings2 className="h-4 w-4" />
+              LLM Configuration
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label htmlFor="config-temperature" className="text-xs">Temperature</Label>
+                <Input
+                  id="config-temperature"
+                  type="number"
+                  min={0}
+                  max={2}
+                  step={0.1}
+                  value={getConfigValue('temperature', 0.7)}
+                  onChange={(e) => updateConfig('temperature', parseFloat(e.target.value))}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="config-max-tokens" className="text-xs">Max Tokens</Label>
+                <Input
+                  id="config-max-tokens"
+                  type="number"
+                  min={1}
+                  max={128000}
+                  value={getConfigValue('max_tokens', 2048)}
+                  onChange={(e) => updateConfig('max_tokens', parseInt(e.target.value))}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="config-top-p" className="text-xs">Top P</Label>
+                <Input
+                  id="config-top-p"
+                  type="number"
+                  min={0}
+                  max={1}
+                  step={0.1}
+                  value={getConfigValue('top_p', 0.9)}
+                  onChange={(e) => updateConfig('top_p', parseFloat(e.target.value))}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="config-freq-penalty" className="text-xs">Frequency Penalty</Label>
+                <Input
+                  id="config-freq-penalty"
+                  type="number"
+                  min={-2}
+                  max={2}
+                  step={0.1}
+                  value={getConfigValue('frequency_penalty', 0)}
+                  onChange={(e) => updateConfig('frequency_penalty', parseFloat(e.target.value))}
+                />
+              </div>
+            </div>
+          </div>
+        )
+      case 'embedding':
+        return (
+          <div className="space-y-3 border-t pt-3">
+            <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+              <Settings2 className="h-4 w-4" />
+              Embedding Configuration
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label htmlFor="config-dimensions" className="text-xs">Dimensions</Label>
+                <Input
+                  id="config-dimensions"
+                  type="number"
+                  min={128}
+                  max={4096}
+                  value={getConfigValue('dimensions', 1024)}
+                  onChange={(e) => updateConfig('dimensions', parseInt(e.target.value))}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="config-batch-size" className="text-xs">Batch Size</Label>
+                <Input
+                  id="config-batch-size"
+                  type="number"
+                  min={1}
+                  max={256}
+                  value={getConfigValue('batch_size', 32)}
+                  onChange={(e) => updateConfig('batch_size', parseInt(e.target.value))}
+                />
+              </div>
+              <div className="space-y-1 col-span-2">
+                <Label htmlFor="config-pooling" className="text-xs">Pooling Mode</Label>
+                <Select 
+                  value={getConfigValue('pooling', 'mean')} 
+                  onValueChange={(v) => updateConfig('pooling', v)}
+                >
+                  <SelectTrigger id="config-pooling">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="mean">Mean Pooling</SelectItem>
+                    <SelectItem value="cls">CLS Pooling</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          </div>
+        )
+      case 'reranker':
+        return (
+          <div className="space-y-3 border-t pt-3">
+            <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+              <Settings2 className="h-4 w-4" />
+              Reranker Configuration
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label htmlFor="config-top-k" className="text-xs">Top K</Label>
+                <Input
+                  id="config-top-k"
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={getConfigValue('top_k', 10)}
+                  onChange={(e) => updateConfig('top_k', parseInt(e.target.value))}
+                />
+              </div>
+              <div className="flex items-center space-x-2 pt-5">
+                <Switch
+                  id="config-normalize"
+                  checked={getConfigValue('normalize', true)}
+                  onCheckedChange={(checked) => updateConfig('normalize', checked)}
+                />
+                <Label htmlFor="config-normalize" className="text-xs">Normalize Scores</Label>
+              </div>
+            </div>
+          </div>
+        )
+      default:
+        return null
+    }
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>{mode === 'create' ? 'Add Model' : 'Edit Model'}</DialogTitle>
           <DialogDescription>
             {mode === 'create' ? 'Add a new LLM, embedding, or reranker model.' : 'Update model information.'}
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-4 py-4">
+        <div className="space-y-4 py-4 max-h-[60vh] overflow-y-auto">
           <div className="space-y-2">
             <Label htmlFor="model-id">Model ID</Label>
             <Input
@@ -192,7 +437,13 @@ function ModelDialog({
           </div>
           <div className="space-y-2">
             <Label htmlFor="model-type">Type</Label>
-            <Select value={formData.type} onValueChange={(v: 'llm' | 'embedding' | 'reranker') => setFormData({ ...formData, type: v })}>
+            <Select value={formData.type} onValueChange={(v: 'llm' | 'embedding' | 'reranker') => {
+              setFormData(prev => ({
+                ...prev,
+                type: v,
+                config: getDefaultModelConfig(v)
+              }))
+            }}>
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
@@ -219,6 +470,17 @@ function ModelDialog({
             />
             <Label htmlFor="model-active">Active</Label>
           </div>
+          
+          {renderModelConfig()}
+          
+          <button
+            type="button"
+            onClick={() => setShowAdvanced(!showAdvanced)}
+            className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <Settings2 className="h-4 w-4" />
+            {showAdvanced ? 'Hide' : 'Show'} Advanced Configuration
+          </button>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
@@ -478,6 +740,7 @@ export function ModelsPage() {
                       <div>
                         <div className="flex items-center gap-2">
                           <span className="font-medium">{model.name}</span>
+                          {model.is_default && <Badge><Star className="h-3 w-3 mr-1" />Default</Badge>}
                           {!model.is_active && <Badge variant="destructive">Inactive</Badge>}
                         </div>
                         <p className="text-sm text-muted-foreground font-mono">{model.id}</p>
@@ -487,6 +750,11 @@ export function ModelsPage() {
                         <Button variant="ghost" size="icon" onClick={() => openEditModel(model)}>
                           <Pencil className="h-4 w-4" />
                         </Button>
+                        {!model.is_default && (
+                          <Button variant="ghost" size="sm" onClick={() => handleSetDefault(model.id)}>
+                            Set Default
+                          </Button>
+                        )}
                         <Button variant="ghost" size="icon" onClick={() => handleDeleteModel(model.id)}>
                           <Trash2 className="h-4 w-4 text-destructive" />
                         </Button>

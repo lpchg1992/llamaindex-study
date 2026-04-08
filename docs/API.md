@@ -233,12 +233,16 @@ curl -X POST http://localhost:37241/kbs \
 ### 供应商管理
 
 | 方法 | 端点 | 功能 |
-|------|------|------|
+|------|------|
 | GET | `/vendors` | 列出所有供应商 |
 | POST | `/vendors` | 创建供应商 |
 | GET | `/vendors/{vendor_id}` | 获取指定供应商 |
 | PUT | `/vendors/{vendor_id}` | 更新供应商 |
 | DELETE | `/vendors/{vendor_id}` | 删除供应商 |
+
+**供应商类型**:
+- **云服务商 (Cloud)**: 需要 API Key（如 SiliconFlow、OpenAI）
+- **本地服务商 (Local)**: 无需 API Key（如 Ollama），只需提供 API Base URL
 
 **供应商示例**:
 ```bash
@@ -277,6 +281,20 @@ curl -X POST http://localhost:37241/vendors \
 
 **类型筛选**: `?type=llm`、`?type=embedding`、`?type=reranker`
 
+**模型配置 (config)**: 不同类型模型支持不同的配置参数
+
+| 模型类型 | 配置参数 | 说明 | 默认值 |
+|---------|---------|------|--------|
+| `llm` | `temperature` | 温度参数 (0-2) | 0.7 |
+| `llm` | `max_tokens` | 最大 token 数 | 2048 |
+| `llm` | `top_p` | Top-p 采样 | 0.9 |
+| `llm` | `frequency_penalty` | 频率惩罚 (-2-2) | 0 |
+| `embedding` | `dimensions` | 向量维度 | 1024 |
+| `embedding` | `batch_size` | 批处理大小 | 32 |
+| `embedding` | `pooling` | 池化模式: `mean`/`cls` | `mean` |
+| `reranker` | `top_k` | 返回 top k 结果 | 10 |
+| `reranker` | `normalize` | 是否归一化分数 | true |
+
 **示例**:
 ```bash
 # 列出所有模型
@@ -286,7 +304,7 @@ curl http://localhost:37241/models
 curl http://localhost:37241/models?type=llm
 curl http://localhost:37241/models?type=embedding
 
-# 创建 LLM 模型
+# 创建 LLM 模型（带配置）
 curl -X POST http://localhost:37241/models \
   -H "Content-Type: application/json" \
   -d '{
@@ -294,10 +312,15 @@ curl -X POST http://localhost:37241/models \
     "vendor_id": "ollama",
     "name": "lfm2.5-thinking:latest",
     "type": "llm",
-    "is_default": false
+    "is_default": false,
+    "config": {
+      "temperature": 0.7,
+      "max_tokens": 2048,
+      "top_p": 0.9
+    }
   }'
 
-# 创建 Embedding 模型
+# 创建 Embedding 模型（带配置）
 curl -X POST http://localhost:37241/models \
   -H "Content-Type: application/json" \
   -d '{
@@ -305,7 +328,12 @@ curl -X POST http://localhost:37241/models \
     "vendor_id": "ollama",
     "name": "bge-m3:latest",
     "type": "embedding",
-    "is_default": true
+    "is_default": true,
+    "config": {
+      "dimensions": 1024,
+      "batch_size": 32,
+      "pooling": "mean"
+    }
   }'
 
 # 使用模型查询
