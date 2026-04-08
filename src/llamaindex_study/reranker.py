@@ -22,6 +22,49 @@ from llama_index.core.schema import NodeWithScore, QueryBundle, MetadataMode
 from pydantic import ConfigDict, Field
 
 
+def _record_reranker_call(
+    model_id: str,
+    token_count: int,
+    error: bool = False,
+):
+    """记录 Reranker 调用统计"""
+    try:
+        from llamaindex_study.callbacks import record_model_call
+
+        record_model_call(
+            vendor_id="siliconflow",
+            model_type="reranker",
+            model_id=model_id,
+            prompt_tokens=token_count,
+            completion_tokens=0,
+            error=error,
+        )
+    except Exception:
+        pass
+
+
+def _record_embedding_call(
+    vendor_id: str,
+    model_id: str,
+    token_count: int,
+    error: bool = False,
+):
+    """记录 Embedding 调用统计"""
+    try:
+        from llamaindex_study.callbacks import record_model_call
+
+        record_model_call(
+            vendor_id=vendor_id,
+            model_type="embedding",
+            model_id=model_id,
+            prompt_tokens=token_count,
+            completion_tokens=0,
+            error=error,
+        )
+    except Exception:
+        pass
+
+
 def cosine_similarity(a: List[float], b: List[float]) -> float:
     """计算两个向量的余弦相似度"""
     dot = sum(x * y for x, y in zip(a, b))
@@ -93,18 +136,23 @@ class SiliconFlowReranker(BaseNodePostprocessor):
         print(f"   🔄 SiliconFlow Reranker: 正在对 {len(nodes)} 个结果进行重排序...")
         import httpx
 
-        with httpx.Client(timeout=60.0) as client:
-            response = client.post(
-                f"{self.base_url}/rerank",
-                json=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {self.api_key}",
-                },
-            )
-            response.raise_for_status()
-            result = response.json()
-            api_results = result["results"]
+        try:
+            with httpx.Client(timeout=60.0) as client:
+                response = client.post(
+                    f"{self.base_url}/rerank",
+                    json=payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {self.api_key}",
+                    },
+                )
+                response.raise_for_status()
+                result = response.json()
+                api_results = result["results"]
+                _record_reranker_call(self.model, sum(len(d) for d in documents), False)
+        except Exception as e:
+            _record_reranker_call(self.model, 0, True)
+            raise
 
         # 建立 index → score 映射并更新节点
         index_to_score = {
@@ -129,21 +177,26 @@ class SiliconFlowReranker(BaseNodePostprocessor):
         }
         import httpx
 
-        with httpx.Client(timeout=60.0) as client:
-            response = client.post(
-                f"{self.base_url}/rerank",
-                json=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {self.api_key}",
-                },
-            )
-            response.raise_for_status()
-            result = response.json()
-        return [
-            (documents[item["index"]], item["relevance_score"])
-            for item in result["results"]
-        ]
+        try:
+            with httpx.Client(timeout=60.0) as client:
+                response = client.post(
+                    f"{self.base_url}/rerank",
+                    json=payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {self.api_key}",
+                    },
+                )
+                response.raise_for_status()
+                result = response.json()
+                _record_reranker_call(self.model, sum(len(d) for d in documents), False)
+                return [
+                    (documents[item["index"]], item["relevance_score"])
+                    for item in result["results"]
+                ]
+        except Exception as e:
+            _record_reranker_call(self.model, 0, True)
+            raise
 
 
 class EmbeddingSimilarityReranker(BaseNodePostprocessor):
@@ -165,15 +218,21 @@ class EmbeddingSimilarityReranker(BaseNodePostprocessor):
         import httpx
 
         payload = {"model": self.embed_model, "prompt": text[:2048]}
-        with httpx.Client(timeout=60.0) as client:
-            response = client.post(
-                f"{self.base_url}/api/embeddings",
-                json=payload,
-                headers={"Content-Type": "application/json"},
-            )
-            response.raise_for_status()
-            result = response.json()
-            return result["embedding"]
+        try:
+            with httpx.Client(timeout=60.0) as client:
+                response = client.post(
+                    f"{self.base_url}/api/embeddings",
+                    json=payload,
+                    headers={"Content-Type": "application/json"},
+                )
+                response.raise_for_status()
+                result = response.json()
+                token_count = len(text[:2048]) // 4
+                _record_embedding_call("ollama", self.embed_model, token_count, False)
+                return result["embedding"]
+        except Exception as e:
+            _record_embedding_call("ollama", self.embed_model, 0, True)
+            raise
 
     def _postprocess_nodes(
         self,

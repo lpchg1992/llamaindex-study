@@ -101,6 +101,8 @@
 | 查询转换 | `query_transform.py` | HyDE、多查询转换 |
 | Response Synthesizer | `response_synthesizer.py` | 答案生成模式配置 |
 | RAG 评估 | `rag_evaluator.py` | Ragas 评估框架 |
+| 可观测性 | `callbacks.py` | Token 监控回调 |
+| 统计持久化 | `token_stats_db.py` | SQLite 持久化存储 |
 
 ### 知识库模块 (`kb/`)
 

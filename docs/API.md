@@ -218,9 +218,10 @@ curl -X POST http://localhost:37241/kbs \
 
 | 方法 | 端点 | 功能 |
 |------|------|------|
-| GET | `/observability/stats` | 获取模型调用统计（按供应商分组） |
+| GET | `/observability/stats` | 获取模型调用统计（按供应商分组，支持日期范围） |
 | POST | `/observability/reset` | 重置所有统计 |
-| GET | `/observability/traces` | 获取最近 traces |
+| GET | `/observability/traces` | 获取最近 traces（支持日期范围） |
+| GET | `/observability/dates` | 获取有数据的日期列表 |
 
 ### 检索查询
 
@@ -1250,17 +1251,45 @@ curl -X POST http://localhost:37241/admin/reload-config
 
 ## 可观测性
 
+> **数据持久化**: 统计数据存储在 `~/.llamaindex/stats/token_stats.db`（SQLite），支持按日期范围查询历史数据。
+
 ### 获取模型调用统计
 
 #### GET /observability/stats - 获取模型调用统计
 
 获取按供应商和模型分组的调用统计信息。
 
+**参数：**
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `start_date` | string | - | 开始日期 (YYYY-MM-DD)，支持历史查询 |
+| `end_date` | string | - | 结束日期 (YYYY-MM-DD)，支持历史查询 |
+
 ```bash
+# 查询所有历史
 curl http://localhost:37241/observability/stats
+
+# 查询特定日期范围
+curl "http://localhost:37241/observability/stats?start_date=2026-04-01&end_date=2026-04-08"
+
+# 查询今天
+curl "http://localhost:37241/observability/stats?start_date=2026-04-08&end_date=2026-04-08"
 ```
 
-**响应：**
+**响应（带日期范围查询）：**
+```json
+{
+  "vendor_stats": [...],
+  "total_calls": 100,
+  "total_tokens": 50000,
+  "total_prompt_tokens": 40000,
+  "total_completion_tokens": 10000,
+  "total_errors": 2,
+  "start_date": "2026-04-01",
+  "end_date": "2026-04-08"
+}
+```
 ```json
 {
   "vendor_stats": [
@@ -1367,10 +1396,64 @@ curl -X POST http://localhost:37241/observability/reset
 
 #### GET /observability/traces - 获取最近 traces
 
-获取最近的 RAG 执行 traces（限 100 条）。
+获取最近的 RAG 执行 traces。
+
+**参数：**
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `limit` | int | 100 | 返回条数 |
+| `start_date` | string | - | 开始日期 (YYYY-MM-DD) |
+| `end_date` | string | - | 结束日期 (YYYY-MM-DD) |
 
 ```bash
+# 获取最近 50 条
 curl "http://localhost:37241/observability/traces?limit=50"
+
+# 查询特定日期范围
+curl "http://localhost:37241/observability/traces?start_date=2026-04-01&end_date=2026-04-08&limit=100"
+```
+
+**响应：**
+```json
+{
+  "traces": [
+    {
+      "date": "2026-04-08",
+      "timestamp": "2026-04-08T10:30:00",
+      "query": "如何设计猪饲料配方？",
+      "duration_ms": 123.45,
+      "retrieval_count": 5,
+      "retrieval_scores": [0.92, 0.88, 0.85, 0.82, 0.78],
+      "source_node_count": 3,
+      "llm_input_tokens": 500,
+      "llm_output_tokens": 100,
+      "embedding_tokens": 200,
+      "total_tokens": 800,
+      "error": null
+    }
+  ],
+  "total": 1,
+  "start_date": "2026-04-01",
+  "end_date": "2026-04-08"
+}
+```
+
+---
+
+### 获取可用日期
+
+#### GET /observability/dates - 获取有数据的日期列表
+
+```bash
+curl http://localhost:37241/observability/dates
+```
+
+**响应：**
+```json
+{
+  "dates": ["2026-04-08", "2026-04-07", "2026-04-06", "2026-04-05"]
+}
 ```
 
 **参数：**

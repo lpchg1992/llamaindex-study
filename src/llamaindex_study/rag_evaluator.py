@@ -37,31 +37,20 @@ def check_ragas_available() -> bool:
 
 
 def get_llm_for_evaluation() -> Any:
-    """获取用于评估的 LLM"""
-    from llamaindex_study.ollama_utils import configure_llamaindex_for_siliconflow
-
-    configure_llamaindex_for_siliconflow()
-
-    from llama_index.llms.openai import OpenAI
+    """获取用于评估的 LLM（带 token 追踪）"""
+    from llamaindex_study.ollama_utils import create_llm
 
     settings = get_settings()
-
-    return OpenAI(
-        model=settings.siliconflow_model,
-        api_key=settings.siliconflow_api_key,
-        api_base=settings.siliconflow_base_url,
-        temperature=0,
-    )
+    return create_llm(model_id=settings.siliconflow_model)
 
 
 def get_embed_model_for_evaluation() -> Any:
-    """获取用于评估的 Embedding 模型"""
-    from llama_index.embeddings.ollama import OllamaEmbedding
+    """获取用于评估的 Embedding 模型（带 token 追踪）"""
+    from llamaindex_study.ollama_utils import create_ollama_embedding
 
     settings = get_settings()
-
-    return OllamaEmbedding(
-        model_name=settings.ollama_embed_model,
+    return create_ollama_embedding(
+        model=settings.ollama_embed_model,
         base_url=settings.ollama_base_url,
     )
 

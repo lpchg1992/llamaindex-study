@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react'
-import { useSettings, useUpdateSettings, useModels, useRestartScheduler, useReloadConfig, useRestartApi } from '@/api/hooks'
+import { useSettings, useUpdateSettings, useModels, useRestartScheduler, useReloadConfig, useRestartApi, useKBs, useEvaluate, useObservabilityStats, useResetObservability, useTraces, useObservabilityDates } from '@/api/hooks'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Switch } from '@/components/ui/switch'
+import { ScrollArea } from '@/components/ui/scroll-area'
 import {
   Select,
   SelectContent,
@@ -14,9 +16,195 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
-import { Settings2, Brain, Search, Layers, Loader2, AlertCircle, RotateCcw, Server } from 'lucide-react'
+import { Settings2, Brain, Search, Layers, Loader2, AlertCircle, RotateCcw, Server, LineChart, Activity, Cpu, BarChart3, Clock, Trash2, ChevronDown, ChevronRight, CheckCircle, XCircle, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
-import type { SystemSettings } from '@/types/api'
+import type { SystemSettings, VendorStats } from '@/types/api'
+
+function VendorPanel({ vendor }: { vendor: VendorStats }) {
+  const [expanded, setExpanded] = useState(true)
+
+  const llmModels = vendor.models.filter((m: any) => m.model_type === 'llm')
+  const embedModels = vendor.models.filter((m: any) => m.model_type === 'embedding')
+  const rerankerModels = vendor.models.filter((m: any) => m.model_type === 'reranker')
+
+  return (
+    <div className="border rounded-lg mb-4 overflow-hidden">
+      <div
+        className="flex items-center justify-between p-4 bg-muted/50 cursor-pointer hover:bg-muted transition-colors"
+        onClick={() => setExpanded(!expanded)}
+      >
+        <div className="flex items-center gap-3">
+          <Server className="h-5 w-5 text-muted-foreground" />
+          <div>
+            <h3 className="font-semibold text-lg">{vendor.vendor_id}</h3>
+            <p className="text-sm text-muted-foreground">
+              {vendor.models.length} model{vendor.models.length !== 1 ? 's' : ''}
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-6">
+          <div className="text-right">
+            <p className="text-2xl font-bold">{vendor.total_calls.toLocaleString()}</p>
+            <p className="text-xs text-muted-foreground">calls</p>
+          </div>
+          <div className="text-right">
+            <p className="text-2xl font-bold">{vendor.total_tokens.toLocaleString()}</p>
+            <p className="text-xs text-muted-foreground">tokens</p>
+          </div>
+          {vendor.total_errors > 0 && (
+            <div className="text-right">
+              <p className="text-2xl font-bold text-red-500">{vendor.total_errors}</p>
+              <p className="text-xs text-muted-foreground">errors</p>
+            </div>
+          )}
+          {expanded ? (
+            <ChevronDown className="h-5 w-5 text-muted-foreground" />
+          ) : (
+            <ChevronRight className="h-5 w-5 text-muted-foreground" />
+          )}
+        </div>
+      </div>
+
+      {expanded && (
+        <div className="p-4">
+          {vendor.models.length === 0 ? (
+            <p className="text-muted-foreground text-center py-4">No model data</p>
+          ) : (
+            <div className="space-y-6">
+              {llmModels.length > 0 && (
+                <div>
+                  <h4 className="text-sm font-medium text-muted-foreground mb-2 flex items-center gap-2">
+                    <Cpu className="h-4 w-4" /> LLM Models
+                  </h4>
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-left text-muted-foreground border-b">
+                        <th className="py-2 px-3 font-medium">Type</th>
+                        <th className="py-2 px-3 font-medium">Model ID</th>
+                        <th className="py-2 px-3 font-medium text-right">Calls</th>
+                        <th className="py-2 px-3 font-medium text-right">Prompt</th>
+                        <th className="py-2 px-3 font-medium text-right">Completion</th>
+                        <th className="py-2 px-3 font-medium text-right">Total</th>
+                        <th className="py-2 px-3 font-medium text-right">Errors</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {llmModels.map((model: any, idx: number) => (
+                        <ModelRow key={`llm-${idx}`} model={model} />
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {embedModels.length > 0 && (
+                <div>
+                  <h4 className="text-sm font-medium text-muted-foreground mb-2 flex items-center gap-2">
+                    <BarChart3 className="h-4 w-4" /> Embedding Models
+                  </h4>
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-left text-muted-foreground border-b">
+                        <th className="py-2 px-3 font-medium">Type</th>
+                        <th className="py-2 px-3 font-medium">Model ID</th>
+                        <th className="py-2 px-3 font-medium text-right">Calls</th>
+                        <th className="py-2 px-3 font-medium text-right">Tokens</th>
+                        <th className="py-2 px-3 font-medium text-right">Total</th>
+                        <th className="py-2 px-3 font-medium text-right">Errors</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {embedModels.map((model: any, idx: number) => (
+                        <tr key={`embed-${idx}`} className="border-b">
+                          <td className="py-2 px-3">
+                            <Badge variant="outline">{model.model_type}</Badge>
+                          </td>
+                          <td className="py-2 px-3 font-mono text-sm">{model.model_id}</td>
+                          <td className="py-2 px-3 text-right">{model.call_count.toLocaleString()}</td>
+                          <td className="py-2 px-3 text-right">{model.prompt_tokens.toLocaleString()}</td>
+                          <td className="py-2 px-3 text-right font-medium">{model.total_tokens.toLocaleString()}</td>
+                          <td className="py-2 px-3 text-right">
+                            {model.error_count > 0 ? (
+                              <span className="text-red-500">{model.error_count}</span>
+                            ) : (
+                              <span className="text-green-500">0</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {rerankerModels.length > 0 && (
+                <div>
+                  <h4 className="text-sm font-medium text-muted-foreground mb-2 flex items-center gap-2">
+                    <Activity className="h-4 w-4" /> Reranker Models
+                  </h4>
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-left text-muted-foreground border-b">
+                        <th className="py-2 px-3 font-medium">Type</th>
+                        <th className="py-2 px-3 font-medium">Model ID</th>
+                        <th className="py-2 px-3 font-medium text-right">Calls</th>
+                        <th className="py-2 px-3 font-medium text-right">Tokens</th>
+                        <th className="py-2 px-3 font-medium text-right">Total</th>
+                        <th className="py-2 px-3 font-medium text-right">Errors</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rerankerModels.map((model: any, idx: number) => (
+                        <tr key={`rerank-${idx}`} className="border-b">
+                          <td className="py-2 px-3">
+                            <Badge variant="outline">{model.model_type}</Badge>
+                          </td>
+                          <td className="py-2 px-3 font-mono text-sm">{model.model_id}</td>
+                          <td className="py-2 px-3 text-right">{model.call_count.toLocaleString()}</td>
+                          <td className="py-2 px-3 text-right">{model.prompt_tokens.toLocaleString()}</td>
+                          <td className="py-2 px-3 text-right font-medium">{model.total_tokens.toLocaleString()}</td>
+                          <td className="py-2 px-3 text-right">
+                            {model.error_count > 0 ? (
+                              <span className="text-red-500">{model.error_count}</span>
+                            ) : (
+                              <span className="text-green-500">0</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ModelRow({ model }: { model: any }) {
+  return (
+    <tr className="border-b">
+      <td className="py-2 px-3">
+        <Badge variant="secondary">{model.model_type}</Badge>
+      </td>
+      <td className="py-2 px-3 font-mono text-sm">{model.model_id}</td>
+      <td className="py-2 px-3 text-right">{model.call_count.toLocaleString()}</td>
+      <td className="py-2 px-3 text-right">{model.prompt_tokens.toLocaleString()}</td>
+      <td className="py-2 px-3 text-right">{model.completion_tokens.toLocaleString()}</td>
+      <td className="py-2 px-3 text-right font-medium">{model.total_tokens.toLocaleString()}</td>
+      <td className="py-2 px-3 text-right">
+        {model.error_count > 0 ? (
+          <span className="text-red-500">{model.error_count}</span>
+        ) : (
+          <span className="text-green-500">0</span>
+        )}
+      </td>
+    </tr>
+  )
+}
 
 export function SettingsPage() {
   const { data: settings, isLoading, error } = useSettings()
@@ -26,6 +214,35 @@ export function SettingsPage() {
   const restartScheduler = useRestartScheduler()
   const reloadConfig = useReloadConfig()
   const restartApi = useRestartApi()
+
+  // Evaluate hooks and state
+  const { data: kbs } = useKBs()
+  const evaluateMutation = useEvaluate()
+  const [selectedKB, setSelectedKB] = useState<string>('')
+  const [questions, setQuestions] = useState<string[]>([''])
+  const [groundTruths, setGroundTruths] = useState<string[]>([''])
+  const [results, setResults] = useState<any>(null)
+
+  // Observability hooks and state
+  const [startDate, setStartDate] = useState<string>('')
+  const [endDate, setEndDate] = useState<string>('')
+  const { data: stats, isLoading: statsLoading, refetch: refetchStats } = useObservabilityStats(startDate || undefined, endDate || undefined)
+  const resetStats = useResetObservability()
+  const { data: traces, isLoading: tracesLoading, refetch: refetchTraces } = useTraces(100, startDate || undefined, endDate || undefined)
+  const { data: availableDates } = useObservabilityDates()
+
+  const handleQuickDateFilter = (days: number | null) => {
+    if (days === null) {
+      setStartDate('')
+      setEndDate('')
+      return
+    }
+    const today = new Date()
+    const past = new Date()
+    past.setDate(today.getDate() - days)
+    setStartDate(past.toISOString().split('T')[0])
+    setEndDate(today.toISOString().split('T')[0])
+  }
 
   const [localSettings, setLocalSettings] = useState<SystemSettings | null>(null)
 
@@ -81,6 +298,66 @@ export function SettingsPage() {
     }
   }
 
+  // Evaluate handlers
+  const addQA = () => {
+    setQuestions([...questions, ''])
+    setGroundTruths([...groundTruths, ''])
+  }
+
+  const updateQuestion = (index: number, value: string) => {
+    const newQuestions = [...questions]
+    newQuestions[index] = value
+    setQuestions(newQuestions)
+  }
+
+  const updateGroundTruth = (index: number, value: string) => {
+    const newGroundTruths = [...groundTruths]
+    newGroundTruths[index] = value
+    setGroundTruths(newGroundTruths)
+  }
+
+  const handleEvaluate = async () => {
+    if (!selectedKB) return
+    const validQuestions = questions.filter((q) => q.trim())
+    const validGroundTruths = groundTruths.filter((g) => g.trim())
+    if (validQuestions.length === 0) return
+
+    try {
+      const result = await evaluateMutation.mutateAsync({
+        kbId: selectedKB,
+        req: {
+          questions: validQuestions,
+          ground_truths: validGroundTruths.length === validQuestions.length
+            ? validGroundTruths
+            : validQuestions.map(() => ''),
+          top_k: 5,
+        },
+      })
+      setResults(result)
+    } catch (error) {
+      console.error('Evaluation failed:', error)
+    }
+  }
+
+  const metrics = [
+    { key: 'faithfulness', label: 'Faithfulness', description: 'Answer accuracy vs context' },
+    { key: 'answer_relevancy', label: 'Answer Relevancy', description: 'Answer relevance to question' },
+    { key: 'context_precision', label: 'Context Precision', description: 'Retrieval quality' },
+    { key: 'context_recall', label: 'Context Recall', description: 'Context coverage' },
+  ]
+
+  // Observability handlers
+  const handleResetObservability = async () => {
+    if (!confirm('Reset all observability data?')) return
+    try {
+      await resetStats.mutateAsync()
+      toast.success('Observability data reset')
+      refetchStats()
+    } catch (error) {
+      toast.error('Failed to reset')
+    }
+  }
+
   if (isLoading) {
     return (
       <div className="p-6 flex items-center justify-center h-64">
@@ -113,7 +390,7 @@ export function SettingsPage() {
       </div>
 
       <Tabs defaultValue="model" className="w-full">
-        <TabsList className="mb-4">
+        <TabsList className="mb-4 flex flex-wrap h-auto">
           <TabsTrigger value="model">
             <Brain className="mr-2 h-4 w-4" />
             Model
@@ -125,6 +402,14 @@ export function SettingsPage() {
           <TabsTrigger value="chunk">
             <Layers className="mr-2 h-4 w-4" />
             Chunk
+          </TabsTrigger>
+          <TabsTrigger value="evaluate">
+            <LineChart className="mr-2 h-4 w-4" />
+            Evaluate
+          </TabsTrigger>
+          <TabsTrigger value="observability">
+            <Activity className="mr-2 h-4 w-4" />
+            Observability
           </TabsTrigger>
           <TabsTrigger value="system">
             <Server className="mr-2 h-4 w-4" />
@@ -571,6 +856,363 @@ export function SettingsPage() {
               </div>
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="evaluate">
+          <div className="grid gap-6 lg:grid-cols-2">
+            <div className="space-y-6">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Configuration</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="space-y-2">
+                    <Label>Knowledge Base</Label>
+                    <Select value={selectedKB} onValueChange={setSelectedKB}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select a knowledge base..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {kbs?.map((kb) => (
+                          <SelectItem key={kb.id} value={kb.id}>
+                            {kb.name || kb.id}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <CardTitle>Questions & Ground Truths</CardTitle>
+                    <Button variant="outline" size="sm" onClick={addQA}>
+                      Add Q&A
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {questions.map((question, index) => (
+                    <div key={index} className="space-y-2">
+                      <Label>Question {index + 1}</Label>
+                      <Textarea
+                        placeholder="Enter question..."
+                        value={question}
+                        onChange={(e) => updateQuestion(index, e.target.value)}
+                      />
+                      <Label>Ground Truth {index + 1}</Label>
+                      <Textarea
+                        placeholder="Enter expected answer..."
+                        value={groundTruths[index]}
+                        onChange={(e) => updateGroundTruth(index, e.target.value)}
+                      />
+                    </div>
+                  ))}
+                  <Button
+                    onClick={handleEvaluate}
+                    disabled={!selectedKB || questions.every((q) => !q.trim()) || evaluateMutation.isPending}
+                  >
+                    {evaluateMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                    {evaluateMutation.isPending ? 'Evaluating...' : 'Run Evaluation'}
+                  </Button>
+                </CardContent>
+              </Card>
+            </div>
+
+            <div className="space-y-6">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <LineChart className="h-5 w-5" />
+                    Results
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {results ? (
+                    <div className="space-y-4">
+                      {metrics.map((metric) => {
+                        const value = results[metric.key]
+                        const isGood = value >= 0.8
+                        const isBad = value < 0.5
+                        return (
+                          <div key={metric.key} className="space-y-2">
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <span className="font-medium">{metric.label}</span>
+                                <p className="text-xs text-muted-foreground">
+                                  {metric.description}
+                                </p>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                {isGood && <CheckCircle className="h-4 w-4 text-green-500" />}
+                                {isBad && <XCircle className="h-4 w-4 text-red-500" />}
+                                <Badge
+                                  variant={isGood ? 'default' : isBad ? 'destructive' : 'secondary'}
+                                >
+                                  {typeof value === 'number' ? (value * 100).toFixed(1) : 'N/A'}%
+                                </Badge>
+                              </div>
+                            </div>
+                            <div className="h-2 w-full rounded-full bg-secondary">
+                              <div
+                                className={`h-2 rounded-full transition-all ${
+                                  isGood ? 'bg-green-500' : isBad ? 'bg-red-500' : 'bg-yellow-500'
+                                }`}
+                                style={{ width: `${Math.min((value || 0) * 100, 100)}%` }}
+                              />
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  ) : (
+                    <p className="text-center text-muted-foreground py-8">
+                      Run evaluation to see results
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Metrics Guide</CardTitle>
+                </CardHeader>
+                <CardContent className="text-sm space-y-2 text-muted-foreground">
+                  <p><strong>Faithfulness:</strong> Measures how accurately the answer reflects the retrieved context. Low scores indicate hallucinations.</p>
+                  <p><strong>Answer Relevancy:</strong> Measures how relevant the answer is to the question. Low scores indicate irrelevant answers.</p>
+                  <p><strong>Context Precision:</strong> Measures how precisely the retrieved context matches the question. Low scores indicate poor retrieval.</p>
+                  <p><strong>Context Recall:</strong> Measures how much of the relevant context was retrieved. Low scores indicate missing information.</p>
+                </CardContent>
+              </Card>
+            </div>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="observability">
+          <div className="mb-4 space-y-4">
+            <div className="flex flex-wrap items-center gap-4">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium">Date Range:</span>
+                <div className="flex gap-1">
+                  <Button size="sm" variant={!startDate && !endDate ? "default" : "outline"} onClick={() => handleQuickDateFilter(null)}>
+                    All
+                  </Button>
+                  <Button size="sm" variant={startDate === new Date().toISOString().split('T')[0] ? "default" : "outline"} onClick={() => handleQuickDateFilter(0)}>
+                    Today
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => handleQuickDateFilter(7)}>
+                    7 Days
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => handleQuickDateFilter(30)}>
+                    30 Days
+                  </Button>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Input
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => setStartDate(e.target.value)}
+                  className="w-36"
+                  placeholder="Start date"
+                />
+                <span className="text-muted-foreground">to</span>
+                <Input
+                  type="date"
+                  value={endDate}
+                  onChange={(e) => setEndDate(e.target.value)}
+                  className="w-36"
+                  placeholder="End date"
+                />
+                {(startDate || endDate) && (
+                  <Button size="sm" variant="ghost" onClick={() => { setStartDate(''); setEndDate('') }}>
+                    Clear
+                  </Button>
+                )}
+              </div>
+            </div>
+            <div className="flex items-center justify-between">
+              <div className="text-sm text-muted-foreground">
+                {availableDates?.dates && availableDates.dates.length > 0 && (
+                  <span>Available dates: {availableDates.dates.length} days</span>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <Button variant="outline" onClick={() => { refetchStats(); refetchTraces() }}>
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  Refresh
+                </Button>
+                <Button variant="destructive" onClick={handleResetObservability} disabled={resetStats.isPending}>
+                  {resetStats.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
+                  Reset
+                </Button>
+              </div>
+            </div>
+          </div>
+
+          <Tabs defaultValue="overview" className="w-full">
+            <TabsList>
+              <TabsTrigger value="overview">
+                <BarChart3 className="mr-2 h-4 w-4" />
+                Overview
+              </TabsTrigger>
+              <TabsTrigger value="vendors">
+                <Server className="mr-2 h-4 w-4" />
+                Vendors
+              </TabsTrigger>
+              <TabsTrigger value="traces">
+                <Activity className="mr-2 h-4 w-4" />
+                Traces
+              </TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="overview" className="mt-4">
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm font-medium text-muted-foreground">
+                      Total Calls
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="text-2xl font-bold">
+                      {stats?.total_calls?.toLocaleString() || 0}
+                    </div>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm font-medium text-muted-foreground">
+                      Total Tokens
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="text-2xl font-bold">
+                      {stats?.total_tokens?.toLocaleString() || 0}
+                    </div>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm font-medium text-muted-foreground">
+                      Vendors
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="text-2xl font-bold">
+                      {stats?.vendor_stats?.length || 0}
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+
+              {stats?.vendor_stats && stats.vendor_stats.length > 0 && (
+                <Card className="mt-4">
+                  <CardHeader>
+                    <CardTitle>Vendors Summary</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-2">
+                      {stats.vendor_stats.map((vendor: VendorStats) => (
+                        <div key={vendor.vendor_id} className="flex items-center justify-between p-3 border rounded-lg">
+                          <div className="flex items-center gap-3">
+                            <Server className="h-4 w-4 text-muted-foreground" />
+                            <span className="font-medium">{vendor.vendor_id}</span>
+                            <Badge variant="secondary">{vendor.models.length} models</Badge>
+                          </div>
+                          <div className="flex items-center gap-4 text-sm">
+                            <span>
+                              <span className="text-muted-foreground">calls: </span>
+                              <span className="font-medium">{vendor.total_calls.toLocaleString()}</span>
+                            </span>
+                            <span>
+                              <span className="text-muted-foreground">tokens: </span>
+                              <span className="font-medium">{vendor.total_tokens.toLocaleString()}</span>
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+            </TabsContent>
+
+            <TabsContent value="vendors" className="mt-4">
+              {statsLoading ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                </div>
+              ) : stats?.vendor_stats && stats.vendor_stats.length > 0 ? (
+                <div>
+                  {stats.vendor_stats.map((vendor: VendorStats) => (
+                    <VendorPanel key={vendor.vendor_id} vendor={vendor} />
+                  ))}
+                </div>
+              ) : (
+                <Card>
+                  <CardContent className="flex items-center justify-center py-12">
+                    <div className="text-center">
+                      <Server className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
+                      <p className="text-lg font-medium">No vendor data</p>
+                      <p className="text-sm text-muted-foreground mt-1">
+                        Model call statistics will appear here after making API calls
+                      </p>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+            </TabsContent>
+
+            <TabsContent value="traces" className="mt-4">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Clock className="h-5 w-5" />
+                    Recent Traces
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {tracesLoading ? (
+                    <div className="flex items-center justify-center py-8">
+                      <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                    </div>
+                  ) : traces && traces.traces && traces.traces.length > 0 ? (
+                    <ScrollArea className="h-96">
+                      <div className="space-y-2">
+                        {traces.traces.map((trace, index) => (
+                          <div key={index} className="p-3 border rounded-lg">
+                            <div className="flex items-center justify-between mb-2">
+                              <div className="flex items-center gap-2">
+                                <Badge variant="outline">{trace.retrieval_count} ret</Badge>
+                                <span className="text-sm text-muted-foreground">
+                                  {new Date(trace.timestamp).toLocaleString()}
+                                </span>
+                              </div>
+                              <span className="text-sm font-medium">
+                                {trace.duration_ms.toFixed(0)} ms
+                              </span>
+                            </div>
+                            <p className="text-sm mb-2 line-clamp-2">{trace.query}</p>
+                            <div className="flex gap-4 text-xs text-muted-foreground">
+                              <span>LLM: {trace.llm_input_tokens} → {trace.llm_output_tokens} tokens</span>
+                              <span>Embed: {trace.embedding_tokens} tokens</span>
+                              <span>Total: {trace.total_tokens} tokens</span>
+                              {trace.error && <span className="text-red-500">Error: {trace.error}</span>}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </ScrollArea>
+                  ) : (
+                    <p className="text-muted-foreground text-center py-4">No traces available</p>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+          </Tabs>
         </TabsContent>
       </Tabs>
     </div>

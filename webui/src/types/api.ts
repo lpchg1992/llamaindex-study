@@ -371,18 +371,36 @@ export interface ObservabilityStats {
   vendor_stats: VendorStats[]
   total_calls: number
   total_tokens: number
+  total_prompt_tokens?: number
+  total_completion_tokens?: number
+  total_errors?: number
+  start_date?: string
+  end_date?: string
 }
 
 export interface TraceEvent {
   timestamp: string
-  event_type: string
+  query: string
   duration_ms: number
-  metadata?: Record<string, unknown>
+  retrieval_count: number
+  retrieval_scores: number[]
+  source_node_count: number
+  llm_input_tokens: number
+  llm_output_tokens: number
+  embedding_tokens: number
+  total_tokens: number
+  error?: string
 }
 
 export interface TracesResponse {
   traces: TraceEvent[]
   total: number
+  start_date?: string
+  end_date?: string
+}
+
+export interface ObservabilityDatesResponse {
+  dates: string[]
 }
 
 // Consistency

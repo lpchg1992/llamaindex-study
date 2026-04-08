@@ -47,51 +47,43 @@ JSON格式：
 
 class CategoryClassifier:
     """知识库分类器"""
-    
+
     def __init__(self):
         self.rule_db = init_category_rule_db()
         self._llm = None
         self._llm_available = True
-    
+
     def _init_llm(self) -> bool:
         """初始化 LLM，返回是否成功"""
         if self._llm is not None:
             return self._llm_available
-        
+
         try:
-            from llama_index.llms.openai import OpenAI
-            from llamaindex_study.ollama_utils import configure_llamaindex_for_siliconflow
+            from llamaindex_study.ollama_utils import create_llm
             from llamaindex_study.config import get_settings
-            
+
             settings = get_settings()
-            
+
             if not settings.siliconflow_api_key:
                 print("   ⚠️  LLM 分类不可用: SILICONFLOW_API_KEY 未设置")
                 self._llm_available = False
                 return False
-            
-            # 配置 LlamaIndex 使用 SiliconFlow（注册模型和 tokeniser）
-            configure_llamaindex_for_siliconflow()
-            
-            # 使用 SiliconFlow 配置
-            self._llm = OpenAI(
-                model=settings.siliconflow_model,
-                api_key=settings.siliconflow_api_key,
-                api_base=settings.siliconflow_base_url,
-            )
+
+            self._llm = create_llm(model_id=settings.siliconflow_model)
             self._llm_available = True
             return True
         except Exception as e:
             print(f"   ⚠️  LLM 初始化失败: {e}")
             import traceback
+
             traceback.print_exc()
             self._llm_available = False
             return False
-    
+
     def get_knowledge_bases_info(self) -> List[Dict[str, Any]]:
         """获取所有知识库及其规则"""
         rules = self.rule_db.get_all_rules()
-        
+
         # 按 kb_id 分组
         kb_rules: Dict[str, List[Dict]] = {}
         for rule in rules:
@@ -99,30 +91,30 @@ class CategoryClassifier:
             if kb_id not in kb_rules:
                 kb_rules[kb_id] = []
             kb_rules[kb_id].append(rule)
-        
+
         return kb_rules
-    
+
     def format_knowledge_bases_for_prompt(self) -> str:
         """格式化知识库信息用于提示词"""
         kb_rules = self.get_knowledge_bases_info()
-        
+
         lines = []
         for kb_id, rules in kb_rules.items():
             # 获取文件夹路径规则
             folder_rules = [r for r in rules if r["rule_type"] == "folder_path"]
             # 获取标签规则
             tag_rules = [r for r in rules if r["rule_type"] == "tag"]
-            
+
             info = f"- ID: {kb_id}\n"
             if folder_rules:
                 info += f"  文件夹: {', '.join(r['pattern'] for r in folder_rules)}\n"
             if tag_rules:
                 info += f"  标签: {', '.join(r['pattern'] for r in tag_rules)}"
-            
+
             lines.append(info)
-        
+
         return "\n\n".join(lines) if lines else "（暂无分类规则）"
-    
+
     def classify_folder_llm(
         self,
         folder_path: str,
@@ -130,11 +122,11 @@ class CategoryClassifier:
     ) -> Dict[str, Any]:
         """
         使用 LLM 分类文件夹
-        
+
         Args:
             folder_path: 文件夹路径
             folder_description: 文件夹描述（可以是文件夹名、包含文件列表等）
-            
+
         Returns:
             分类结果 {kb_id, confidence, reason}
         """
@@ -145,38 +137,42 @@ class CategoryClassifier:
                 "confidence": 0.0,
                 "reason": "LLM 服务不可用",
             }
-        
+
         prompt = CLASSIFICATION_PROMPT.format(
             knowledge_bases_info=self.format_knowledge_bases_for_prompt(),
             folder_path=folder_path,
             folder_description=folder_description or "无",
         )
-        
+
         try:
             # 使用 chat 模式
             from llama_index.core.llms import ChatMessage
+
             messages = [
-                ChatMessage(role="system", content="You are a knowledge base classification assistant. Respond with JSON only."),
-                ChatMessage(role="user", content=prompt)
+                ChatMessage(
+                    role="system",
+                    content="You are a knowledge base classification assistant. Respond with JSON only.",
+                ),
+                ChatMessage(role="user", content=prompt),
             ]
             response = self._llm.chat(messages)
-            
+
             # 获取文本内容
             text = ""
-            if hasattr(response, 'message') and hasattr(response.message, 'content'):
+            if hasattr(response, "message") and hasattr(response.message, "content"):
                 text = response.message.content
-            elif hasattr(response, 'text'):
+            elif hasattr(response, "text"):
                 text = response.text
-            
+
             if not text.strip():
                 return {
                     "kb_id": None,
                     "confidence": 0.0,
                     "reason": "LLM 返回空响应",
                 }
-            
+
             # 解析 JSON 响应
-            json_match = re.search(r'\{[^}]+\}', text)
+            json_match = re.search(r"\{[^}]+\}", text)
             if json_match:
                 result = json.loads(json_match.group())
                 return {
@@ -197,7 +193,7 @@ class CategoryClassifier:
                 "confidence": 0.0,
                 "reason": f"分类失败: {e}",
             }
-    
+
     def classify_folder_rules(
         self,
         folder_path: str,
@@ -205,11 +201,11 @@ class CategoryClassifier:
     ) -> Optional[str]:
         """
         使用规则分类文件夹（不调用 LLM）
-        
+
         Args:
             folder_path: 文件夹路径
             tags: 文件夹中笔记的标签列表
-            
+
         Returns:
             匹配的知识库 ID 或 None
         """
@@ -218,7 +214,7 @@ class CategoryClassifier:
         for rule in folder_rules:
             if rule["pattern"] in folder_path:
                 return rule["kb_id"]
-        
+
         # 2. 尝试匹配标签
         if tags:
             tag_rules = self.rule_db.get_rules_by_type("tag")
@@ -226,23 +222,23 @@ class CategoryClassifier:
                 for tag in tags:
                     if rule["pattern"] == tag:
                         return rule["kb_id"]
-        
+
         return None
 
 
 def get_or_create_kb_rules(kb_id: str) -> Dict[str, List[Dict[str, Any]]]:
     """
     获取或创建知识库的分类规则
-    
+
     Args:
         kb_id: 知识库 ID
-        
+
     Returns:
         规则字典
     """
     rule_db = init_category_rule_db()
     rules = rule_db.get_rules_for_kb(kb_id)
-    
+
     return {
         "folder_path": [r for r in rules if r["rule_type"] == "folder_path"],
         "tag": [r for r in rules if r["rule_type"] == "tag"],

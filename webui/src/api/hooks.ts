@@ -32,6 +32,7 @@ import type {
   ChatHistoryResponse,
   ChatSessionsResponse,
   ObservabilityStats,
+  ObservabilityDatesResponse,
   TracesResponse,
   ConsistencyCheckResult,
   ConsistencyRepairResult,
@@ -632,11 +633,14 @@ export function useDeleteChatSession() {
   })
 }
 
-export function useObservabilityStats() {
+export function useObservabilityStats(startDate?: string, endDate?: string) {
   return useQuery<ObservabilityStats, Error>({
-    queryKey: ['observability-stats'],
+    queryKey: ['observability-stats', startDate, endDate],
     queryFn: async () => {
-      const { data } = await apiClient.get(`${API_BASE}/observability/stats`)
+      const params: Record<string, string> = {}
+      if (startDate) params.start_date = startDate
+      if (endDate) params.end_date = endDate
+      const { data } = await apiClient.get(`${API_BASE}/observability/stats`, { params })
       return data
     },
   })
@@ -651,13 +655,25 @@ export function useResetObservability() {
   })
 }
 
-export function useTraces(limit?: number) {
+export function useTraces(limit?: number, startDate?: string, endDate?: string) {
   return useQuery<TracesResponse, Error>({
-    queryKey: ['traces', limit],
+    queryKey: ['traces', limit, startDate, endDate],
     queryFn: async () => {
-      const { data } = await apiClient.get(`${API_BASE}/observability/traces`, {
-        params: { limit },
-      })
+      const params: Record<string, string | number> = {}
+      if (limit) params.limit = limit
+      if (startDate) params.start_date = startDate
+      if (endDate) params.end_date = endDate
+      const { data } = await apiClient.get(`${API_BASE}/observability/traces`, { params })
+      return data
+    },
+  })
+}
+
+export function useObservabilityDates() {
+  return useQuery<ObservabilityDatesResponse, Error>({
+    queryKey: ['observability-dates'],
+    queryFn: async () => {
+      const { data } = await apiClient.get(`${API_BASE}/observability/dates`)
       return data
     },
   })

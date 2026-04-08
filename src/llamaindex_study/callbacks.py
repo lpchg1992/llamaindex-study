@@ -89,6 +89,7 @@ class ModelCallStatsCollection:
             stats.add_tokens(prompt=prompt_tokens, completion=completion_tokens)
             if error:
                 stats.increment_error()
+        self._persist_to_db(vendor_id, "llm", model_id)
 
     def record_embedding_call(
         self,
@@ -104,6 +105,7 @@ class ModelCallStatsCollection:
             stats.add_tokens(prompt=token_count, completion=0)
             if error:
                 stats.increment_error()
+        self._persist_to_db(vendor_id, "embedding", model_id)
 
     def record_reranker_call(
         self,
@@ -119,6 +121,32 @@ class ModelCallStatsCollection:
             stats.add_tokens(prompt=token_count, completion=0)
             if error:
                 stats.increment_error()
+        self._persist_to_db(vendor_id, "reranker", model_id)
+
+    def _persist_to_db(
+        self,
+        vendor_id: str,
+        model_type: str,
+        model_id: str,
+    ) -> None:
+        """将当前统计持久化到数据库"""
+        try:
+            from llamaindex_study.token_stats_db import get_token_stats_db
+
+            stats = self.get_or_create(vendor_id, model_type, model_id)
+            db = get_token_stats_db()
+            db.upsert_daily_stats(
+                vendor_id=stats.vendor_id,
+                model_type=stats.model_type,
+                model_id=stats.model_id,
+                call_count=stats.call_count,
+                prompt_tokens=stats.prompt_tokens,
+                completion_tokens=stats.completion_tokens,
+                total_tokens=stats.total_tokens,
+                error_count=stats.error_count,
+            )
+        except Exception:
+            pass
 
     def get_all_stats(self) -> List[Dict[str, Any]]:
         """获取所有统计，按 vendor_id 分组"""
@@ -353,6 +381,7 @@ class RAGCallbackHandler(BaseCallbackHandler):
             ]
         if self._trace_file:
             self._write_trace(event)
+        self._persist_trace_to_db(event)
 
     def _write_trace(self, event: RAGTraceEvent) -> None:
         if not self._trace_file:
@@ -363,6 +392,27 @@ class RAGCallbackHandler(BaseCallbackHandler):
                 f.write(json.dumps(asdict(event), ensure_ascii=False) + "\n")
         except Exception as e:
             logger.warning(f"写入追踪日志失败: {e}")
+
+    def _persist_trace_to_db(self, event: RAGTraceEvent) -> None:
+        try:
+            from llamaindex_study.token_stats_db import get_token_stats_db
+
+            db = get_token_stats_db()
+            db.insert_trace_event(
+                timestamp=event.timestamp,
+                query=event.query,
+                duration_ms=event.duration_ms,
+                retrieval_count=event.retrieval_count,
+                retrieval_scores=event.retrieval_scores,
+                source_node_count=event.source_node_count,
+                llm_input_tokens=event.llm_input_tokens,
+                llm_output_tokens=event.llm_output_tokens,
+                embedding_tokens=event.embedding_tokens,
+                total_tokens=event.total_tokens,
+                error=event.error,
+            )
+        except Exception:
+            pass
 
     def get_stats(self) -> RAGStats:
         return self._stats

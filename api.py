@@ -122,6 +122,14 @@ async def start_scheduler():
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     logger.info("应用启动中...")
+
+    from llamaindex_study.callbacks import setup_callbacks
+    from llamaindex_study.token_stats_db import init_token_stats_db
+
+    setup_callbacks()
+    init_token_stats_db()
+    logger.info("Token 监控已初始化")
+
     await start_scheduler()
     logger.info("应用启动完成")
     yield
@@ -2533,13 +2541,33 @@ def delete_chat_session(kb_id: str, session_id: str):
 
 
 @app.get("/observability/stats")
-def get_observability_stats():
+def get_observability_stats(
+    start_date: Optional[str] = Query(None, description="开始日期 (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="结束日期 (YYYY-MM-DD)"),
+):
     from llamaindex_study.callbacks import (
         setup_callbacks,
         get_model_call_stats,
     )
+    from llamaindex_study.token_stats_db import get_token_stats_db
 
     setup_callbacks()
+
+    if start_date or end_date:
+        db = get_token_stats_db()
+        vendor_stats = db.get_stats_by_vendor(start_date, end_date)
+        total_stats = db.get_total_stats(start_date, end_date)
+        return {
+            "vendor_stats": vendor_stats,
+            "total_calls": total_stats.get("total_calls", 0),
+            "total_tokens": total_stats.get("total_tokens", 0),
+            "total_prompt_tokens": total_stats.get("total_prompt_tokens", 0),
+            "total_completion_tokens": total_stats.get("total_completion_tokens", 0),
+            "total_errors": total_stats.get("total_errors", 0),
+            "start_date": start_date,
+            "end_date": end_date,
+        }
+
     model_stats = get_model_call_stats()
     stats_data = model_stats.to_dict()
 
@@ -2565,10 +2593,26 @@ def reset_observability():
 
 
 @app.get("/observability/traces")
-def get_traces(limit: int = 100):
+def get_traces(
+    limit: int = Query(100, description="返回条数"),
+    start_date: Optional[str] = Query(None, description="开始日期 (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="结束日期 (YYYY-MM-DD)"),
+):
     from llamaindex_study.callbacks import setup_callbacks, get_rag_stats
+    from llamaindex_study.token_stats_db import get_token_stats_db
 
     setup_callbacks()
+
+    if start_date or end_date:
+        db = get_token_stats_db()
+        traces = db.get_trace_events(start_date, end_date, limit)
+        return {
+            "traces": traces,
+            "total": len(traces),
+            "start_date": start_date,
+            "end_date": end_date,
+        }
+
     rag_stats = get_rag_stats()
 
     if not rag_stats:
@@ -2576,6 +2620,15 @@ def get_traces(limit: int = 100):
 
     traces = rag_stats.trace_events[-limit:]
     return {"traces": traces, "total": len(rag_stats.trace_events)}
+
+
+@app.get("/observability/dates")
+def get_observability_dates():
+    from llamaindex_study.token_stats_db import get_token_stats_db
+
+    db = get_token_stats_db()
+    dates = db.get_daily_dates()
+    return {"dates": dates}
 
 
 class ExtractRequest(BaseModel):

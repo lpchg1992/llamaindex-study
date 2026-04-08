@@ -70,9 +70,8 @@ def get_llm():
     """获取 LLM 实例（用于 HyDE 和 Query Rewriting）
 
     优先从模型注册表获取默认 LLM，失败时回退到配置默认值。
+    使用 RetryableSiliconFlowLLM 以支持 token 用量追踪。
     """
-    from llama_index.llms.openai import OpenAI
-
     try:
         from llamaindex_study.config import get_model_registry
         from kb.database import init_vendor_db
@@ -81,41 +80,16 @@ def get_llm():
         default_llm = registry.get_default("llm")
 
         if default_llm:
-            vendor_db = init_vendor_db()
-            vendor = vendor_db.get(default_llm["vendor_id"])
+            from llamaindex_study.ollama_utils import create_llm
 
-            vendor_id = default_llm["vendor_id"]
-            model_id = default_llm["id"]
-
-            api_key = None
-            api_base = None
-
-            if vendor:
-                api_key = vendor.get("api_key")
-                api_base = vendor.get("api_base")
-
-            settings = get_settings()
-            if not api_key:
-                api_key = settings.siliconflow_api_key
-            if not api_base:
-                api_base = settings.siliconflow_base_url
-
-            return OpenAI(
-                model=model_id,
-                api_key=api_key,
-                api_base=api_base,
-                temperature=0.1,
-            )
+            return create_llm(model_id=default_llm["id"])
     except Exception:
         pass
 
     settings = get_settings()
-    return OpenAI(
-        model=settings.siliconflow_model,
-        api_key=settings.siliconflow_api_key,
-        api_base=settings.siliconflow_base_url,
-        temperature=0.1,
-    )
+    from llamaindex_study.ollama_utils import create_llm
+
+    return create_llm(model_id=settings.siliconflow_model)
 
 
 def get_hyde_engine(
