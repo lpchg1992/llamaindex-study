@@ -69,7 +69,7 @@ class CategoryClassifier:
                 self._llm_available = False
                 return False
 
-            self._llm = create_llm(model_id=settings.siliconflow_model)
+            self._llm = create_llm(model_id=None)
             self._llm_available = True
             return True
         except Exception as e:

@@ -67,29 +67,9 @@ class MultiQueryConfig:
 
 
 def get_llm():
-    """获取 LLM 实例（用于 HyDE 和 Query Rewriting）
-
-    优先从模型注册表获取默认 LLM，失败时回退到配置默认值。
-    使用 RetryableSiliconFlowLLM 以支持 token 用量追踪。
-    """
-    try:
-        from llamaindex_study.config import get_model_registry
-        from kb.database import init_vendor_db
-
-        registry = get_model_registry()
-        default_llm = registry.get_default("llm")
-
-        if default_llm:
-            from llamaindex_study.ollama_utils import create_llm
-
-            return create_llm(model_id=default_llm["id"])
-    except Exception:
-        pass
-
-    settings = get_settings()
     from llamaindex_study.ollama_utils import create_llm
 
-    return create_llm(model_id=settings.siliconflow_model)
+    return create_llm(model_id=None)
 
 
 def get_hyde_engine(

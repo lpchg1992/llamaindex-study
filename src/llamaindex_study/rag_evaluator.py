@@ -37,11 +37,9 @@ def check_ragas_available() -> bool:
 
 
 def get_llm_for_evaluation() -> Any:
-    """获取用于评估的 LLM（带 token 追踪）"""
     from llamaindex_study.ollama_utils import create_llm
 
-    settings = get_settings()
-    return create_llm(model_id=settings.siliconflow_model)
+    return create_llm(model_id=None)
 
 
 def get_embed_model_for_evaluation() -> Any:

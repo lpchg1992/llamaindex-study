@@ -1374,6 +1374,33 @@ class RetryableSiliconFlowLLM:
         return f"RetryableSiliconFlowLLM(primary={self._model})"
 
 
+def get_default_llm_from_registry() -> tuple[str, str, str, str]:
+    """Get default LLM from registry: (model_id, model_name, api_key, base_url).
+
+    Returns:
+        (model_id, model_name, api_key, base_url)
+    """
+    from llamaindex_study.config import get_model_registry
+    from kb.database import init_vendor_db
+
+    registry = get_model_registry()
+    model = registry.get_default("llm")
+    if not model:
+        raise RuntimeError(
+            "No default LLM found in registry. Please add an LLM model via CLI or API."
+        )
+
+    vendor_db = init_vendor_db()
+    vendor_info = vendor_db.get(model["vendor_id"])
+    if not vendor_info:
+        raise RuntimeError(f"Vendor '{model['vendor_id']}' not found in database.")
+
+    api_key = vendor_info.get("api_key", "")
+    base_url = vendor_info.get("api_base", "")
+
+    return model["id"], model["name"], api_key, base_url
+
+
 def create_llm(
     model_id: Optional[str] = None,
     mode: Optional[str] = None,
@@ -1383,9 +1410,9 @@ def create_llm(
     根据配置创建 LLM 实例
 
     Args:
-        model_id: 模型ID (如 siliconflow/DeepSeek-V3.2, ollama/lfm2.5-instruct)，优先于 mode 参数
-        mode: LLM 模式，可选 "siliconflow" 或 "ollama"。如果为 None，使用配置默认值。
-        model: 模型名称 (已废弃，使用 model_id 代替)
+        model_id: 模型ID (如 siliconflow/DeepSeek-V3.2, ollama/lfm2.5-instruct)，优先于其他参数
+        mode: LLM 模式，可选 "siliconflow" 或 "ollama"。(已废弃，使用 model_id)
+        model: 模型名称 (已废弃，使用 model_id)
 
     Returns:
         LLM 实例
@@ -1432,31 +1459,8 @@ def create_llm(
                 backoff_factor=1.5,
             )
 
-    from llama_index.llms.openai import OpenAI
-
-    settings = get_settings()
-    mode = mode or settings.llm_mode
-
-    if mode == "ollama":
-        ollama_model = model or settings.ollama_llm_model
-        primary_llm = RetryableOllama(
-            model=ollama_model,
-            base_url=settings.ollama_base_url,
-            max_retries=5,
-            initial_delay=2.0,
-            backoff_factor=1.5,
-        )
-        return OllamaWithSiliconFlowFallback(primary_llm)
-    else:
-        settings = get_settings()
-        return RetryableSiliconFlowLLM(
-            model=settings.siliconflow_model,
-            api_key=settings.siliconflow_api_key or "",
-            api_base=settings.siliconflow_base_url or "",
-            max_retries=3,
-            initial_delay=2.0,
-            backoff_factor=1.5,
-        )
+    model_id, model_name, api_key, base_url = get_default_llm_from_registry()
+    return create_llm(model_id=model_id)
 
 
 def configure_llm_by_model_id(model_id: str) -> Any:
@@ -1527,27 +1531,9 @@ def configure_embed_model_by_model_id(model_id: str) -> OllamaEmbedding:
 
 
 def configure_llamaindex(mode: Optional[str] = None) -> None:
-    """
-    配置 LlamaIndex 全局 LLM
-
-    Args:
-        mode: LLM 模式，可选 "siliconflow" 或 "ollama"。如果为 None，使用配置默认值。
-    """
-    settings = get_settings()
-    mode = mode or settings.llm_mode
-
-    if mode == "ollama":
-        from llama_index.llms.ollama import Ollama
-
-        ollama_model = settings.ollama_llm_model
-        llm = Ollama(
-            model=ollama_model,
-            base_url=settings.ollama_base_url,
-            request_timeout=300,
-        )
-        LlamaSettings.llm = llm
-    else:
-        configure_llamaindex_for_siliconflow()
+    """配置 LlamaIndex 全局 LLM"""
+    llm = create_llm(model_id=None, mode=mode)
+    LlamaSettings.llm = llm
 
 
 _sf_fallback_count = 0

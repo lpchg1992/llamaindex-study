@@ -44,8 +44,9 @@ class KeywordExtractor:
     def _extract_with_llm(self, text: str) -> List[str]:
         try:
             import httpx
+            from llamaindex_study.ollama_utils import get_default_llm_from_registry
 
-            settings = get_settings()
+            _, model_name, api_key, base_url = get_default_llm_from_registry()
 
             text = _remove_surrogates(text[:4000])
             prompt = (
@@ -62,13 +63,13 @@ class KeywordExtractor:
             )
 
             resp = httpx.post(
-                f"{settings.siliconflow_base_url}/chat/completions",
+                f"{base_url}/chat/completions",
                 headers={
-                    "Authorization": f"Bearer {settings.siliconflow_api_key}",
+                    "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": settings.siliconflow_model,
+                    "model": model_name,
                     "messages": [{"role": "user", "content": prompt}],
                     "max_tokens": 200,
                     "temperature": 0.3,

@@ -50,8 +50,10 @@ class TopicAnalyzer:
     def _llm_extract_topics(self, texts: List[str]) -> List[Tuple[str, float]]:
         try:
             import httpx
+            from llamaindex_study.ollama_utils import get_default_llm_from_registry
 
             settings = get_settings()
+            _, model_name, api_key, base_url = get_default_llm_from_registry()
 
             combined_text = "\n---\n".join(texts[:30])
             if len(combined_text) > 8000:
@@ -72,13 +74,13 @@ class TopicAnalyzer:
             )
 
             resp = httpx.post(
-                f"{settings.siliconflow_base_url}/chat/completions",
+                f"{base_url}/chat/completions",
                 headers={
-                    "Authorization": f"Bearer {settings.siliconflow_api_key}",
+                    "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": settings.siliconflow_model,
+                    "model": model_name,
                     "messages": [{"role": "user", "content": prompt}],
                     "max_tokens": 300,
                     "temperature": 0.3,
