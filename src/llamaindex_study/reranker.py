@@ -115,6 +115,34 @@ def _format_node_with_metadata(node: NodeWithScore) -> str:
     return text
 
 
+def get_default_reranker_from_registry() -> tuple[str, str, str]:
+    """Get default reranker model name, API key, and base URL from the model registry.
+
+    Returns:
+        (model_name, api_key, base_url)
+    """
+    from kb.database import init_vendor_db
+    from llamaindex_study.config import get_model_registry
+
+    registry = get_model_registry()
+    model = registry.get_default("reranker")
+    if not model:
+        raise RuntimeError(
+            "No default reranker model found in registry. "
+            "Please add a reranker model via CLI or API."
+        )
+
+    vendor_db = init_vendor_db()
+    vendor_info = vendor_db.get(model["vendor_id"])
+    if not vendor_info:
+        raise RuntimeError(f"Vendor '{model['vendor_id']}' not found in database.")
+
+    api_key = vendor_info.get("api_key", "")
+    base_url = vendor_info.get("api_base", "https://api.siliconflow.cn/v1")
+
+    return model["name"], api_key, base_url
+
+
 class SiliconFlowReranker(BaseNodePostprocessor):
     """
     SiliconFlow 云端 Reranker（默认推荐）

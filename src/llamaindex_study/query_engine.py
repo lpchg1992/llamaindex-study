@@ -36,6 +36,9 @@ class QueryEngineWrapper:
         response_mode: str = "compact",
         vector_store: Optional[Any] = None,
         model_id: Optional[str] = None,
+        rerank_model: Optional[str] = None,
+        rerank_api_key: Optional[str] = None,
+        rerank_base_url: Optional[str] = None,
     ):
         """
         初始化查询引擎
@@ -53,6 +56,9 @@ class QueryEngineWrapper:
             response_mode: Response Synthesizer 模式
             vector_store: 向量存储实例（用于检测 chunk_strategy）
             model_id: 使用的模型ID (None=使用默认模型)
+            rerank_model: Reranker 模型名称 (None=从注册表获取)
+            rerank_api_key: Reranker API Key (None=从注册表获取)
+            rerank_base_url: Reranker API Base URL (None=从注册表获取)
         """
         self.index = index
         self.vector_store = vector_store
@@ -70,6 +76,19 @@ class QueryEngineWrapper:
         self.num_multi_queries = num_multi_queries or self.settings.num_multi_queries
         self.response_mode = response_mode or self.settings.response_mode
         self.model_id = model_id
+
+        if rerank_model or rerank_api_key or rerank_base_url:
+            self._rerank_model = rerank_model or self.settings.rerank_model
+            self._rerank_api_key = rerank_api_key or self.settings.siliconflow_api_key
+            self._rerank_base_url = (
+                rerank_base_url or self.settings.siliconflow_base_url
+            )
+        else:
+            from llamaindex_study.reranker import get_default_reranker_from_registry
+
+            self._rerank_model, self._rerank_api_key, self._rerank_base_url = (
+                get_default_reranker_from_registry()
+            )
 
         self._query_engine = self._create_query_engine()
 
@@ -198,13 +217,13 @@ class QueryEngineWrapper:
             from llamaindex_study.reranker import SiliconFlowReranker
 
             reranker = SiliconFlowReranker(
-                api_key=self.settings.siliconflow_api_key,
-                model=self.settings.rerank_model,
-                base_url=self.settings.siliconflow_base_url,
+                api_key=self._rerank_api_key,
+                model=self._rerank_model,
+                base_url=self._rerank_base_url,
                 top_n=self.top_k,
             )
             kwargs["node_postprocessors"] = [reranker]
-            logger.info(f"启用 SiliconFlow Reranker: {self.settings.rerank_model}")
+            logger.info(f"启用 SiliconFlow Reranker: {self._rerank_model}")
 
         from llama_index.core.query_engine import RetrieverQueryEngine
 
