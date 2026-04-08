@@ -1053,29 +1053,23 @@ curl http://localhost:37241/settings
 
 ```json
 {
+  "llm_mode": "ollama",
+  "default_llm_model": "ollama/tomng/lfm2.5-instruct:1.2b",
+  "ollama_embed_model": "bge-m3",
+  "ollama_base_url": "http://localhost:11434",
+  "top_k": 5,
   "use_hybrid_search": false,
-  "hybrid_search_mode": "relative_score",
-  "hybrid_search_alpha": 0.5,
   "use_auto_merging": false,
   "use_hyde": false,
   "use_multi_query": false,
-  "multi_query_num": 3,
-  "use_reranker": true,
-  "response_mode": "compact",
+  "num_multi_queries": 3,
+  "hybrid_search_alpha": 0.5,
   "chunk_strategy": "hierarchical",
   "chunk_size": 1024,
   "chunk_overlap": 100,
-  "hierarchical_chunk_sizes": [2048, 1024, 512],
-  "siliconflow_api_key": "***",
-  "siliconflow_base_url": "https://api.siliconflow.cn/v1",
-  "siliconflow_model": "Pro/deepseek-ai/DeepSeek-V3.2",
-  "ollama_base_url": "http://localhost:11434",
-  "ollama_llm_model": "tomng/lfm2.5-instruct:1.2b",
-  "ollama_embed_model": "bge-m3",
-  "embed_model_id": null,
-  "max_retries": 5,
-  "max_concurrent_tasks": 10,
-  "scheduler_interval": 30.0
+  "use_reranker": true,
+  "rerank_model": "Pro/BAAI/bge-reranker-v2-m3",
+  "response_mode": "compact"
 }
 ```
 
@@ -1087,10 +1081,25 @@ curl http://localhost:37241/settings
 curl -X PUT http://localhost:37241/settings \
   -H "Content-Type: application/json" \
   -d '{
+    "top_k": 10,
     "use_hybrid_search": true,
     "use_auto_merging": true
   }'
 ```
+
+**设置持久化机制：**
+
+| 设置类别 | 设置项 | 持久化位置 | 生效方式 |
+|----------|--------|------------|----------|
+| 运行时设置 | `top_k`, `use_hybrid_search`, `use_auto_merging`, `use_hyde`, `use_multi_query`, `num_multi_queries`, `hybrid_search_alpha`, `use_reranker`, `response_mode` | `.runtime_settings.json` | 立即生效 |
+| Chunk 设置 | `chunk_strategy`, `chunk_size`, `chunk_overlap` | `.runtime_settings.json` | 立即生效，**仅影响新导入的文档** |
+| LLM/Embedding | `llm_mode`, `ollama_embed_model`, `ollama_base_url`, `rerank_model` | `.env` | 重启服务后生效 |
+| 默认模型 | `default_llm_model` | 模型数据库 | 立即生效（通过 `is_default` 字段） |
+
+**注意：**
+- Chunk 设置只对新导入的文档生效，已有的知识库不受影响
+- LLM/Embedding 相关设置修改后需重启服务或调用 `POST /admin/reload-config`
+- 默认模型设置立即生效，无需重启
 
 ## 管理操作
 
@@ -1108,6 +1117,28 @@ curl -X POST http://localhost:37241/admin/restart-scheduler
   "message": "调度器正在重启..."
 }
 ```
+
+### 重载配置
+
+#### POST /admin/reload-config - 重新加载配置
+
+重新加载模型注册表和运行时设置。用于在修改 LLM/Embedding 配置后使更改生效。
+
+```bash
+curl -X POST http://localhost:37241/admin/reload-config
+```
+
+```json
+{
+  "status": "success",
+  "message": "配置已重新加载"
+}
+```
+
+**说明：**
+- 重新加载模型注册表（从数据库读取最新的供应商和模型信息）
+- 重新加载运行时设置（从 `.runtime_settings.json` 读取最新值）
+- 对于 LLM/Embedding 设置的修改，仍需要重启服务才能完全生效
 
 ---
 

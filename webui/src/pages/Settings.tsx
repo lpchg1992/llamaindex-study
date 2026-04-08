@@ -409,6 +409,13 @@ export function SettingsPage() {
                 {updateSettings.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Save Chunk Settings
               </Button>
+
+              <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-3 mt-4">
+                <p className="text-sm text-amber-600 dark:text-amber-400">
+                  <strong>Note:</strong> These settings only affect new document imports. 
+                  Existing knowledge bases will continue using their original chunking configuration.
+                </p>
+              </div>
             </CardContent>
           </Card>
         </TabsContent>
