@@ -5,13 +5,10 @@ import { Dashboard } from '@/pages/Dashboard'
 import { KnowledgeBase } from '@/pages/KnowledgeBase'
 import { Search } from '@/pages/Search'
 import { Query } from '@/pages/Query'
-import { Import } from '@/pages/Import'
 import { Tasks } from '@/pages/Tasks'
-import { Evaluate } from '@/pages/Evaluate'
 import { Models } from '@/pages/Models'
 import { Settings } from '@/pages/Settings'
 import { ChatPage } from '@/pages/Chat'
-import { ObservabilityPage } from '@/pages/Observability'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -32,13 +29,10 @@ function App() {
             <Route path="/knowledge-base" element={<KnowledgeBase />} />
             <Route path="/search" element={<Search />} />
             <Route path="/query" element={<Query />} />
-            <Route path="/import" element={<Import />} />
             <Route path="/tasks" element={<Tasks />} />
-            <Route path="/evaluate" element={<Evaluate />} />
             <Route path="/models" element={<Models />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/chat" element={<ChatPage />} />
-            <Route path="/observability" element={<ObservabilityPage />} />
           </Route>
         </Routes>
       </BrowserRouter>

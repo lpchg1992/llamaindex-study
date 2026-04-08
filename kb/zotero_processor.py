@@ -84,10 +84,30 @@ class ZoteroImporter:
         self._conn = None
 
     def connect(self):
-        """连接数据库"""
+        """连接数据库（优先读写模式，数据库被锁定时降级为只读模式）"""
         if not self._conn:
-            self._conn = sqlite3.connect(str(self.db_path))
-            self._conn.row_factory = sqlite3.Row
+            db_path = str(self.db_path)
+            try:
+                # 优先尝试读写模式
+                self._conn = sqlite3.connect(db_path)
+                self._conn.row_factory = sqlite3.Row
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e).lower():
+                    # 数据库被锁定，尝试只读模式
+                    try:
+                        self._conn = sqlite3.connect(
+                            f"file:{db_path}?mode=ro", uri=True
+                        )
+                        self._conn.row_factory = sqlite3.Row
+                    except sqlite3.OperationalError:
+                        # 仍然失败，尝试使用备份文件
+                        backup_path = f"{db_path}.bak"
+                        self._conn = sqlite3.connect(
+                            f"file:{backup_path}?mode=ro", uri=True
+                        )
+                        self._conn.row_factory = sqlite3.Row
+                else:
+                    raise
         return self._conn
 
     def close(self):

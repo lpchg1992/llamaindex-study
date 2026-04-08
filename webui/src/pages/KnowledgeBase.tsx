@@ -21,11 +21,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Plus, Trash2, Database, RefreshCw, Loader2, AlertTriangle, CheckCircle, Wrench, Trash, FileText, Sparkles, Pencil, WrenchIcon, HardDrive } from 'lucide-react'
+import { Plus, Trash2, Database, RefreshCw, Loader2, AlertTriangle, CheckCircle, Wrench, Trash, FileText, Sparkles, Pencil, WrenchIcon, HardDrive, Upload } from 'lucide-react'
 import { toast } from 'sonner'
 import { KBEditDialog } from '@/components/KBEditDialog'
 import { DangerConfirmDialog } from '@/components/DangerConfirmDialog'
 import { LanceDBDialog } from './LanceDB'
+import { ImportDialog } from '@/components/ImportDialog'
 import type { KBInfo } from '@/types/api'
 
 function KBDetailsPanel({ kb }: { kb: KBInfo }) {
@@ -136,7 +137,7 @@ function KBDetailsPanel({ kb }: { kb: KBInfo }) {
           <TabsContent value="topics" className="space-y-4">
             <div className="flex items-center justify-between">
               <h4 className="text-sm font-medium">Knowledge Topics</h4>
-              <Button variant="outline" size="sm" onClick={handleRefreshTopics} disabled={refreshTopics.isPending || isRefreshingTopics}>
+              <Button variant="outline" size="sm" onClick={handleRefreshTopics} disabled={refreshTopics.isPending || isRefreshingTopics} title="刷新知识主题">
                 {isRefreshingTopics || refreshTopics.isPending ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : (
@@ -168,7 +169,7 @@ function KBDetailsPanel({ kb }: { kb: KBInfo }) {
           <TabsContent value="consistency" className="space-y-4">
             <div className="flex items-center justify-between">
               <h4 className="text-sm font-medium">Consistency Check</h4>
-              <Button variant="outline" size="sm" onClick={() => refetchTopics()} disabled={consistencyLoading}>
+              <Button variant="outline" size="sm" onClick={() => refetchTopics()} disabled={consistencyLoading} title="检查知识库一致性">
                 {consistencyLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-1" />}
                 Check
               </Button>
@@ -208,7 +209,7 @@ function KBDetailsPanel({ kb }: { kb: KBInfo }) {
                       <SelectItem value="rebuild">Rebuild</SelectItem>
                     </SelectContent>
                   </Select>
-                  <Button size="sm" onClick={handleRepair} disabled={repairConsistency.isPending}>
+                  <Button size="sm" onClick={handleRepair} disabled={repairConsistency.isPending} title="修复知识库一致性问题">
                     {repairConsistency.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wrench className="h-4 w-4 mr-1" />}
                     Repair
                   </Button>
@@ -229,7 +230,7 @@ function KBDetailsPanel({ kb }: { kb: KBInfo }) {
                     <p className="text-xs text-muted-foreground">Clear all data in this knowledge base</p>
                   </div>
                 </div>
-                <Button variant="destructive" size="sm" onClick={() => setIsInitializeOpen(true)} disabled={initializeKB.isPending}>
+                <Button variant="destructive" size="sm" onClick={() => setIsInitializeOpen(true)} disabled={initializeKB.isPending} title="清空知识库所有数据">
                   {initializeKB.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash className="h-4 w-4 mr-1" />}
                   Initialize
                 </Button>
@@ -242,7 +243,7 @@ function KBDetailsPanel({ kb }: { kb: KBInfo }) {
                     <p className="text-xs text-muted-foreground">Rebuild docstore from LanceDB data</p>
                   </div>
                 </div>
-                <Button variant="outline" size="sm" onClick={() => setIsRebuildOpen(true)} disabled={rebuildDocstore.isPending}>
+                <Button variant="outline" size="sm" onClick={() => setIsRebuildOpen(true)} disabled={rebuildDocstore.isPending} title="从 LanceDB 数据重建 docstore">
                   {rebuildDocstore.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-1" />}
                   Rebuild
                 </Button>
@@ -286,6 +287,7 @@ function KBListItem({
   const [isEditOpen, setIsEditOpen] = useState(false)
   const [isDeleteOpen, setIsDeleteOpen] = useState(false)
   const [isLanceOpen, setIsLanceOpen] = useState(false)
+  const [isImportOpen, setIsImportOpen] = useState(false)
   const deleteKB = useDeleteKB()
 
   const handleConfirmDelete = async () => {
@@ -312,7 +314,16 @@ function KBListItem({
             <Button
               variant="ghost"
               size="icon"
+              onClick={(e) => { e.stopPropagation(); setIsImportOpen(true) }}
+              title="导入文档到该知识库"
+            >
+              <Upload className="h-4 w-4 text-muted-foreground" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
               onClick={(e) => { e.stopPropagation(); setIsLanceOpen(true) }}
+              title="查看 LanceDB 数据"
             >
               <HardDrive className="h-4 w-4 text-muted-foreground" />
             </Button>
@@ -320,6 +331,7 @@ function KBListItem({
               variant="ghost"
               size="icon"
               onClick={(e) => { e.stopPropagation(); setIsEditOpen(true) }}
+              title="编辑知识库信息"
             >
               <Pencil className="h-4 w-4 text-muted-foreground" />
             </Button>
@@ -327,6 +339,7 @@ function KBListItem({
               variant="ghost"
               size="icon"
               onClick={(e) => { e.stopPropagation(); setIsDeleteOpen(true) }}
+              title="删除知识库"
             >
               <Trash2 className="h-4 w-4 text-destructive" />
             </Button>
@@ -352,6 +365,12 @@ function KBListItem({
         open={isLanceOpen}
         onOpenChange={setIsLanceOpen}
         kbId={kb.id}
+      />
+      <ImportDialog
+        open={isImportOpen}
+        onOpenChange={setIsImportOpen}
+        kbId={kb.id}
+        kbName={kb.name || kb.id}
       />
     </>
   )
@@ -400,6 +419,7 @@ export function KnowledgeBase() {
             variant="outline"
             onClick={handleRepairAll}
             disabled={repairAll.isPending || !kbs?.length}
+            title="修复所有知识库的一致性问题"
           >
             {repairAll.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <WrenchIcon className="mr-2 h-4 w-4" />}
             Repair All
@@ -408,7 +428,7 @@ export function KnowledgeBase() {
 
         <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
           <DialogTrigger asChild>
-            <Button>
+            <Button title="创建新的知识库">
               <Plus className="mr-2 h-4 w-4" />
               Create KB
             </Button>
