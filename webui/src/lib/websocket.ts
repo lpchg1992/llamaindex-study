@@ -89,7 +89,7 @@ export function useTaskWebSocket(enabled: boolean = true) {
       }
 
       wsRef.current.onerror = (error) => {
-        console.error('Task WebSocket error:', error)
+        console.warn('Task WebSocket error (may be expected if API is not running):', error.type)
       }
     } catch (error) {
       console.error('Failed to connect WebSocket:', error)

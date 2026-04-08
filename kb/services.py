@@ -177,6 +177,160 @@ class ObsidianService:
         }
 
     @staticmethod
+    def get_vault_structure(
+        vault_name: str, folder_path: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        获取 Vault 文件夹的层级结构
+
+        Args:
+            vault_name: Vault 名称
+            folder_path: 子文件夹路径（None 表示根目录）
+
+        Returns:
+            层级结构
+        """
+        from kb.registry import get_vault_root
+
+        if vault_name == "默认":
+            vault_path = get_vault_root()
+        else:
+            try:
+                from kb.obsidian_config import OBSIDIAN_KB_MAPPINGS
+
+                configured_path = None
+                for mapping in OBSIDIAN_KB_MAPPINGS:
+                    if hasattr(mapping, "vault_path") and mapping.vault_path:
+                        expected_name = f"配置 ({Path(mapping.vault_path).name})"
+                        if vault_name == expected_name:
+                            configured_path = mapping.vault_path
+                            break
+
+                if configured_path:
+                    vault_path = Path(configured_path)
+                else:
+                    return {"error": f"未找到 Vault: {vault_name}"}
+            except ImportError:
+                return {"error": "无法加载 Vault 配置"}
+
+        if not vault_path.exists():
+            return {"error": f"Vault 路径不存在: {vault_path}"}
+
+        target_dir = vault_path if not folder_path else vault_path / folder_path
+        if not target_dir.exists():
+            return {"error": f"文件夹不存在: {target_dir}"}
+
+        items = []
+        for item in sorted(target_dir.iterdir()):
+            if item.name.startswith("."):
+                continue
+
+            if item.is_dir():
+                md_count = len(list(item.glob("*.md")))
+                items.append(
+                    {
+                        "type": "folder",
+                        "name": item.name,
+                        "path": str(item.relative_to(vault_path)),
+                        "md_count": md_count,
+                    }
+                )
+            elif item.suffix == ".md":
+                size = item.stat().st_size
+                items.append(
+                    {
+                        "type": "file",
+                        "name": item.name,
+                        "path": str(item.relative_to(vault_path)),
+                        "size": size,
+                    }
+                )
+
+        return {
+            "vault_name": vault_name,
+            "vault_path": str(vault_path),
+            "folder_path": folder_path or "",
+            "items": items,
+        }
+
+    @staticmethod
+    def get_vault_tree(vault_name: str) -> Dict[str, Any]:
+        """
+        获取 Vault 的完整树形结构（仅顶层文件夹，用于懒加载）
+
+        Args:
+            vault_name: Vault 名称
+
+        Returns:
+            树形结构
+        """
+        from kb.registry import get_vault_root
+
+        if vault_name == "默认":
+            vault_path = get_vault_root()
+        else:
+            try:
+                from kb.obsidian_config import OBSIDIAN_KB_MAPPINGS
+
+                configured_path = None
+                for mapping in OBSIDIAN_KB_MAPPINGS:
+                    if hasattr(mapping, "vault_path") and mapping.vault_path:
+                        expected_name = f"配置 ({Path(mapping.vault_path).name})"
+                        if vault_name == expected_name:
+                            configured_path = mapping.vault_path
+                            break
+
+                if configured_path:
+                    vault_path = Path(configured_path)
+                else:
+                    return {"error": f"未找到 Vault: {vault_name}"}
+            except ImportError:
+                return {"error": "无法加载 Vault 配置"}
+
+        if not vault_path.exists():
+            return {"error": f"Vault 路径不存在: {vault_path}"}
+
+        def build_tree(dir_path: Path, depth: int = 0) -> List[Dict[str, Any]]:
+            if depth > 3:
+                return []
+
+            result = []
+            for item in sorted(dir_path.iterdir()):
+                if item.name.startswith("."):
+                    continue
+
+                if item.is_dir():
+                    md_count = len(list(item.glob("*.md")))
+                    children = build_tree(item, depth + 1) if depth < 2 else []
+                    result.append(
+                        {
+                            "type": "folder",
+                            "name": item.name,
+                            "path": str(item.relative_to(vault_path)),
+                            "md_count": md_count,
+                            "has_children": len(children) > 0,
+                            "children": children,
+                        }
+                    )
+                elif item.suffix == ".md":
+                    result.append(
+                        {
+                            "type": "file",
+                            "name": item.name,
+                            "path": str(item.relative_to(vault_path)),
+                            "size": item.stat().st_size,
+                        }
+                    )
+
+            return result
+
+        return {
+            "vault_name": vault_name,
+            "vault_path": str(vault_path),
+            "items": build_tree(vault_path),
+        }
+
+    @staticmethod
     def import_vault(
         kb_id: str,
         vault_path: str,
@@ -392,6 +546,124 @@ class ZoteroService:
         finally:
             importer.close()
 
+    @staticmethod
+    def get_collection_structure(collection_id: str) -> Dict[str, Any]:
+        """
+        获取收藏夹的层级结构（包含子收藏夹和文献）
+
+        Args:
+            collection_id: 收藏夹 ID
+
+        Returns:
+            层级结构
+        """
+        from kb.zotero_processor import ZoteroImporter
+
+        importer = ZoteroImporter()
+        try:
+            # 获取当前收藏夹信息
+            collections = importer.get_collections()
+            current_collection = None
+            for c in collections:
+                if str(c.get("collectionID")) == str(collection_id):
+                    current_collection = c
+                    break
+
+            if not current_collection:
+                return {"error": f"未找到收藏夹: {collection_id}"}
+
+            # 获取所有子收藏夹
+            sub_collections = [
+                c
+                for c in collections
+                if c.get("parentCollectionID") == int(collection_id)
+            ]
+
+            # 获取当前收藏夹中的文献
+            item_ids = importer.get_items_in_collection(
+                int(collection_id), recursive=False
+            )
+
+            items = []
+            for item_id in item_ids[:100]:  # 限制返回数量，避免过多
+                item = importer.get_item(item_id)
+                if item:
+                    items.append(
+                        {
+                            "item_id": item.item_id,
+                            "title": item.title,
+                            "creators": item.creators,
+                            "has_file": bool(item.file_path),
+                            "has_annotations": len(item.annotations) > 0,
+                            "has_notes": len(item.notes) > 0,
+                        }
+                    )
+
+            return {
+                "collection_id": collection_id,
+                "collection_name": current_collection.get("collectionName", ""),
+                "parent_id": current_collection.get("parentCollectionID"),
+                "sub_collections": [
+                    {
+                        "collection_id": c.get("collectionID"),
+                        "name": c.get("collectionName", ""),
+                    }
+                    for c in sub_collections
+                ],
+                "items": items,
+                "item_count": len(items),
+            }
+        finally:
+            importer.close()
+
+    @staticmethod
+    def get_all_collections_with_items() -> List[Dict[str, Any]]:
+        """
+        获取所有收藏夹及其直接文献（用于树形展示）
+
+        Returns:
+            所有收藏夹列表
+        """
+        from kb.zotero_processor import ZoteroImporter
+
+        importer = ZoteroImporter()
+        try:
+            collections = importer.get_collections()
+
+            # 构建层级结构
+            result = []
+            for collection in collections:
+                collection_id = collection.get("collectionID")
+                item_ids = importer.get_items_in_collection(
+                    collection_id, recursive=False
+                )
+
+                items = []
+                for item_id in item_ids[:50]:  # 限制每个收藏夹返回的数量
+                    item = importer.get_item(item_id)
+                    if item:
+                        items.append(
+                            {
+                                "item_id": item.item_id,
+                                "title": item.title,
+                                "has_file": bool(item.file_path),
+                            }
+                        )
+
+                result.append(
+                    {
+                        "collection_id": collection_id,
+                        "collection_name": collection.get("collectionName", ""),
+                        "parent_id": collection.get("parentCollectionID"),
+                        "items": items,
+                        "item_count": len(items),
+                    }
+                )
+
+            return result
+        finally:
+            importer.close()
+
 
 class GenericService:
     """通用文件导入服务"""
@@ -459,10 +731,11 @@ class KnowledgeBaseService:
     def list_all() -> List[Dict[str, Any]]:
         """列出所有知识库"""
         from kb.registry import registry
-        from kb.database import init_kb_meta_db
+        from kb.database import init_kb_meta_db, init_document_db
 
         kbs = registry.list_all()
         kb_meta_db = init_kb_meta_db()
+        document_db = init_document_db()
         all_db_rows = {kb["kb_id"]: kb for kb in kb_meta_db.get_all()}
         result = []
         seen: set[str] = set()
@@ -472,11 +745,14 @@ class KnowledgeBaseService:
             exists = persist_dir.exists()
 
             row_count = 0
+            doc_count = 0
             if exists:
                 try:
                     vs = VectorStoreService.get_vector_store(kb.id)
                     stats = vs.get_stats()
                     row_count = stats.get("row_count", 0)
+                    doc_stats = document_db.get_stats(kb.id)
+                    doc_count = doc_stats.get("document_count", 0)
                 except Exception:
                     pass
 
@@ -491,8 +767,9 @@ class KnowledgeBaseService:
                     "name": kb.name,
                     "description": kb.description,
                     "source_type": db_row.get("source_type", "unknown"),
-                    "status": "indexed" if row_count > 0 else "empty",
-                    "row_count": row_count,
+                    "status": "indexed" if doc_count > 0 else "empty",
+                    "row_count": doc_count,
+                    "chunk_count": row_count,
                     "topics": all_topics,
                 }
             )
@@ -504,23 +781,26 @@ class KnowledgeBaseService:
             persist_dir = Path(
                 kb_meta.get("persist_path") or (get_storage_root() / kb_id)
             )
+            doc_stats = document_db.get_stats(kb_id)
+            doc_count = doc_stats.get("document_count", 0)
+            row_count = 0
             info = {
                 "id": kb_id,
                 "name": kb_meta.get("name", kb_id),
                 "description": kb_meta.get("description", ""),
                 "source_type": kb_meta.get("source_type", "unknown"),
                 "status": "empty",
-                "row_count": 0,
+                "row_count": doc_count,
+                "chunk_count": 0,
                 "topics": kb_meta.get("topics", []),
             }
             if persist_dir.exists():
                 try:
                     vs = LanceDBVectorStore(persist_dir=persist_dir, table_name=kb_id)
                     stats = vs.get_stats()
-                    info["status"] = (
-                        "indexed" if stats.get("row_count", 0) > 0 else "empty"
-                    )
-                    info["row_count"] = stats.get("row_count", 0)
+                    row_count = stats.get("row_count", 0)
+                    info["status"] = "indexed" if doc_count > 0 else "empty"
+                    info["chunk_count"] = row_count
                 except Exception:
                     info["status"] = "error"
             result.append(info)

@@ -1633,14 +1633,28 @@ class ChunkDB:
             row = session.get(ChunkModel, chunk_id)
             return self._to_dict(row) if row else None
 
-    def get_by_doc(self, doc_id: str) -> List[Dict[str, Any]]:
+    def get_by_doc(
+        self, doc_id: str, offset: int = 0, limit: int = 50
+    ) -> List[Dict[str, Any]]:
         with self.db.session_scope() as session:
             rows = session.scalars(
                 select(ChunkModel)
                 .where(ChunkModel.doc_id == doc_id)
                 .order_by(ChunkModel.chunk_index, ChunkModel.hierarchy_level)
+                .offset(offset)
+                .limit(limit)
             ).all()
             return [self._to_dict(row) for row in rows]
+
+    def count_by_doc(self, doc_id: str) -> int:
+        """Count total chunks for a document."""
+        with self.db.session_scope() as session:
+            count = session.scalar(
+                select(func.count())
+                .select_from(ChunkModel)
+                .where(ChunkModel.doc_id == doc_id)
+            )
+            return int(count) if count else 0
 
     def get_by_kb(self, kb_id: str, limit: int = 1000) -> List[Dict[str, Any]]:
         with self.db.session_scope() as session:

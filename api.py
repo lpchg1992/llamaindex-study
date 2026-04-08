@@ -1295,6 +1295,21 @@ def search_zotero_collections(q: str):
     return {"results": results}
 
 
+@app.get("/zotero/collections/{collection_id}/structure")
+def get_zotero_collection_structure(collection_id: str):
+    """获取收藏夹的层级结构（包含子收藏夹和文献）"""
+    result = ZoteroService.get_collection_structure(collection_id)
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
+@app.get("/zotero/collections/with-items")
+def get_all_collections_with_items():
+    """获取所有收藏夹及其直接文献（用于树形展示）"""
+    return {"collections": ZoteroService.get_all_collections_with_items()}
+
+
 @app.post("/kbs/{kb_id}/ingest/zotero", response_model=IngestResponse)
 def ingest_zotero(kb_id: str, req: ZoteroIngestRequest):
     """Zotero 收藏夹导入"""
@@ -1386,6 +1401,19 @@ class ObsidianIngestRequest(BaseModel):
     refresh_topics: bool = Field(True, description="任务完成后是否刷新 topics")
 
 
+class SelectiveImportRequest(BaseModel):
+    source_type: str = Field(..., description="来源类型: zotero, obsidian, files")
+    items: List[Dict[str, Any]] = Field(..., description="要导入的项目列表")
+    async_mode: bool = Field(True, description="是否异步处理")
+    refresh_topics: bool = Field(True, description="任务完成后是否刷新 topics")
+
+
+class FilesImportRequest(BaseModel):
+    paths: List[str] = Field(..., description="文件路径列表")
+    async_mode: bool = Field(True, description="是否异步处理")
+    refresh_topics: bool = Field(True, description="任务完成后是否刷新 topics")
+
+
 @app.get("/obsidian/vaults")
 def list_obsidian_vaults():
     """列出常见的 Obsidian vault 位置"""
@@ -1400,6 +1428,24 @@ def get_obsidian_vault(vault_name: str):
     if not info:
         raise HTTPException(status_code=404, detail="Vault not found")
     return info
+
+
+@app.get("/obsidian/vaults/{vault_name}/structure")
+def get_obsidian_vault_structure(vault_name: str, folder_path: Optional[str] = None):
+    """获取 Obsidian vault 指定文件夹的层级结构"""
+    result = ObsidianService.get_vault_structure(vault_name, folder_path)
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
+@app.get("/obsidian/vaults/{vault_name}/tree")
+def get_obsidian_vault_tree(vault_name: str):
+    """获取 Obsidian vault 的完整树形结构"""
+    result = ObsidianService.get_vault_tree(vault_name)
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
 
 
 @app.post("/kbs/{kb_id}/ingest/obsidian", response_model=IngestResponse)
@@ -1460,6 +1506,104 @@ def ingest_obsidian(kb_id: str, req: ObsidianIngestRequest):
         task_id=task_id,
         message=f"Obsidian {import_dir.name} 导入任务已提交，ID: {task_id}",
         source="obsidian",
+    )
+
+
+@app.post("/kbs/{kb_id}/ingest/selective", response_model=IngestResponse)
+def ingest_selective(kb_id: str, req: SelectiveImportRequest):
+    """选择性导入 - 导入指定的文献/笔记/文件"""
+    from kb.import_service import SelectiveImportItem
+
+    items = [
+        SelectiveImportItem(
+            type=item.get("type", ""),
+            id=item.get("id"),
+            path=item.get("path"),
+        )
+        for item in req.items
+    ]
+
+    from kb.import_service import SelectiveImportRequest as ServiceSelectiveRequest
+
+    service_req = ServiceSelectiveRequest(
+        source_type=req.source_type,
+        items=items,
+        async_mode=req.async_mode,
+        refresh_topics=req.refresh_topics,
+    )
+
+    task = ImportApplicationService.submit_selective_import(kb_id, service_req)
+    task_id = task["task_id"]
+
+    return IngestResponse(
+        status="pending",
+        task_id=task_id,
+        message=f"选择性导入任务已提交，ID: {task_id}，项目数: {len(items)}",
+        source=req.source_type,
+    )
+
+
+@app.post("/kbs/{kb_id}/ingest/files", response_model=IngestResponse)
+def ingest_files(kb_id: str, req: FilesImportRequest):
+    """文件选择器导入 - 导入通过原生文件选择器选择的文件"""
+    validated_paths = []
+    for path_str in req.paths:
+        p = Path(path_str)
+        if not p.exists():
+            raise HTTPException(status_code=400, detail=f"文件不存在: {path_str}")
+        validated_paths.append(str(p))
+
+    if not validated_paths:
+        raise HTTPException(status_code=400, detail="没有提供有效的文件路径")
+
+    if not req.async_mode:
+        from kb.services import GenericService
+
+        merged = {"files": 0, "nodes": 0, "failed": 0}
+        for path in validated_paths:
+            try:
+                stats = GenericService.import_file(
+                    kb_id=kb_id,
+                    path=path,
+                    refresh_topics=False,
+                )
+                merged["files"] += stats.get("files", 0)
+                merged["nodes"] += stats.get("nodes", 0)
+                merged["failed"] += stats.get("failed", 0)
+            except Exception as e:
+                merged["failed"] += 1
+                logger.error(f"导入文件失败 {path}: {e}")
+
+        from kb.services import KnowledgeBaseService
+
+        if req.refresh_topics and merged["files"] > 0:
+            KnowledgeBaseService.refresh_topics(kb_id, has_new_docs=True)
+
+        return IngestResponse(
+            status="completed",
+            files_processed=merged.get("files", 0),
+            nodes_created=merged.get("nodes", 0),
+            failed=merged.get("failed", 0),
+            message="同步导入完成",
+            source="files",
+        )
+
+    task = ImportApplicationService.submit_task(
+        ImportRequest(
+            kind="generic",
+            kb_id=kb_id,
+            paths=validated_paths,
+            refresh_topics=req.refresh_topics,
+            source=f"files:{len(validated_paths)}files",
+        )
+    )
+    task_id = task["task_id"]
+
+    return IngestResponse(
+        status="pending",
+        task_id=task_id,
+        message=f"文件导入任务已提交，ID: {task_id}，文件数: {len(validated_paths)}",
+        source="files",
     )
 
 
@@ -1960,9 +2104,14 @@ def delete_document(kb_id: str, doc_id: str):
     return {"status": "deleted", "doc_id": doc_id, "result": result}
 
 
-@app.get("/kbs/{kb_id}/documents/{doc_id}/chunks", response_model=List[ChunkResponse])
-def list_document_chunks(kb_id: str, doc_id: str):
-    """获取文档的所有分块"""
+@app.get("/kbs/{kb_id}/documents/{doc_id}/chunks")
+def list_document_chunks(
+    kb_id: str,
+    doc_id: str,
+    page: int = 1,
+    page_size: int = 20,
+):
+    """获取文档的分块（分页）"""
     from kb.database import init_document_db, init_chunk_db
 
     doc_db = init_document_db()
@@ -1972,8 +2121,18 @@ def list_document_chunks(kb_id: str, doc_id: str):
     if doc["kb_id"] != kb_id:
         raise HTTPException(status_code=404, detail=f"文档不属于知识库 {kb_id}")
 
-    chunks = init_chunk_db().get_by_doc(doc_id)
-    return chunks
+    chunk_db = init_chunk_db()
+    total = chunk_db.count_by_doc(doc_id)
+    offset = (page - 1) * page_size
+    chunks = chunk_db.get_by_doc(doc_id, offset=offset, limit=page_size)
+
+    return {
+        "chunks": chunks,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": (total + page_size - 1) // page_size if total > 0 else 0,
+    }
 
 
 @app.get("/kbs/{kb_id}/chunks/{chunk_id}", response_model=ChunkResponse)

@@ -11,7 +11,6 @@ import {
   Cpu,
   ChevronLeft,
   ChevronRight,
-  HardDrive,
   MessagesSquare,
   Activity,
 } from 'lucide-react'
@@ -29,7 +28,6 @@ const navItems = [
   { to: '/tasks', icon: ListTodo, label: 'Tasks' },
   { to: '/evaluate', icon: LineChart, label: 'Evaluate' },
   { to: '/models', icon: Cpu, label: 'Models' },
-  { to: '/lancedb', icon: HardDrive, label: 'LanceDB' },
   { to: '/observability', icon: Activity, label: 'Observability' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ]

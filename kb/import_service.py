@@ -1,5 +1,5 @@
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Union
 
 from kb.services import GenericService, ObsidianService, TaskService, ZoteroService
 
@@ -27,6 +27,21 @@ class ImportRequest:
     chunk_strategy: Optional[str] = None
     chunk_size: Optional[int] = None
     hierarchical_chunk_sizes: Optional[List[int]] = None
+
+
+@dataclass
+class SelectiveImportItem:
+    type: str
+    id: Optional[str] = None
+    path: Optional[str] = None
+
+
+@dataclass
+class SelectiveImportRequest:
+    source_type: str
+    items: List[SelectiveImportItem]
+    async_mode: bool = True
+    refresh_topics: bool = True
 
 
 class ImportApplicationService:
@@ -101,6 +116,27 @@ class ImportApplicationService:
             )
 
         raise ValueError(f"不支持的导入类型: {req.kind}")
+
+    @staticmethod
+    def submit_selective_import(
+        kb_id: str,
+        req: SelectiveImportRequest,
+    ) -> Dict[str, Any]:
+        params = {
+            "items": [
+                {"type": item.type, "id": item.id, "path": item.path}
+                for item in req.items
+            ],
+            "async_mode": req.async_mode,
+            "refresh_topics": req.refresh_topics,
+        }
+        source = f"selective:{req.source_type}:{len(req.items)}items"
+        return TaskService.submit(
+            task_type="selective",
+            kb_id=kb_id,
+            params=params,
+            source=source,
+        )
 
     @staticmethod
     def run_sync(req: ImportRequest) -> Dict[str, Any]:

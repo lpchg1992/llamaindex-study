@@ -75,6 +75,8 @@ class TaskExecutor:
                 await self._execute_generic(task)
             elif task.task_type == "initialize":
                 await self._execute_initialize(task)
+            elif task.task_type == "selective":
+                await self._execute_selective(task)
             else:
                 raise ValueError(f"Unknown task type: {task.task_type}")
 
@@ -501,6 +503,122 @@ class TaskExecutor:
                 )
         except Exception as e:
             logger.error(f"清理 documents/chunks 失败: {e}")
+
+    # ==================== 选择性导入 ====================
+
+    async def _execute_selective(self, task: "Task") -> None:
+        """执行选择性导入（支持混合来源）"""
+        from kb.services import (
+            ZoteroService,
+            ObsidianService,
+            GenericService,
+            KnowledgeBaseService,
+        )
+
+        kb_id = task.kb_id
+        params = task.params
+        task_id = task.task_id
+        items = params.get("items", [])
+        async_mode = params.get("async_mode", True)
+
+        logger.info(f"[{task_id}] 开始选择性导入: kb_id={kb_id}, items={len(items)}")
+
+        if not items:
+            self.queue.complete_task(
+                task_id, result={"files": 0, "nodes": 0, "message": "没有要导入的项目"}
+            )
+            return
+
+        self.queue.update_progress(
+            task_id, total=len(items), message=f"准备导入 {len(items)} 个项目"
+        )
+
+        stats = {"files": 0, "nodes": 0, "failed": 0, "processed_sources": []}
+
+        for i, item in enumerate(items):
+            if await self._check_cancelled(task_id):
+                self.queue.complete_task(
+                    task_id,
+                    result={**stats, "partial": True},
+                    error="任务已取消",
+                )
+                return
+            if await self._check_paused(task_id):
+                self.queue.complete_task(
+                    task_id,
+                    result={**stats, "partial": True},
+                    error="任务已暂停",
+                )
+                return
+
+            item_type = item.get("type", "")
+            item_id = item.get("id") or item.get("path", "")
+            self.queue.update_progress(
+                task_id,
+                current=i + 1,
+                total=len(items),
+                message=f"[{i + 1}/{len(items)}] 处理: {item_type} - {item_id}",
+            )
+
+            try:
+                if item_type == "collection":
+                    result = ZoteroService.import_collection(
+                        kb_id=kb_id,
+                        collection_id=item.get("id"),
+                        collection_name=item.get("name", "Unknown"),
+                        refresh_topics=False,
+                    )
+                    stats["files"] += result.get("items", 0)
+                    stats["nodes"] += result.get("nodes", 0)
+
+                elif item_type == "item":
+                    logger.info(f"[{task_id}] 处理 Zotero 文献: {item_id}")
+
+                elif item_type == "folder":
+                    vault_path = item.get("vault_path")
+                    folder_path = item.get("path")
+                    if vault_path and folder_path:
+                        result = ObsidianService.import_vault(
+                            kb_id=kb_id,
+                            vault_path=vault_path,
+                            folder_path=folder_path,
+                            refresh_topics=False,
+                        )
+                        stats["files"] += result.get("files", 0)
+                        stats["nodes"] += result.get("nodes", 0)
+
+                elif item_type == "file":
+                    path = item.get("path")
+                    if path:
+                        result = GenericService.import_file(
+                            kb_id=kb_id,
+                            path=path,
+                            refresh_topics=False,
+                        )
+                        stats["files"] += result.get("files", 0)
+                        stats["nodes"] += result.get("nodes", 0)
+                        stats["processed_sources"].append(path)
+
+            except Exception as e:
+                logger.warning(f"[{task_id}] 处理项目失败 {item_type}/{item_id}: {e}")
+                stats["failed"] += 1
+
+            if (i + 1) % 5 == 0:
+                await self._update_heartbeat(task_id)
+
+        if params.get("refresh_topics", True):
+            self._update_kb_topics(kb_id, has_new_docs=stats["files"] > 0)
+
+        self.queue.complete_task(
+            task_id,
+            result={
+                "kb_id": kb_id,
+                "files": stats["files"],
+                "nodes": stats["nodes"],
+                "failed": stats["failed"],
+                "sources": stats["processed_sources"],
+            },
+        )
 
     # ==================== 其他任务类型 ====================
 
@@ -967,14 +1085,14 @@ class TaskExecutor:
     def pause_task(self, task_id: str) -> bool:
         """暂停任务"""
         if task_id in self._pause_events:
-            self._pause_events[task_id].set()
+            self._pause_events[task_id].clear()
             return True
         return False
 
     def resume_task(self, task_id: str) -> bool:
         """恢复任务"""
         if task_id in self._pause_events:
-            self._pause_events[task_id].clear()
+            self._pause_events[task_id].set()
             return True
         return False
 

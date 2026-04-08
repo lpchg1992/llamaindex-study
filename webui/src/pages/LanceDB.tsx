@@ -1,8 +1,9 @@
 import { useState } from 'react'
-import { useKBs, useLanceStats, useLanceDuplicates, useDocuments, useDocumentChunks, useDeleteDocument, useUpdateChunk, useReembedChunk } from '@/api/hooks'
+import { useKBs, useLanceStats, useLanceDuplicates, useDocuments, useDocumentChunks, useDeleteDocument, useUpdateChunk, useReembedChunk, useDeleteChunk, useChunkChildren } from '@/api/hooks'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import {
@@ -18,8 +19,123 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Database, FileText, AlertTriangle, Loader2, BarChart3, ChevronRight, Trash2, RefreshCw, Edit2, X, Check } from 'lucide-react'
+import { Database, FileText, AlertTriangle, Loader2, BarChart3, ChevronRight, Trash2, RefreshCw, Edit2, Check } from 'lucide-react'
+import { toast } from 'sonner'
 import type { DocumentInfo, ChunkInfo } from '@/types/api'
+
+export function LanceDBDialog({ open, onOpenChange, kbId }: { open: boolean; onOpenChange: (open: boolean) => void; kbId: string }) {
+  const { data: stats, isLoading: statsLoading } = useLanceStats(kbId)
+  const { data: duplicates, isLoading: duplicatesLoading } = useLanceDuplicates(kbId)
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-6xl w-[95vw] h-[90vh] flex flex-col overflow-hidden">
+        <DialogHeader className="shrink-0">
+          <DialogTitle className="flex items-center gap-2">
+            <Database className="h-5 w-5" />
+            LanceDB Management
+          </DialogTitle>
+        </DialogHeader>
+
+        <Tabs defaultValue="stats" className="flex-1 min-h-0 flex flex-col">
+          <TabsList className="grid w-full grid-cols-3 shrink-0">
+            <TabsTrigger value="stats">
+              <BarChart3 className="mr-2 h-4 w-4" />
+              Statistics
+            </TabsTrigger>
+            <TabsTrigger value="documents">
+              <FileText className="mr-2 h-4 w-4" />
+              Documents
+            </TabsTrigger>
+            <TabsTrigger value="duplicates">
+              <AlertTriangle className="mr-2 h-4 w-4" />
+              Duplicates
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="stats" className="mt-4 flex-1 overflow-auto">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Database className="h-5 w-5" />
+                  Table Statistics
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {statsLoading ? (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                  </div>
+                ) : stats ? (
+                  <div className="grid gap-4 grid-cols-3">
+                    <div className="p-4 border rounded-lg">
+                      <p className="text-sm text-muted-foreground">Total Rows</p>
+                      <p className="text-2xl font-bold">{stats.row_count.toLocaleString()}</p>
+                    </div>
+                    <div className="p-4 border rounded-lg">
+                      <p className="text-sm text-muted-foreground">Table Size</p>
+                      <p className="text-2xl font-bold">{stats.size_mb.toFixed(2)} MB</p>
+                    </div>
+                    <div className="p-4 border rounded-lg">
+                      <p className="text-sm text-muted-foreground">Knowledge Base</p>
+                      <p className="text-2xl font-bold font-mono">{stats.kb_id}</p>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-muted-foreground text-center py-4">No statistics available</p>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="documents" className="flex-1 min-h-0 overflow-hidden w-full">
+            <DocumentManagementTab kbId={kbId} />
+          </TabsContent>
+
+          <TabsContent value="duplicates" className="flex-1 min-h-0 overflow-auto">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <AlertTriangle className="h-5 w-5" />
+                  Duplicate Sources
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {duplicatesLoading ? (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                  </div>
+                ) : duplicates && duplicates.duplicates && duplicates.duplicates.length > 0 ? (
+                  <ScrollArea className="h-[400px]">
+                    <div className="space-y-3">
+                      {duplicates.duplicates.map((dup, index) => (
+                        <div key={index} className="p-3 border border-yellow-200 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg">
+                          <p className="font-medium">{dup.source}</p>
+                          <p className="text-sm text-muted-foreground mt-1">
+                            {dup.count} duplicate entries
+                          </p>
+                          <div className="flex flex-wrap gap-1 mt-2">
+                            {dup.doc_ids.map((id, i) => (
+                              <Badge key={i} variant="outline" className="text-xs font-mono">
+                                {id.slice(0, 8)}...
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </ScrollArea>
+                ) : (
+                  <p className="text-muted-foreground text-center py-4">No duplicates found</p>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+        </Tabs>
+      </DialogContent>
+    </Dialog>
+  )
+}
 
 function DocumentManagementTab({ kbId }: { kbId: string }) {
   const { data: documents, isLoading } = useDocuments(kbId)
@@ -27,10 +143,16 @@ function DocumentManagementTab({ kbId }: { kbId: string }) {
   const [expandedDoc, setExpandedDoc] = useState<string | null>(null)
   const [selectedDocForChunks, setSelectedDocForChunks] = useState<DocumentInfo | null>(null)
   const [editingChunk, setEditingChunk] = useState<ChunkInfo | null>(null)
+  const [deletingChunk, setDeletingChunk] = useState<ChunkInfo | null>(null)
   const [editText, setEditText] = useState('')
-  const { data: chunks, isLoading: chunksLoading } = useDocumentChunks(kbId, expandedDoc || '')
+  const [chunkPage, setChunkPage] = useState(1)
+  const [chunkPageSize] = useState(20)
+  const [chunkPageInput, setChunkPageInput] = useState('')
+  const { data: chunksData, isLoading: chunksLoading } = useDocumentChunks(kbId, expandedDoc || '', chunkPage, chunkPageSize)
+  const { data: childrenData, isLoading: childrenLoading } = useChunkChildren(kbId, deletingChunk?.id || '')
   const updateChunk = useUpdateChunk()
   const reembedChunk = useReembedChunk()
+  const deleteChunk = useDeleteChunk()
 
   const handleDelete = async (doc: DocumentInfo) => {
     if (confirm(`Delete document "${doc.source_file}" and all its chunks?`)) {
@@ -54,100 +176,103 @@ function DocumentManagementTab({ kbId }: { kbId: string }) {
     await reembedChunk.mutateAsync({ kbId, chunkId: chunk.id })
   }
 
+  const handleDeleteChunk = async () => {
+    if (deletingChunk) {
+      await deleteChunk.mutateAsync({ kbId, chunkId: deletingChunk.id, cascade: true })
+      toast.success(`Deleted chunk and ${childrenData?.count || 0} child chunks`)
+      setDeletingChunk(null)
+    }
+  }
+
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center py-8">
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      <div className="flex flex-col h-full w-full bg-card border rounded-lg">
+        <div className="flex-1 flex items-center justify-center">
+          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        </div>
       </div>
     )
   }
 
   if (!documents || documents.length === 0) {
     return (
-      <Card>
-        <CardContent className="flex items-center justify-center h-48">
-          <p className="text-muted-foreground">No documents found. Run migration or ingest new documents.</p>
-        </CardContent>
-      </Card>
+      <div className="flex flex-col h-full w-full bg-card border rounded-lg">
+        <div className="flex-1 flex items-center justify-center">
+          <p className="text-muted-foreground text-center">No documents found. Run migration or ingest new documents.</p>
+        </div>
+      </div>
     )
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center justify-between">
-          <span className="flex items-center gap-2">
-            <FileText className="h-5 w-5" />
-            Documents ({documents.length})
-          </span>
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        <ScrollArea className="h-[500px]">
-          <div className="space-y-2">
+    <div className="flex flex-col h-full w-full bg-card border rounded-lg overflow-hidden">
+      <div className="flex items-center justify-between p-3 border-b shrink-0">
+        <div className="flex items-center gap-2">
+          <FileText className="h-4 w-4 text-muted-foreground" />
+          <h3 className="font-medium text-sm">Documents ({documents.length})</h3>
+        </div>
+      </div>
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        <div className="space-y-3 p-4">
             {documents.map((doc) => (
-              <div key={doc.id} className="border rounded-lg overflow-hidden">
+              <div key={doc.id} className="border rounded-lg overflow-hidden max-w-full">
                 <div
-                  className="flex items-center justify-between p-3 hover:bg-muted/50 cursor-pointer"
+                  className="flex items-center p-3 hover:bg-muted/50 cursor-pointer gap-3 max-w-full"
                   onClick={() => setExpandedDoc(expandedDoc === doc.id ? null : doc.id)}
                 >
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <FileText className="h-4 w-4 text-muted-foreground" />
-                      <p className="font-medium truncate">{doc.source_file}</p>
-                    </div>
-                    <div className="flex items-center gap-2 mt-1">
-                      <Badge variant="secondary">{doc.chunk_count} chunks</Badge>
-                      <Badge variant="outline">{doc.total_chars.toLocaleString()} chars</Badge>
-                    </div>
-                    <p className="text-xs text-muted-foreground mt-1 truncate">
-                      {doc.source_path}
-                    </p>
+                  <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <div className="flex-1 min-w-0 max-w-full overflow-hidden">
+                    <p className="font-medium text-sm truncate">{doc.source_file}</p>
+                    <p className="text-xs text-muted-foreground truncate">{doc.source_path}</p>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <code className="text-xs text-muted-foreground font-mono">
-                      {doc.id.slice(0, 8)}...
-                    </code>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <Badge variant="secondary" className="text-xs whitespace-nowrap">{doc.chunk_count} chunks</Badge>
+                    <Badge variant="outline" className="text-xs whitespace-nowrap">{doc.total_chars.toLocaleString()} chars</Badge>
+                    <code className="text-xs text-muted-foreground font-mono whitespace-nowrap">{doc.id.slice(0, 8)}...</code>
                     <Button
                       variant="ghost"
                       size="icon"
+                      className="h-6 w-6 shrink-0"
                       onClick={(e) => {
                         e.stopPropagation()
                         handleDelete(doc)
                       }}
                     >
-                      <Trash2 className="h-4 w-4 text-destructive" />
+                      <Trash2 className="h-3 w-3 text-destructive" />
                     </Button>
-                    <ChevronRight className={`h-4 w-4 transition-transform ${expandedDoc === doc.id ? 'rotate-90' : ''}`} />
+                    <ChevronRight className={`h-4 w-4 transition-transform shrink-0 ${expandedDoc === doc.id ? 'rotate-90' : ''}`} />
                   </div>
                 </div>
 
                 {expandedDoc === doc.id && (
-                  <div className="border-t bg-muted/30">
-                    <div className="p-3">
-                      <div className="flex items-center justify-between mb-2">
-                        <h4 className="font-medium text-sm">Chunks</h4>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setSelectedDocForChunks(doc)}
-                        >
-                          View All Chunks
-                        </Button>
+                  <div className="border-t bg-muted/30 p-3 max-w-full overflow-hidden">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3 max-w-full overflow-hidden">
+                      <div className="min-w-0 max-w-full overflow-hidden">
+                        <p className="text-xs text-muted-foreground">ID</p>
+                        <p className="text-xs font-mono truncate">{doc.id}</p>
                       </div>
-                      <div className="text-xs text-muted-foreground space-y-1">
-                        <p>ID: {doc.id}</p>
-                        <p>File Hash: {doc.file_hash.slice(0, 16)}...</p>
-                        <p>Created: {new Date(doc.created_at * 1000).toLocaleString()}</p>
+                      <div className="min-w-0 max-w-full overflow-hidden">
+                        <p className="text-xs text-muted-foreground">File Hash</p>
+                        <p className="text-xs font-mono truncate">{doc.file_hash}</p>
+                      </div>
+                      <div className="min-w-0 max-w-full overflow-hidden">
+                        <p className="text-xs text-muted-foreground">Created</p>
+                        <p className="text-xs truncate">{new Date(doc.created_at * 1000).toLocaleString()}</p>
                       </div>
                     </div>
+                    <Button
+                      variant="default"
+                      size="sm"
+                      onClick={() => setSelectedDocForChunks(doc)}
+                    >
+                      View All Chunks
+                    </Button>
                   </div>
                 )}
               </div>
             ))}
           </div>
-        </ScrollArea>
-      </CardContent>
+      </div>
 
       <Dialog open={!!editingChunk} onOpenChange={() => setEditingChunk(null)}>
         <DialogContent className="max-w-2xl">
@@ -195,33 +320,33 @@ function DocumentManagementTab({ kbId }: { kbId: string }) {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={!!selectedDocForChunks} onOpenChange={() => setSelectedDocForChunks(null)}>
-        <DialogContent className="max-w-4xl max-h-[80vh]">
-          <DialogHeader>
-            <DialogTitle>Chunks: {selectedDocForChunks?.source_file}</DialogTitle>
+      <Dialog open={!!selectedDocForChunks} onOpenChange={() => { setSelectedDocForChunks(null); setChunkPage(1) }}>
+        <DialogContent className="max-w-6xl w-[95vw] h-[90vh] flex flex-col">
+          <DialogHeader className="shrink-0">
+            <DialogTitle className="flex items-center gap-2">
+              <FileText className="h-5 w-5" />
+              Chunks: {selectedDocForChunks?.source_file}
+            </DialogTitle>
+            <p className="text-sm text-muted-foreground">
+              {chunksLoading ? 'Loading...' : (
+                chunksData ? `Page ${chunksData.page} of ${chunksData.total_pages} - ${chunksData.total} chunks total` : 'No chunks'
+              )}
+            </p>
           </DialogHeader>
-          <div className="flex items-center justify-between p-2 bg-muted rounded">
-            <span className="text-sm text-muted-foreground">
-              {chunksLoading ? 'Loading...' : `${chunks?.length || 0} chunks`}
-            </span>
-            <Button variant="ghost" size="icon" onClick={() => setSelectedDocForChunks(null)}>
-              <X className="h-4 w-4" />
-            </Button>
-          </div>
-          <ScrollArea className="h-[500px]">
+          <ScrollArea className="flex-1 min-h-0">
             {chunksLoading ? (
               <div className="flex items-center justify-center py-8">
                 <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
               </div>
             ) : (
-              <div className="space-y-2">
-                {chunks?.map((chunk) => (
-                  <div key={chunk.id} className="p-3 border rounded-lg">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <Badge variant="outline">{chunk.chunk_index}</Badge>
-                        <Badge variant="secondary">L{chunk.hierarchy_level}</Badge>
-                        <code className="text-xs text-muted-foreground">{chunk.id.slice(0, 12)}...</code>
+              <div className="space-y-3 p-4">
+                {chunksData?.chunks?.map((chunk) => (
+                  <div key={chunk.id} className="p-4 border rounded-lg">
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-3">
+                        <Badge variant="outline" className="text-sm">{chunk.chunk_index}</Badge>
+                        <Badge variant="secondary" className="text-sm">L{chunk.hierarchy_level}</Badge>
+                        <code className="text-xs text-muted-foreground font-mono">{chunk.id}</code>
                       </div>
                       <div className="flex items-center gap-1">
                         <Button
@@ -229,7 +354,7 @@ function DocumentManagementTab({ kbId }: { kbId: string }) {
                           size="icon"
                           onClick={() => handleEditStart(chunk)}
                         >
-                          <Edit2 className="h-3 w-3" />
+                          <Edit2 className="h-4 w-4" />
                         </Button>
                         <Button
                           variant="ghost"
@@ -237,14 +362,21 @@ function DocumentManagementTab({ kbId }: { kbId: string }) {
                           onClick={() => handleReembed(chunk)}
                           disabled={reembedChunk.isPending}
                         >
-                          <RefreshCw className={`h-3 w-3 ${reembedChunk.isPending ? 'animate-spin' : ''}`} />
+                          <RefreshCw className={`h-4 w-4 ${reembedChunk.isPending ? 'animate-spin' : ''}`} />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => setDeletingChunk(chunk)}
+                        >
+                          <Trash2 className="h-4 w-4 text-destructive" />
                         </Button>
                       </div>
                     </div>
-                    <p className="text-sm mt-2 line-clamp-3">{chunk.text}</p>
+                    <p className="text-sm whitespace-pre-wrap break-words">{chunk.text}</p>
                     {chunk.parent_chunk_id && (
-                      <p className="text-xs text-muted-foreground mt-1">
-                        Parent: <code>{chunk.parent_chunk_id.slice(0, 12)}...</code>
+                      <p className="text-xs text-muted-foreground mt-2">
+                        Parent: <code className="font-mono">{chunk.parent_chunk_id}</code>
                       </p>
                     )}
                   </div>
@@ -252,9 +384,171 @@ function DocumentManagementTab({ kbId }: { kbId: string }) {
               </div>
             )}
           </ScrollArea>
+          {chunksData && chunksData.total_pages > 1 && (
+            <div className="flex items-center justify-center gap-1 py-3 border-t shrink-0">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setChunkPage(1)}
+                disabled={chunkPage === 1 || chunksLoading}
+                className="w-12"
+              >
+                1
+              </Button>
+              {chunksData.total_pages > 7 && chunkPage > 4 && (
+                <span className="px-1 text-muted-foreground">...</span>
+              )}
+              {Array.from({
+                length: Math.min(5, chunksData.total_pages),
+              }, (_, i) => {
+                let pageNum: number
+                if (chunksData.total_pages <= 7) {
+                  pageNum = i + 2
+                } else if (chunkPage <= 4) {
+                  pageNum = i + 2
+                } else if (chunkPage >= chunksData.total_pages - 3) {
+                  pageNum = chunksData.total_pages - 5 + i
+                } else {
+                  pageNum = chunkPage - 2 + i
+                }
+                if (pageNum < 2 || pageNum > chunksData.total_pages - 1) return null
+                return (
+                  <Button
+                    key={pageNum}
+                    variant={chunkPage === pageNum ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => setChunkPage(pageNum)}
+                    disabled={chunksLoading}
+                    className="w-12"
+                  >
+                    {pageNum}
+                  </Button>
+                )
+              })}
+              {chunksData.total_pages > 7 && chunkPage < chunksData.total_pages - 3 && (
+                <span className="px-1 text-muted-foreground">...</span>
+              )}
+              {chunksData.total_pages > 1 && (
+                <Button
+                  variant={chunkPage === chunksData.total_pages ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setChunkPage(chunksData.total_pages)}
+                  disabled={chunkPage === chunksData.total_pages || chunksLoading}
+                  className="w-12"
+                >
+                  {chunksData.total_pages}
+                </Button>
+              )}
+              <div className="flex items-center gap-1 ml-2 border-l pl-3">
+                <Input
+                  type="number"
+                  min={1}
+                  max={chunksData.total_pages}
+                  placeholder="页码"
+                  value={chunkPageInput}
+                  onChange={(e) => setChunkPageInput(e.target.value)}
+                  className="w-16 h-8 text-sm"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && chunkPageInput) {
+                      const page = parseInt(chunkPageInput)
+                      if (page >= 1 && page <= chunksData.total_pages) {
+                        setChunkPage(page)
+                        setChunkPageInput('')
+                      }
+                    }
+                  }}
+                />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    if (chunkPageInput) {
+                      const page = parseInt(chunkPageInput)
+                      if (page >= 1 && page <= chunksData.total_pages) {
+                        setChunkPage(page)
+                        setChunkPageInput('')
+                      }
+                    }
+                  }}
+                  disabled={!chunkPageInput || chunksLoading}
+                  className="h-8 px-3"
+                >
+                  跳转
+                </Button>
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
-    </Card>
+
+      <Dialog open={!!deletingChunk} onOpenChange={() => setDeletingChunk(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-destructive" />
+              删除 Chunk
+            </DialogTitle>
+          </DialogHeader>
+          {deletingChunk && (
+            <div className="space-y-4">
+              <div className="p-3 bg-muted rounded-lg">
+                <p className="text-sm font-medium mb-1">Chunk ID:</p>
+                <code className="text-xs font-mono break-all">{deletingChunk.id}</code>
+                <p className="text-sm mt-2 line-clamp-2 text-muted-foreground">{deletingChunk.text}</p>
+              </div>
+              {childrenLoading ? (
+                <div className="flex items-center gap-2">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <span className="text-sm text-muted-foreground">检查子节点...</span>
+                </div>
+              ) : childrenData && childrenData.count > 0 ? (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-yellow-600">
+                    <AlertTriangle className="h-4 w-4" />
+                    <span className="text-sm font-medium">此 chunk 有 {childrenData.count} 个子 chunk</span>
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    {childrenData.children.slice(0, 5).map((child) => (
+                      <Badge key={child.id} variant="outline" className="text-xs">
+                        L{child.hierarchy_level} [{child.chunk_index}]
+                      </Badge>
+                    ))}
+                    {childrenData.count > 5 && (
+                      <Badge variant="outline" className="text-xs">
+                        +{childrenData.count - 5} more
+                      </Badge>
+                    )}
+                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    选择"级联删除"将同时删除所有子 chunk。
+                  </p>
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">此 chunk 没有子节点。</p>
+              )}
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setDeletingChunk(null)}>
+                  取消
+                </Button>
+                <Button
+                  variant="destructive"
+                  onClick={handleDeleteChunk}
+                  disabled={deleteChunk.isPending}
+                >
+                  {deleteChunk.isPending ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : childrenData && childrenData.count > 0 ? (
+                    '级联删除'
+                  ) : (
+                    '删除'
+                  )}
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+    </div>
   )
 }
 

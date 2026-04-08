@@ -18,8 +18,12 @@ import type {
   EvaluateResponse,
   TopicInfo,
   ZoteroCollectionsResponse,
+  ZoteroCollectionStructure,
+  ZoteroCollectionWithItems,
   ObsidianVaultsResponse,
   ObsidianVault,
+  ObsidianVaultStructure,
+  ObsidianVaultTree,
   LanceTableStats,
   LanceDocSummary,
   LanceNode,
@@ -41,6 +45,8 @@ import type {
   RestartResponse,
   DocumentInfo,
   ChunkInfo,
+  SelectiveImportRequest,
+  FilesImportRequest,
 } from '@/types/api'
 
 const API_BASE = ''
@@ -179,6 +185,30 @@ export function useIngestFile() {
     mutationFn: async ({ kbId, req }) => {
       const { data } = await apiClient.post<IngestResponse>(
         `${API_BASE}/kbs/${kbId}/ingest`,
+        req
+      )
+      return data
+    },
+  })
+}
+
+export function useIngestSelective() {
+  return useMutation<IngestResponse, Error, { kbId: string; req: SelectiveImportRequest }>({
+    mutationFn: async ({ kbId, req }) => {
+      const { data } = await apiClient.post<IngestResponse>(
+        `${API_BASE}/kbs/${kbId}/ingest/selective`,
+        req
+      )
+      return data
+    },
+  })
+}
+
+export function useIngestFiles() {
+  return useMutation<IngestResponse, Error, { kbId: string; req: FilesImportRequest }>({
+    mutationFn: async ({ kbId, req }) => {
+      const { data } = await apiClient.post<IngestResponse>(
+        `${API_BASE}/kbs/${kbId}/ingest/files`,
         req
       )
       return data
@@ -428,6 +458,27 @@ export function useSearchZoteroCollections() {
   })
 }
 
+export function useZoteroCollectionStructure(collectionId: string) {
+  return useQuery<ZoteroCollectionStructure, Error>({
+    queryKey: ['zotero-collection-structure', collectionId],
+    queryFn: async () => {
+      const { data } = await apiClient.get(`${API_BASE}/zotero/collections/${collectionId}/structure`)
+      return data
+    },
+    enabled: !!collectionId,
+  })
+}
+
+export function useAllZoteroCollectionsWithItems() {
+  return useQuery<{ collections: ZoteroCollectionWithItems[] }, Error>({
+    queryKey: ['zotero-collections-with-items'],
+    queryFn: async () => {
+      const { data } = await apiClient.get(`${API_BASE}/zotero/collections/with-items`)
+      return data
+    },
+  })
+}
+
 export function useObsidianVaults() {
   return useQuery<ObsidianVaultsResponse, Error>({
     queryKey: ['obsidian-vaults'],
@@ -443,6 +494,29 @@ export function useObsidianVault(vaultName: string) {
     queryKey: ['obsidian-vault', vaultName],
     queryFn: async () => {
       const { data } = await apiClient.get(`${API_BASE}/obsidian/vaults/${vaultName}`)
+      return data
+    },
+    enabled: !!vaultName,
+  })
+}
+
+export function useObsidianVaultStructure(vaultName: string, folderPath?: string) {
+  return useQuery<ObsidianVaultStructure, Error>({
+    queryKey: ['obsidian-vault-structure', vaultName, folderPath],
+    queryFn: async () => {
+      const params = folderPath ? { folder_path: folderPath } : {}
+      const { data } = await apiClient.get(`${API_BASE}/obsidian/vaults/${vaultName}/structure`, { params })
+      return data
+    },
+    enabled: !!vaultName,
+  })
+}
+
+export function useObsidianVaultTree(vaultName: string) {
+  return useQuery<ObsidianVaultTree, Error>({
+    queryKey: ['obsidian-vault-tree', vaultName],
+    queryFn: async () => {
+      const { data } = await apiClient.get(`${API_BASE}/obsidian/vaults/${vaultName}/tree`)
       return data
     },
     enabled: !!vaultName,
@@ -815,11 +889,22 @@ export function useDocument(kbId: string, docId: string) {
   })
 }
 
-export function useDocumentChunks(kbId: string, docId: string) {
-  return useQuery<ChunkInfo[]>({
-    queryKey: ['document-chunks', kbId, docId],
+interface PaginatedChunksResponse {
+  chunks: ChunkInfo[]
+  total: number
+  page: number
+  page_size: number
+  total_pages: number
+}
+
+export function useDocumentChunks(kbId: string, docId: string, page: number = 1, pageSize: number = 20) {
+  return useQuery<PaginatedChunksResponse>({
+    queryKey: ['document-chunks', kbId, docId, page, pageSize],
     queryFn: async () => {
-      const { data } = await apiClient.get<ChunkInfo[]>(`${API_BASE}/kbs/${kbId}/documents/${docId}/chunks`)
+      const { data } = await apiClient.get<PaginatedChunksResponse>(
+        `${API_BASE}/kbs/${kbId}/documents/${docId}/chunks`,
+        { params: { page, page_size: pageSize } }
+      )
       return data
     },
     enabled: !!kbId && !!docId,

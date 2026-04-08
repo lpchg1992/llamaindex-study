@@ -4,6 +4,7 @@ export interface KBInfo {
   description: string
   status: string
   row_count: number | null
+  chunk_count?: number
   persist_dir?: string
   chunk_strategy?: string
 }
@@ -117,6 +118,25 @@ export interface ZoteroIngestRequest {
   refresh_topics?: boolean
 }
 
+export interface SelectiveImportItem {
+  type: string
+  id?: string
+  path?: string
+}
+
+export interface SelectiveImportRequest {
+  source_type: string
+  items: SelectiveImportItem[]
+  async_mode?: boolean
+  refresh_topics?: boolean
+}
+
+export interface FilesImportRequest {
+  paths: string[]
+  async_mode?: boolean
+  refresh_topics?: boolean
+}
+
 export interface ModelInfo {
   id: string
   vendor_id: string
@@ -166,6 +186,37 @@ export interface ZoteroCollectionsResponse {
   collections: ZoteroCollection[]
 }
 
+export interface ZoteroCollectionStructure {
+  collection_id: string
+  collection_name: string
+  parent_id: number | null
+  sub_collections: Array<{
+    collection_id: number
+    name: string
+  }>
+  items: Array<{
+    item_id: number
+    title: string
+    creators: string[]
+    has_file: boolean
+    has_annotations: boolean
+    has_notes: boolean
+  }>
+  item_count: number
+}
+
+export interface ZoteroCollectionWithItems {
+  collection_id: string
+  collection_name: string
+  parent_id: number | null
+  items: Array<{
+    item_id: number
+    title: string
+    has_file: boolean
+  }>
+  item_count: number
+}
+
 // Obsidian
 export interface ObsidianVault {
   name: string
@@ -176,6 +227,29 @@ export interface ObsidianVault {
 
 export interface ObsidianVaultsResponse {
   vaults: ObsidianVault[]
+}
+
+export interface ObsidianVaultStructure {
+  vault_name: string
+  vault_path: string
+  folder_path: string
+  items: ObsidianVaultItem[]
+}
+
+export interface ObsidianVaultItem {
+  type: 'folder' | 'file'
+  name: string
+  path: string
+  md_count?: number
+  size?: number
+  has_children?: boolean
+  children?: ObsidianVaultItem[]
+}
+
+export interface ObsidianVaultTree {
+  vault_name: string
+  vault_path: string
+  items: ObsidianVaultItem[]
 }
 
 // LanceDB
