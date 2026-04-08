@@ -350,7 +350,7 @@ class ModelRegistry:
         settings = get_settings()
         defaults = [
             {
-                "id": settings.siliconflow_model,
+                "id": f"siliconflow/{settings.siliconflow_model.split('/')[-1]}",
                 "vendor_id": "siliconflow",
                 "name": settings.siliconflow_model.split("/")[-1],
                 "type": "llm",
@@ -359,7 +359,7 @@ class ModelRegistry:
                 "config": {},
             },
             {
-                "id": settings.ollama_llm_model,
+                "id": f"ollama/{settings.ollama_llm_model}",
                 "vendor_id": "ollama",
                 "name": settings.ollama_llm_model,
                 "type": "llm",
@@ -368,7 +368,7 @@ class ModelRegistry:
                 "config": {},
             },
             {
-                "id": settings.rerank_model,
+                "id": f"siliconflow/{settings.rerank_model.split('/')[-1]}",
                 "vendor_id": "siliconflow",
                 "name": settings.rerank_model.split("/")[-1],
                 "type": "reranker",
