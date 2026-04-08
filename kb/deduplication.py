@@ -194,14 +194,15 @@ class DeduplicationManager:
         except Exception:
             return None
 
-    def _extract_parent_chunk_id(self, node: Any) -> Optional[str]:
+    @staticmethod
+    def _extract_parent_chunk_id(node: Any) -> Optional[str]:
         """Extract parent chunk ID from node relationships"""
         try:
             if hasattr(node, "metadata") and node.metadata:
                 metadata = node.metadata
                 if isinstance(metadata, str):
                     metadata = json.loads(metadata)
-                node_data = self._parse_node_content(metadata)
+                node_data = DeduplicationManager._parse_node_content(metadata)
                 if not node_data:
                     return None
                 relationships = node_data.get("relationships", {})
@@ -214,14 +215,15 @@ class DeduplicationManager:
         except Exception:
             return None
 
-    def _extract_hierarchy_level(self, node: Any) -> int:
+    @staticmethod
+    def _extract_hierarchy_level(node: Any) -> int:
         """Extract hierarchy level from node metadata"""
         try:
             if hasattr(node, "metadata") and node.metadata:
                 metadata = node.metadata
                 if isinstance(metadata, str):
                     metadata = json.loads(metadata)
-                node_data = self._parse_node_content(metadata)
+                node_data = DeduplicationManager._parse_node_content(metadata)
                 if not node_data:
                     return 0
                 relationships = node_data.get("relationships", {})
@@ -254,7 +256,15 @@ class DeduplicationManager:
         Returns:
             doc_id if created, None if failed
         """
-        if not self.use_sqlite or not self._document_db or not self._chunk_db:
+        if not self.use_sqlite:
+            logger.debug(
+                f"[{self.kb_id}] _create_document_chunks: use_sqlite=False, skipping"
+            )
+            return None
+        if not self._document_db or not self._chunk_db:
+            logger.warning(
+                f"[{self.kb_id}] _create_document_chunks: DB not initialized, skipping (call _load() first)"
+            )
             return None
 
         try:

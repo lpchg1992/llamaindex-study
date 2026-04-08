@@ -54,10 +54,9 @@ class GenericImporter:
         self,
         config: Optional[FileImportConfig] = None,
         processor_config: Optional[DocumentProcessorConfig] = None,
+        kb_id: Optional[str] = None,
+        persist_dir: Optional[Path] = None,
     ):
-        """
-        初始化通用导入器
-        """
         self.config = config or FileImportConfig()
         self.processor = DocumentProcessor(
             config=processor_config
@@ -67,6 +66,30 @@ class GenericImporter:
                 batch_size=self.config.batch_size,
             )
         )
+        self.kb_id = kb_id
+        self.persist_dir = persist_dir
+        self._dedup_manager = None
+
+    def _init_dedup_manager(self, vector_store=None):
+        if self._dedup_manager or not self.kb_id or not self.persist_dir:
+            return
+        from kb.deduplication import DeduplicationManager
+
+        uri = str(self.persist_dir)
+        if vector_store is not None:
+            try:
+                uri = vector_store._get_lance_vector_store().uri
+            except Exception:
+                pass
+        self._dedup_manager = DeduplicationManager(
+            kb_id=self.kb_id,
+            persist_dir=self.persist_dir,
+            uri=uri,
+            table_name=self.kb_id,
+        )
+
+    def set_dedup_manager(self, manager):
+        self._dedup_manager = manager
 
     def collect_files(
         self,
@@ -185,24 +208,12 @@ class GenericImporter:
         progress: ProcessingProgress = None,
         on_progress: Optional[Callable[[int, int, str], None]] = None,
     ) -> dict:
-        """
-        导入文件列表
-
-        Args:
-            file_paths: 文件路径列表
-            vector_store: 向量存储
-            embed_model: embedding 模型
-            progress: 进度记录
-            on_progress: 进度回调
-
-        Returns:
-            导入统计
-        """
         if progress:
             progress.total_items = len(file_paths)
             if not progress.started_at:
                 progress.started_at = time.time()
 
+        self._init_dedup_manager(vector_store)
         self.processor.set_embed_model(embed_model)
         node_parser = get_node_parser(
             chunk_size=self.processor.config.chunk_size,
@@ -257,18 +268,35 @@ class GenericImporter:
                 docs = self.processor.process_file(str(file_path), metadata=metadata)
 
                 if docs:
+                    import hashlib
+
+                    all_nodes = []
+                    doc_id_hash = hashlib.md5(str(file_path).encode()).hexdigest()[:16]
+
                     for doc in docs:
-                        import hashlib
-
-                        doc_id_hash = hashlib.md5(str(file_path).encode()).hexdigest()[
-                            :16
-                        ]
                         doc.id_ = f"doc_{doc_id_hash}"
-
                         nodes = node_parser.get_nodes_from_documents([doc])
                         saved = self.processor.save_nodes(vector_store, nodes, progress)
                         stats["nodes"] += saved
                         stats["files"] += 1
+                        all_nodes.extend(nodes)
+
+                    # 更新去重状态并创建 document/chunk 记录
+                    if self._dedup_manager and all_nodes:
+                        try:
+                            content = file_path.read_text(
+                                encoding="utf-8", errors="ignore"
+                            )
+                            doc_id = f"doc_{doc_id_hash}"
+                            self._dedup_manager.mark_processed(
+                                file_path,
+                                content,
+                                doc_id,
+                                chunk_count=len(all_nodes),
+                                nodes=all_nodes,
+                            )
+                        except Exception as e:
+                            print(f"   ⚠️  更新去重状态失败: {e}")
 
                     if progress:
                         progress.processed_items.append(path_str)
@@ -280,6 +308,10 @@ class GenericImporter:
                 stats["failed"] += 1
                 if progress:
                     progress.failed_items.append(path_str)
+
+        # 保存去重状态
+        if self._dedup_manager:
+            self._dedup_manager._save()
 
         return stats
 

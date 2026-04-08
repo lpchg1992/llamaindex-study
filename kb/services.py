@@ -420,7 +420,8 @@ class GenericService:
             raise ValueError(f"文件不存在: {path}")
 
         vs = VectorStoreService.get_vector_store(kb_id)
-        importer = GenericImporter()
+        persist_dir = VectorStoreService.get_persist_dir(kb_id)
+        importer = GenericImporter(kb_id=kb_id, persist_dir=persist_dir)
 
         if progress_callback:
             progress_callback(f"开始导入: {file_path.name}")

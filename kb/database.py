@@ -1459,7 +1459,7 @@ class DocumentDB:
         file_size: int = 0,
         mime_type: str = "",
         metadata: Dict[str, Any] = None,
-        doc_id: str = None,
+        doc_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         now = time.time()
         if doc_id is None:

@@ -1958,28 +1958,22 @@ def get_document(kb_id: str, doc_id: str):
 
 @app.delete("/kbs/{kb_id}/documents/{doc_id}")
 def delete_document(kb_id: str, doc_id: str):
-    """删除文档及其所有分块"""
-    from kb.database import init_document_db, init_chunk_db
-    from kb.lance_crud import LanceCRUDService
+    """删除文档及其所有分块（级联删除 LanceDB 和 Dedup）"""
+    from kb.document_chunk_service import get_document_chunk_service
+    from kb.registry import registry
 
-    doc_db = init_document_db()
-    chunk_db = init_chunk_db()
+    kb = registry.get(kb_id)
+    persist_dir = kb.persist_dir if kb else None
 
-    doc = doc_db.get(doc_id)
-    if not doc:
+    service = get_document_chunk_service(kb_id=kb_id, persist_dir=persist_dir)
+    result = service.delete_document_cascade(
+        doc_id, delete_lance=True, delete_dedup=True
+    )
+
+    if result.get("documents", 0) == 0:
         raise HTTPException(status_code=404, detail=f"文档 {doc_id} 不存在")
-    if doc["kb_id"] != kb_id:
-        raise HTTPException(status_code=404, detail=f"文档不属于知识库 {kb_id}")
 
-    chunk_ids = [c["id"] for c in chunk_db.get_by_doc(doc_id)]
-
-    chunk_db.delete_by_doc(doc_id)
-    doc_db.delete(doc_id)
-
-    if chunk_ids:
-        LanceCRUDService.delete_by_chunk_ids(kb_id, chunk_ids)
-
-    return {"status": "deleted", "doc_id": doc_id, "chunks_deleted": len(chunk_ids)}
+    return {"status": "deleted", "doc_id": doc_id, "result": result}
 
 
 @app.get("/kbs/{kb_id}/documents/{doc_id}/chunks", response_model=List[ChunkResponse])
