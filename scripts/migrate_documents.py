@@ -38,35 +38,60 @@ from llamaindex_study.logger import get_logger
 logger = get_logger(__name__)
 
 
-def parse_node_content(metadata: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Parse _node_content from metadata"""
+def parse_node_content(metadata: Any) -> Optional[Dict[str, Any]]:
     try:
         if isinstance(metadata, str):
-            metadata = json.loads(metadata)
+            try:
+                metadata = json.loads(metadata)
+            except Exception:
+                return None
+        if not isinstance(metadata, dict):
+            return None
         node_content = metadata.get("_node_content", "")
         if node_content:
-            return json.loads(node_content)
+            try:
+                parsed = json.loads(node_content)
+                return parsed if isinstance(parsed, dict) else None
+            except Exception:
+                return None
         return None
     except Exception:
         return None
 
 
-def extract_source_file(metadata: Dict[str, Any]) -> Optional[str]:
-    """Extract source file from node relationships"""
+def extract_base_doc_id(lance_doc_id: str) -> str:
+    if lance_doc_id.startswith("zotero_"):
+        parts = lance_doc_id.split("_", 2)
+        if len(parts) >= 2 and parts[1].isdigit():
+            return f"zotero_{parts[1]}"
+    return lance_doc_id
+
+
+def extract_doc_info_from_metadata(metadata: Any) -> Dict[str, Any]:
+    if not isinstance(metadata, dict):
+        return {"source_file": None, "source_path": None, "file_hash": ""}
     node_data = parse_node_content(metadata)
+    result = {"source_file": None, "source_path": None, "file_hash": ""}
     if not node_data:
-        return None
+        return result
+    if not isinstance(node_data, dict):
+        return result
     relationships = node_data.get("relationships", {})
+    if not isinstance(relationships, dict):
+        return result
     for key, rel in relationships.items():
-        if key.isdigit():
-            file_path = rel.get("metadata", {}).get("file_path")
-            if file_path:
-                return Path(file_path).name
-    return None
+        if isinstance(rel, dict) and key.isdigit():
+            rel_meta = rel.get("metadata", {})
+            if isinstance(rel_meta, dict):
+                if not result["source_path"] and rel_meta.get("file_path"):
+                    result["source_path"] = rel_meta["file_path"]
+                    result["source_file"] = Path(rel_meta["file_path"]).name
+                if not result["file_hash"] and rel_meta.get("file_hash"):
+                    result["file_hash"] = rel_meta["file_hash"]
+    return result
 
 
 def extract_parent_id(metadata: Dict[str, Any]) -> Optional[str]:
-    """Extract parent chunk ID from node relationships"""
     node_data = parse_node_content(metadata)
     if not node_data:
         return None
@@ -79,15 +104,16 @@ def extract_parent_id(metadata: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def extract_hierarchy_level(metadata: Dict[str, Any]) -> int:
-    """Extract hierarchy level from metadata"""
+def extract_hierarchy_level(metadata: Any) -> int:
     try:
-        if isinstance(metadata, str):
-            metadata = json.loads(metadata)
+        if not isinstance(metadata, dict):
+            return 0
         node_data = parse_node_content(metadata)
-        if not node_data:
+        if not node_data or not isinstance(node_data, dict):
             return 0
         relationships = node_data.get("relationships", {})
+        if not isinstance(relationships, dict):
+            return 0
         if "1" in relationships:
             return 0
         if "2" in relationships:
@@ -105,42 +131,6 @@ def migrate_kb(kb_id: str, dry_run: bool = False) -> Dict[str, int]:
 
     doc_db = init_document_db()
     chunk_db = init_chunk_db()
-    dedup_db = init_dedup_db()
-
-    dedup_records = dedup_db.get_records(kb_id)
-    logger.info(f"找到 {len(dedup_records)} 条 dedup 记录")
-
-    if not dedup_records:
-        logger.warning(f"知识库 {kb_id} 没有 dedup 记录")
-        return {"documents": 0, "chunks": 0}
-
-    unique_docs: Dict[str, Dict[str, Any]] = {}
-    for record in dedup_records:
-        doc_id = record["doc_id"]
-        if doc_id not in unique_docs:
-            unique_docs[doc_id] = {
-                "kb_id": kb_id,
-                "source_file": Path(record["file_path"]).name,
-                "source_path": record["file_path"],
-                "file_hash": record["hash"],
-                "doc_id": doc_id,
-            }
-
-    logger.info(f"发现 {len(unique_docs)} 个唯一文档")
-
-    docs_created = 0
-    chunks_created = 0
-
-    if not dry_run:
-        for doc_id, doc_info in unique_docs.items():
-            try:
-                doc = doc_db.create(**doc_info)
-                logger.debug(f"创建文档: {doc_id} -> {doc['id']}")
-                docs_created += 1
-            except Exception as e:
-                logger.error(f"创建文档失败 {doc_id}: {e}")
-
-        logger.info(f"已创建 {docs_created} 个文档记录")
 
     try:
         import lancedb
@@ -151,74 +141,129 @@ def migrate_kb(kb_id: str, dry_run: bool = False) -> Dict[str, int]:
 
         if kb_id not in table_names:
             logger.warning(f"知识库 {kb_id} 没有 LanceDB 表")
-            return {"documents": docs_created, "chunks": 0}
+            return {"documents": 0, "chunks": 0}
 
         table = db.open_table(kb_id)
         total_rows = table.count_rows()
         logger.info(f"LanceDB 表共有 {total_rows} 行")
 
+        unique_doc_infos: Dict[str, Dict[str, Any]] = {}
         batch_size = 5000
         offset = 0
-        chunk_id_map: Dict[str, str] = {}
+        chunks_created = 0
+        doc_chunk_counts: Dict[str, int] = {}
 
         while offset < total_rows:
             batch = table.to_arrow().slice(offset, batch_size).to_pandas()
 
             for _, row in batch.iterrows():
                 try:
+                    lance_doc_id = str(row.get("doc_id", ""))
+                    base_doc_id = extract_base_doc_id(lance_doc_id)
+
                     metadata = row.get("metadata", {})
                     if not isinstance(metadata, dict):
                         metadata = {}
 
-                    source_file = extract_source_file(metadata)
-                    parent_chunk_id = extract_parent_id(metadata)
+                    if base_doc_id not in unique_doc_infos:
+                        doc_info = extract_doc_info_from_metadata(metadata)
+                        unique_doc_infos[base_doc_id] = {
+                            "kb_id": kb_id,
+                            "source_file": doc_info["source_file"]
+                            or f"{base_doc_id}.unknown",
+                            "source_path": doc_info["source_path"] or "",
+                            "file_hash": doc_info["file_hash"],
+                            "doc_id": base_doc_id,
+                        }
+                        doc_chunk_counts[base_doc_id] = 0
+
                     hierarchy_level = extract_hierarchy_level(metadata)
-
-                    doc_id = row.get("doc_id")
-
-                    if doc_id not in chunk_id_map:
-                        chunk_id_map[doc_id] = doc_id
 
                     chunk_info = {
                         "id": row.get("id"),
-                        "doc_id": doc_id,
+                        "doc_id": base_doc_id,
                         "kb_id": kb_id,
                         "text": row.get("text", ""),
-                        "chunk_index": offset,
+                        "chunk_index": doc_chunk_counts[base_doc_id],
                         "parent_chunk_id": None,
                         "hierarchy_level": hierarchy_level,
                         "metadata": metadata,
                         "embedding_generated": 1,
                     }
+                    doc_chunk_counts[base_doc_id] += 1
 
                     if not dry_run:
-                        chunk_db.create(
-                            doc_id=chunk_info["doc_id"],
-                            kb_id=chunk_info["kb_id"],
-                            text=chunk_info["text"],
-                            chunk_index=chunk_info["chunk_index"],
-                            parent_chunk_id=chunk_info["parent_chunk_id"],
-                            hierarchy_level=chunk_info["hierarchy_level"],
-                            metadata=chunk_info["metadata"],
+                        from kb.database import get_db_path
+                        import sqlite3
+
+                        db_path = get_db_path()
+                        conn = sqlite3.connect(db_path)
+                        now = time.time()
+                        conn.execute(
+                            "INSERT OR REPLACE INTO chunks (id, doc_id, kb_id, text, text_length, chunk_index, parent_chunk_id, hierarchy_level, metadata_json, embedding_generated, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            (
+                                row.get("id"),
+                                base_doc_id,
+                                kb_id,
+                                chunk_info["text"],
+                                len(chunk_info["text"]),
+                                chunk_info["chunk_index"],
+                                None,
+                                hierarchy_level,
+                                json.dumps(metadata),
+                                1,
+                                now,
+                                now,
+                            ),
                         )
+                        conn.commit()
+                        conn.close()
 
                     chunks_created += 1
-                    offset += 1
 
                 except Exception as e:
                     logger.debug(f"处理节点失败: {e}")
                     offset += 1
                     continue
 
+                offset += 1
+
             logger.info(f"已处理 {offset}/{total_rows} 行")
 
         logger.info(f"已创建 {chunks_created} 个分块记录")
+        logger.info(f"发现 {len(unique_doc_infos)} 个唯一文档")
+
+        docs_created = 0
+        if not dry_run:
+            for doc_id, doc_info in unique_doc_infos.items():
+                try:
+                    doc = doc_db.create(**doc_info)
+                    import sqlite3
+                    from kb.database import get_db_path
+
+                    db_path = get_db_path()
+                    conn = sqlite3.connect(db_path)
+                    conn.execute(
+                        "UPDATE documents SET chunk_count = ? WHERE id = ?",
+                        (doc_chunk_counts.get(doc_id, 0), doc["id"]),
+                    )
+                    conn.commit()
+                    conn.close()
+                    logger.debug(
+                        f"创建文档: {doc_id} -> {doc['id']} ({doc_chunk_counts.get(doc_id, 0)} chunks)"
+                    )
+                    docs_created += 1
+                except Exception as e:
+                    logger.error(f"创建文档失败 {doc_id}: {e}")
+
+            logger.info(f"已创建 {docs_created} 个文档记录")
+
+        logger.info(f"迁移完成: {docs_created} 文档, {chunks_created} 分块")
+        return {"documents": docs_created, "chunks": chunks_created}
 
     except Exception as e:
-        logger.error(f"LanceDB 迁移失败: {e}")
-
-    logger.info(f"迁移完成: {docs_created} 文档, {chunks_created} 分块")
-    return {"documents": docs_created, "chunks": chunks_created}
+        logger.error(f"迁移失败: {e}")
+        raise
 
 
 def validate_migration(kb_id: str) -> Dict[str, Any]:
