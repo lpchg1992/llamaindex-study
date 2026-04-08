@@ -209,6 +209,7 @@ curl -X POST http://localhost:37241/kbs \
 
 | 方法 | 端点 | 功能 |
 |------|------|------|
+| POST | `/admin/restart-api` | 重启 API 服务 |
 | POST | `/admin/restart-scheduler` | 重启任务调度器 |
 
 ### 检索查询
@@ -1102,6 +1103,28 @@ curl -X PUT http://localhost:37241/settings \
 - 默认模型设置立即生效，无需重启
 
 ## 管理操作
+
+### 重启 API 服务
+
+#### POST /admin/restart-api - 重启 API 服务
+
+完全重启 API 服务器。这将中断所有正在进行的请求。
+
+```bash
+curl -X POST http://localhost:37241/admin/restart-api
+```
+
+```json
+{
+  "status": "restarting",
+  "message": "API 服务正在重启..."
+}
+```
+
+**注意：**
+- 此操作将完全重启 API 服务，中断所有正在处理的请求
+- 客户端应等待 2-3 秒后重试连接
+- 前端页面会自动刷新
 
 ### 重启调度器
 

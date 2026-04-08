@@ -1860,6 +1860,30 @@ def restart_scheduler():
     return {"status": "restarting", "message": "调度器正在重启..."}
 
 
+@app.post("/admin/restart-api")
+def restart_api():
+    """重启 API 服务（使用 SIGTERM 信号触发外部管理器重启）"""
+    import os
+    import signal
+    import sys
+    import time
+    from pathlib import Path
+
+    PROJECT_ROOT = Path(__file__).resolve().parent
+    pid_file = PROJECT_ROOT / ".api.pid"
+    restart_flag = PROJECT_ROOT / ".api_restart_required"
+
+    restart_flag.write_text(str(os.getpid()))
+    logger.info(f"重启标记已写入 PID: {os.getpid()}")
+
+    try:
+        os.kill(os.getpid(), signal.SIGTERM)
+    except OSError:
+        pass
+
+    return {"status": "restarting", "message": "API 服务正在重启..."}
+
+
 @app.post("/admin/reload-config")
 def reload_config():
     """重新加载配置（使部分设置生效）"""

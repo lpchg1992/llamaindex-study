@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useSettings, useUpdateSettings, useModels, useRestartScheduler, useReloadConfig } from '@/api/hooks'
+import { useSettings, useUpdateSettings, useModels, useRestartScheduler, useReloadConfig, useRestartApi } from '@/api/hooks'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -25,6 +25,7 @@ export function SettingsPage() {
   const updateSettings = useUpdateSettings()
   const restartScheduler = useRestartScheduler()
   const reloadConfig = useReloadConfig()
+  const restartApi = useRestartApi()
 
   const [localSettings, setLocalSettings] = useState<SystemSettings | null>(null)
 
@@ -59,6 +60,18 @@ export function SettingsPage() {
       toast.success('Configuration reloaded')
     } catch (err) {
       toast.error('Failed to reload configuration')
+    }
+  }
+
+  const handleRestartApi = async () => {
+    try {
+      await restartApi.mutateAsync()
+      toast.success('API restart initiated - page will reload')
+      setTimeout(() => {
+        window.location.reload()
+      }, 2000)
+    } catch (err) {
+      toast.error('Failed to restart API')
     }
   }
 
@@ -511,6 +524,26 @@ export function SettingsPage() {
             </CardHeader>
             <CardContent className="space-y-6">
               <div className="space-y-4">
+                <div className="flex items-start justify-between gap-4 p-4 border rounded-lg border-destructive/50">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <RotateCcw className="h-5 w-5 text-destructive" />
+                      <Label className="text-base">Restart API</Label>
+                    </div>
+                    <p className="text-sm text-muted-foreground">
+                      Fully restart the API server. This will interrupt all ongoing requests. Use when the service is in an inconsistent state.
+                    </p>
+                  </div>
+                  <Button
+                    variant="destructive"
+                    onClick={handleRestartApi}
+                    disabled={restartApi.isPending}
+                  >
+                    {restartApi.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                    Restart API
+                  </Button>
+                </div>
+
                 <div className="flex items-start justify-between gap-4 p-4 border rounded-lg">
                   <div className="space-y-1">
                     <div className="flex items-center gap-2">
@@ -555,6 +588,7 @@ export function SettingsPage() {
               <div className="bg-muted/50 p-4 rounded-lg">
                 <h4 className="font-medium mb-2">When to use these:</h4>
                 <ul className="text-sm text-muted-foreground space-y-1 list-disc list-inside">
+                  <li><strong>Restart API</strong> - Full service restart. Use when the service is unresponsive or in an inconsistent state.</li>
                   <li><strong>Restart Scheduler</strong> - After adding/removing models, or when tasks are stuck</li>
                   <li><strong>Reload Configuration</strong> - After changing LLM/Embedding settings that show "Requires restart"</li>
                 </ul>

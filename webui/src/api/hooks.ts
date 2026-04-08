@@ -784,6 +784,15 @@ export function useReloadConfig() {
   })
 }
 
+export function useRestartApi() {
+  return useMutation<RestartResponse, Error, void>({
+    mutationFn: async () => {
+      const { data } = await apiClient.post<RestartResponse>(`${API_BASE}/admin/restart-api`)
+      return data
+    },
+  })
+}
+
 export function useDocuments(kbId: string) {
   return useQuery<DocumentInfo[]>({
     queryKey: ['documents', kbId],
