@@ -5,8 +5,14 @@
 支持：
   - LLM：硅基流动（SiliconFlow，OpenAI 兼容格式）
   - Embedding：本地 Ollama（bge-m3）
+
+运行时设置持久化：
+  - 运行时可更改的设置（top_k, use_hybrid_search 等）保存到 .runtime_settings.json
+  - LLM/Embedding 设置保存到 .env 文件
+  - default_llm_model 通过模型数据库的 is_default 字段管理
 """
 
+import json
 import os
 from pathlib import Path
 from typing import ClassVar, List, Optional
@@ -17,6 +23,7 @@ from llamaindex_study.logger import get_logger
 
 logger = get_logger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+RUNTIME_SETTINGS_FILE = PROJECT_ROOT / ".runtime_settings.json"
 
 
 class Settings:
@@ -214,6 +221,45 @@ class Settings:
                 f"目录不可写，回退到本地目录: {candidate} -> {fallback} ({exc})"
             )
             return str(fallback)
+
+    def load_runtime_settings(self) -> None:
+        """从 JSON 文件加载运行时设置（启动时调用）"""
+        if not RUNTIME_SETTINGS_FILE.exists():
+            return
+        try:
+            with open(RUNTIME_SETTINGS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            for key, value in data.items():
+                if hasattr(self, key):
+                    try:
+                        setattr(self, key, value)
+                    except (TypeError, ValueError):
+                        pass
+            logger.debug(f"已从 {RUNTIME_SETTINGS_FILE} 加载运行时设置")
+        except Exception as e:
+            logger.warning(f"加载运行时设置失败: {e}")
+
+    def save_runtime_settings(self, settings_dict: dict) -> None:
+        """保存运行时设置到 JSON 文件"""
+        try:
+            existing = {}
+            if RUNTIME_SETTINGS_FILE.exists():
+                with open(RUNTIME_SETTINGS_FILE, "r", encoding="utf-8") as f:
+                    existing = json.load(f)
+            existing.update(settings_dict)
+            with open(RUNTIME_SETTINGS_FILE, "w", encoding="utf-8") as f:
+                json.dump(existing, f, indent=2, ensure_ascii=False)
+            logger.debug(f"运行时设置已保存到 {RUNTIME_SETTINGS_FILE}")
+        except Exception as e:
+            logger.error(f"保存运行时设置失败: {e}")
+            raise
+
+    def update_runtime_settings(self, settings_dict: dict) -> None:
+        """更新运行时设置（内存 + 持久化）"""
+        for key, value in settings_dict.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
+        self.save_runtime_settings(settings_dict)
 
 
 # ==================== 模型注册表 ====================
@@ -419,6 +465,7 @@ _settings: Optional[Settings] = None
 def get_settings() -> Settings:
     """
     获取全局配置实例（单例模式）
+    首次调用时加载 .env 和运行时设置
 
     Returns:
         Settings: 配置实例
@@ -426,4 +473,5 @@ def get_settings() -> Settings:
     global _settings
     if _settings is None:
         _settings = Settings()
+        _settings.load_runtime_settings()
     return _settings
