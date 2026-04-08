@@ -1863,12 +1863,14 @@ def restart_scheduler():
 @app.post("/admin/reload-config")
 def reload_config():
     """重新加载配置（使部分设置生效）"""
-    from llamaindex_study.config import get_model_registry
+    from llamaindex_study.config import get_model_registry, get_settings
 
     try:
         registry = get_model_registry()
         registry.reload()
-        logger.info("模型注册表已重新加载")
+        s = get_settings()
+        s.load_runtime_settings()
+        logger.info("模型注册表和运行时设置已重新加载")
         return {"status": "success", "message": "配置已重新加载"}
     except Exception as e:
         logger.error(f"配置重载失败: {e}")
@@ -2547,55 +2549,151 @@ def get_settings():
 @app.put("/settings", response_model=SystemSettings)
 def update_settings(req: SettingsUpdateRequest):
     """更新系统设置（仅更新提供的字段）"""
-    import os
+    from pathlib import Path
     from llamaindex_study.config import get_settings
 
     s = get_settings()
     updates = req.model_dump(exclude_unset=True)
 
-    # 只允许更新特定的设置项（安全限制）
-    allowed_updates = {
-        "top_k",
-        "use_hybrid_search",
-        "use_auto_merging",
-        "use_hyde",
-        "use_multi_query",
-        "num_multi_queries",
-        "hybrid_search_alpha",
-        "chunk_strategy",
-        "chunk_size",
-        "chunk_overlap",
-        "use_reranker",
-        "response_mode",
-    }
+    if not updates:
+        return SystemSettings(
+            llm_mode=s.llm_mode,
+            default_llm_model=_get_default_llm_model_id(),
+            ollama_embed_model=s.ollama_embed_model,
+            ollama_base_url=s.ollama_base_url,
+            top_k=s.top_k,
+            use_hybrid_search=s.use_hybrid_search,
+            use_auto_merging=s.use_auto_merging,
+            use_hyde=s.use_hyde,
+            use_multi_query=s.use_multi_query,
+            num_multi_queries=s.num_multi_queries,
+            hybrid_search_alpha=s.hybrid_search_alpha,
+            chunk_strategy=s.chunk_strategy,
+            chunk_size=s.chunk_size,
+            chunk_overlap=s.chunk_overlap,
+            use_reranker=s.use_reranker,
+            rerank_model=s.rerank_model,
+            response_mode=s.response_mode,
+        )
 
-    # LLM 和 Embedding 相关的设置需要特殊处理（需要重启才能生效）
-    runtime_updates = {
-        "llm_mode": "LLM_MODE",
-        "default_llm_model": None,  # 需通过数据库更新
-        "ollama_embed_model": "OLLAMA_EMBED_MODEL",
-        "ollama_base_url": "OLLAMA_BASE_URL",
-        "rerank_model": "RERANK_MODEL",
-    }
-
+    runtime_settings = {}
+    env_updates = {}
     applied = []
     skipped = []
 
     for key, value in updates.items():
-        if key in allowed_updates:
-            # 直接更新运行时设置
+        if key in (
+            "top_k",
+            "use_hybrid_search",
+            "use_auto_merging",
+            "use_hyde",
+            "use_multi_query",
+            "num_multi_queries",
+            "hybrid_search_alpha",
+            "chunk_strategy",
+            "chunk_size",
+            "chunk_overlap",
+            "use_reranker",
+            "response_mode",
+        ):
             if hasattr(s, key):
                 setattr(s, key, value)
+                runtime_settings[key] = value
                 applied.append(key)
-        elif key in runtime_updates:
-            env_var = runtime_updates[key]
-            if env_var:
-                os.environ[env_var] = str(value)
-            applied.append(f"{key} (需重启生效)")
+        elif key == "default_llm_model":
+            _set_default_llm_model(value)
+            applied.append(key)
+        elif key in (
+            "llm_mode",
+            "ollama_embed_model",
+            "ollama_base_url",
+            "rerank_model",
+        ):
+            env_var_map = {
+                "llm_mode": "LLM_MODE",
+                "ollama_embed_model": "OLLAMA_EMBED_MODEL",
+                "ollama_base_url": "OLLAMA_BASE_URL",
+                "rerank_model": "RERANK_MODEL",
+            }
+            env_updates[env_var_map[key]] = value
+            applied.append(f"{key} (重启服务生效)")
+        else:
+            skipped.append(key)
 
-    logger.info(f"设置已更新: {applied}, 跳过: {skipped}")
+    if runtime_settings:
+        s.save_runtime_settings(runtime_settings)
+        logger.info(f"运行时设置已更新并持久化: {list(runtime_settings.keys())}")
 
-    return get_settings()
+    if env_updates:
+        _update_env_file(env_updates)
+        for env_var, value in env_updates.items():
+            logger.info(f"环境变量已更新: {env_var}={value} (重启服务生效)")
+
+    if skipped:
+        logger.warning(f"跳过未知设置: {skipped}")
+
+    return SystemSettings(
+        llm_mode=s.llm_mode,
+        default_llm_model=_get_default_llm_model_id(),
+        ollama_embed_model=s.ollama_embed_model,
+        ollama_base_url=s.ollama_base_url,
+        top_k=s.top_k,
+        use_hybrid_search=s.use_hybrid_search,
+        use_auto_merging=s.use_auto_merging,
+        use_hyde=s.use_hyde,
+        use_multi_query=s.use_multi_query,
+        num_multi_queries=s.num_multi_queries,
+        hybrid_search_alpha=s.hybrid_search_alpha,
+        chunk_strategy=s.chunk_strategy,
+        chunk_size=s.chunk_size,
+        chunk_overlap=s.chunk_overlap,
+        use_reranker=s.use_reranker,
+        rerank_model=s.rerank_model,
+        response_mode=s.response_mode,
+    )
+
+
+def _get_default_llm_model_id() -> Optional[str]:
+    from llamaindex_study.config import get_model_registry
+
+    registry = get_model_registry()
+    default_llm = registry.get_default("llm")
+    return default_llm["id"] if default_llm else None
+
+
+def _set_default_llm_model(model_id: Optional[str]) -> None:
+    if not model_id:
+        return
+    from kb.database import init_model_db
+
+    model_db = init_model_db()
+    model_db.set_default(model_id)
+    from llamaindex_study.config import get_model_registry
+
+    get_model_registry().reload()
+
+
+def _update_env_file(updates: Dict[str, str]) -> None:
+    env_path = Path(__file__).parent / ".env"
+    if not env_path.exists():
+        logger.warning(".env 文件不存在，跳过环境变量更新")
+        return
+    try:
+        lines = env_path.read_text(encoding="utf-8").splitlines()
+        updated_keys = set(updates.keys())
+        new_lines = []
+        for line in lines:
+            key = line.split("=")[0].strip() if "=" in line else ""
+            if key in updated_keys:
+                new_lines.append(f"{key}={updates[key]}")
+            else:
+                new_lines.append(line)
+        for key, value in updates.items():
+            if not any(l.startswith(f"{key}=") for l in new_lines):
+                new_lines.append(f"{key}={value}")
+        env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+    except Exception as e:
+        logger.error(f"更新 .env 文件失败: {e}")
 
 
 @app.post("/extract/fields", response_model=Dict[str, Any])
