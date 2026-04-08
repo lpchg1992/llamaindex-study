@@ -132,14 +132,51 @@ class LanceDBVectorStore(BaseVectorStore):
         ).get_settings()
         return settings.persist_dir
 
-    def _get_lance_vector_store(self):
-        """获取底层的 LlamaIndex LanceDBVectorStore"""
+    def _get_lance_vector_store(
+        self,
+        query_type: str = "vector",
+        reranker: Any = None,
+    ):
+        """获取底层的 LlamaIndex LanceDBVectorStore
+
+        Args:
+            query_type: 查询类型 ("vector", "hybrid", "fts")
+            reranker: LanceDB reranker 实例 (LinearCombinationReranker, RRFReranker 等)
+        """
         from llama_index.vector_stores.lancedb import LanceDBVectorStore as LlamaLanceDB
 
-        return LlamaLanceDB(
+        vector_store = LlamaLanceDB(
             uri=self._get_uri(),
             table_name=self.table_name,
+            query_type=query_type,
         )
+
+        if reranker:
+            vector_store._reranker = reranker
+
+        return vector_store
+
+    def ensure_fts_index(self) -> None:
+        """确保 FTS 索引存在（用于混合搜索）"""
+        import lancedb
+
+        db = lancedb.connect(self._get_uri())
+        result = db.list_tables()
+        table_names = list(result.tables) if hasattr(result, "tables") else []
+
+        if self.table_name not in table_names:
+            return
+
+        table = db.open_table(self.table_name)
+        if hasattr(table, "_fts_index_ready"):
+            if not table._fts_index_ready:
+                table.create_fts_index("text", replace=True)
+                table._fts_index_ready = True
+        else:
+            try:
+                table.create_fts_index("text", replace=True)
+            except Exception:
+                pass
 
     def _get_metadata_path(self) -> Optional[Path]:
         """获取元数据文件路径"""
@@ -239,12 +276,6 @@ class LanceDBVectorStore(BaseVectorStore):
             embed_model=embed_model,
         )
 
-        docstore = SimpleDocumentStore()
-        docstore.add_documents(nodes)
-        index.storage_context.docstore = docstore
-
-        self._persist_docstore(index)
-
         self._index = index
         self._vector_store = vector_store
 
@@ -255,46 +286,12 @@ class LanceDBVectorStore(BaseVectorStore):
 
         return index
 
-    def _persist_docstore(self, index: Any) -> None:
-        persist_dir = Path(self._get_uri())
-        persist_dir.mkdir(parents=True, exist_ok=True)
-        index.storage_context.docstore.persist(
-            persist_path=str(persist_dir / "docstore.json")
-        )
-        print(f"   ✅ docstore 已持久化到 {persist_dir / 'docstore.json'}")
-
-    def update_docstore(self, nodes: List[Any]) -> int:
-        """增量更新 docstore
-
-        Args:
-            nodes: 新增的节点列表
-
-        Returns:
-            成功更新的节点数
-        """
-        from llama_index.core.storage.docstore import SimpleDocumentStore
-
-        docstore_path = Path(self._get_uri()) / "docstore.json"
-
-        if docstore_path.exists():
-            docstore = SimpleDocumentStore.from_persist_path(str(docstore_path))
-        else:
-            docstore = SimpleDocumentStore()
-
-        docstore.add_documents(nodes, allow_update=True)
-
-        docstore.persist(persist_path=str(docstore_path))
-        logger.debug(f"docstore 已更新: {len(nodes)} 节点, 保存到 {docstore_path}")
-
-        return len(nodes)
-
     def load_index(self) -> Optional[Any]:
         """加载已有索引"""
         if not self.exists():
             return None
 
         from llama_index.core import VectorStoreIndex, Settings as LlamaSettings
-        from llama_index.core.storage.docstore import SimpleDocumentStore
 
         embed_model = self._get_embed_model()
         LlamaSettings.embed_model = embed_model
@@ -306,108 +303,24 @@ class LanceDBVectorStore(BaseVectorStore):
             embed_model=embed_model,
         )
 
-        self._load_docstore(index)
-
         self._index = index
         self._vector_store = vector_store
 
         print(f"✅ LanceDB 索引已加载: {self._get_uri()}/{self.table_name}")
         return index
 
-    def _load_docstore(self, index: Any) -> None:
-        from llama_index.core.storage.docstore import SimpleDocumentStore
-
-        docstore_path = Path(self._get_uri()) / "docstore.json"
-        if docstore_path.exists():
-            docstore = SimpleDocumentStore.from_persist_path(str(docstore_path))
-            index.storage_context.docstore = docstore
-            print(f"   ✅ docstore 已加载: {len(docstore.docs)} 个节点")
-
-    def rebuild_docstore(self) -> int:
-        import json
-        import lancedb
-        from llama_index.core.storage.docstore import SimpleDocumentStore
-
-        db = lancedb.connect(self._get_uri())
-        table = db.open_table(self.table_name)
-        total_count = table.count_rows()
-        print(f"   📊 LanceDB 表共有 {total_count} 行")
-
-        docstore = SimpleDocumentStore()
-        nodes_rebuilt = 0
-        batch_size = 5000
-        offset = 0
-
-        while offset < total_count:
-            batch = table.search().offset(offset).limit(batch_size).to_pandas()
-            if batch.empty:
-                break
-
-            batch_nodes = []
-            for _, row in batch.iterrows():
-                try:
-                    metadata = row.get("metadata", {})
-                    if not isinstance(metadata, dict):
-                        continue
-
-                    node_content_str = metadata.get("_node_content", "")
-                    if not node_content_str:
-                        continue
-
-                    node_data = json.loads(node_content_str)
-                    node_type = metadata.get("_node_type", "")
-
-                    if node_type == "TextNode":
-                        from llama_index.core.schema import TextNode
-
-                        node = TextNode(
-                            id_=node_data.get("id_") or row.get("id"),
-                            text=node_data.get("text", ""),
-                            metadata=node_data.get("metadata", {}),
-                            relationships=node_data.get("relationships", {}),
-                        )
-                    else:
-                        node = LlamaDocument(
-                            id_=node_data.get("id_") or row.get("id"),
-                            text=node_data.get("text", ""),
-                            metadata=node_data.get("metadata", {}),
-                            relationships=node_data.get("relationships", {}),
-                        )
-
-                    batch_nodes.append(node)
-                    nodes_rebuilt += 1
-                except Exception:
-                    continue
-
-            if batch_nodes:
-                docstore.add_documents(batch_nodes)
-
-            offset += batch_size
-            print(f"   🔄 已处理 {nodes_rebuilt}/{total_count} 节点...")
-
-        persist_path = str(Path(self._get_uri()) / "docstore.json")
-        docstore.persist(persist_path=persist_path)
-
-        print(f"   ✅ docstore 已重建: {nodes_rebuilt} 节点, 保存到 {persist_path}")
-        return nodes_rebuilt
-
     def save_index(self, index: Any) -> None:
         """LanceDB 自动持久化，无需手动保存"""
         print(f"✅ LanceDB 索引已自动保存: {self._get_uri()}/{self.table_name}")
 
     def delete_table(self) -> None:
-        """删除表和docstore"""
+        """删除表"""
         if self.exists():
             import lancedb
 
             db = lancedb.connect(self._get_uri())
             db.drop_table(self.table_name)
             print(f"✅ 表已删除: {self.table_name}")
-
-        docstore_path = Path(self._get_uri()) / "docstore.json"
-        if docstore_path.exists():
-            docstore_path.unlink()
-            print(f"✅ docstore 已删除: {docstore_path}")
 
     def delete_by_source(self, sources: List[str]) -> int:
         """按源文件路径删除节点
@@ -763,3 +676,126 @@ def create_vector_store(
 def get_default_vector_store(persist_dir: Optional[Path] = None) -> LanceDBVectorStore:
     """获取默认的 LanceDB 向量存储"""
     return LanceDBVectorStore(persist_dir=persist_dir)
+
+
+class LanceDBDocumentStore:
+    """从 LanceDB 读取数据的 DocumentStore 实现，用于 Auto-Merging"""
+
+    def __init__(self, kb_id: str, persist_dir: Optional[str] = None):
+        self.kb_id = kb_id
+        if persist_dir:
+            self.persist_dir = persist_dir
+        else:
+            from llamaindex_study.config import get_settings
+
+            settings = get_settings()
+            self.persist_dir = f"{settings.persist_dir}/{kb_id}"
+
+        self._table_name = kb_id
+        self._db = None
+        self._table = None
+        self._cached_docs = None
+
+    def _connect(self):
+        if self._db is None:
+            import lancedb
+
+            self._db = lancedb.connect(self.persist_dir)
+            self._table = self._db.open_table(self._table_name)
+
+    def _get_node_from_row(self, row) -> Any:
+        from llama_index.core.schema import TextNode, NodeRelationship, RelatedNodeInfo
+        import json
+
+        metadata = row.get("metadata", {})
+        if isinstance(metadata, str):
+            metadata = json.loads(metadata)
+
+        node_content_str = metadata.get("_node_content", "{}")
+        node_content = json.loads(node_content_str)
+
+        relationships = node_content.get("relationships", {})
+        reconstructed_rels = {}
+        for key, val in relationships.items():
+            if key == "4":  # PARENT
+                if isinstance(val, dict):
+                    reconstructed_rels[NodeRelationship.PARENT] = RelatedNodeInfo(
+                        node_id=val.get("node_id"),
+                        node_type=val.get("node_type"),
+                        metadata=val.get("metadata", {}),
+                        hash=val.get("hash"),
+                    )
+            elif key == "5":  # CHILD
+                if isinstance(val, list):
+                    children = []
+                    for child in val:
+                        if isinstance(child, dict):
+                            children.append(
+                                RelatedNodeInfo(
+                                    node_id=child.get("node_id"),
+                                    node_type=child.get("node_type"),
+                                    metadata=child.get("metadata", {}),
+                                    hash=child.get("hash"),
+                                )
+                            )
+                    if children:
+                        reconstructed_rels[NodeRelationship.CHILD] = children
+            elif key == "1":  # SOURCE
+                if isinstance(val, dict):
+                    reconstructed_rels[NodeRelationship.SOURCE] = RelatedNodeInfo(
+                        node_id=val.get("node_id"),
+                        node_type=val.get("node_type"),
+                        metadata=val.get("metadata", {}),
+                        hash=val.get("hash"),
+                    )
+
+        node = TextNode(
+            id_=row.get("id"),
+            text=node_content.get("text", ""),
+            metadata=node_content.get("metadata", {}),
+            relationships=reconstructed_rels,
+            embedding=row.get("vector") if "vector" in row else None,
+        )
+        return node
+
+    def get_document(self, node_id: str) -> Any:
+        self._connect()
+        import pandas as pd
+
+        result = self._table.search().where(f'id = "{node_id}"').limit(1).to_pandas()
+        if len(result) == 0:
+            return None
+        return self._get_node_from_row(result.iloc[0])
+
+    def get_nodes(self, node_ids: List[str]) -> List[Any]:
+        if not node_ids:
+            return []
+        self._connect()
+        import pandas as pd
+
+        ids_str = '", "'.join(node_ids)
+        query = f'id IN ("{ids_str}")'
+        result = self._table.search().where(query).limit(len(node_ids)).to_pandas()
+        return [self._get_node_from_row(row) for _, row in result.iterrows()]
+
+    def document_exists(self, doc_id: str) -> bool:
+        return self.get_document(doc_id) is not None
+
+    def __len__(self) -> int:
+        self._connect()
+        return self._table.count_rows()
+
+    @property
+    def docs(self):
+        if self._cached_docs is None:
+            self._connect()
+            total = self._table.count_rows()
+            all_ids = []
+            batch_size = 1000
+            for offset in range(0, total, batch_size):
+                batch = (
+                    self._table.search().offset(offset).limit(batch_size).to_pandas()
+                )
+                all_ids.extend(batch["id"].tolist())
+            self._cached_docs = {id_: self.get_document(id_) for id_ in all_ids}
+        return self._cached_docs

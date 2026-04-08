@@ -117,41 +117,43 @@ class QueryEngineWrapper:
         return base_retriever
 
     def _create_hybrid_retriever(self, vector_retriever: Any) -> Any:
-        """创建混合搜索检索器（向量 + BM25 + 融合）"""
-        try:
-            from llama_index.core.retrievers import QueryFusionRetriever
-            from llama_index.retrievers.bm25 import BM25Retriever
+        """使用 LanceDB 原生混合搜索（向量 + FTS/BM25）"""
+        import lancedb
+        from llama_index.core.vector_stores.types import VectorStoreQueryMode
+        from llama_index.core.indices.vector_store.retrievers import (
+            VectorIndexRetriever,
+        )
 
-            docstore = self.index.storage_context.docstore
-            if not docstore or len(docstore.docs) == 0:
-                logger.warning(
-                    "混合搜索：docstore 为空，无法使用 BM25，回退到纯向量检索"
-                )
-                return vector_retriever
+        vs = self.vector_store or self.index.vector_store
+        if hasattr(vs, "_get_lance_vector_store"):
+            lance_store = vs._get_lance_vector_store()
+        else:
+            lance_store = vs
 
-            bm25_retriever = BM25Retriever.from_defaults(
-                docstore=docstore,
-                similarity_top_k=self.top_k * 3,
+        if hasattr(lance_store, "ensure_fts_index"):
+            lance_store.ensure_fts_index()
+
+        if self.settings.hybrid_search_mode == "RRF":
+            reranker = lancedb.rerankers.RRFReranker()
+        else:
+            reranker = lancedb.rerankers.LinearCombinationReranker(
+                weight=self.settings.hybrid_search_alpha
             )
 
-            fusion_retriever = QueryFusionRetriever(
-                retrievers=[vector_retriever, bm25_retriever],
-                similarity_top_k=self.top_k,
-                num_queries=1,
-                mode=self.settings.hybrid_search_mode,
-                use_async=False,
-                verbose=True,
-            )
-            logger.info(
-                f"启用混合搜索: vector + BM25, mode={self.settings.hybrid_search_mode}, alpha={self.settings.hybrid_search_alpha}"
-            )
-            return fusion_retriever
-        except ImportError as e:
-            logger.warning(f"混合搜索依赖未安装，回退到向量检索: {e}")
-            return vector_retriever
-        except Exception as e:
-            logger.warning(f"混合搜索初始化失败，回退到向量检索: {e}")
-            return vector_retriever
+        if hasattr(lance_store, "_reranker"):
+            lance_store._reranker = reranker
+
+        hybrid_retriever = VectorIndexRetriever(
+            self.index,
+            similarity_top_k=self.top_k,
+            vector_store_query_mode=VectorStoreQueryMode.HYBRID,
+            alpha=self.settings.hybrid_search_alpha,
+        )
+
+        logger.info(
+            f"启用 LanceDB 原生混合搜索: mode={self.settings.hybrid_search_mode}, alpha={self.settings.hybrid_search_alpha}"
+        )
+        return hybrid_retriever
 
     def _create_query_engine(self) -> Any:
         """

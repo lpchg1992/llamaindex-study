@@ -400,6 +400,96 @@ class DocumentChunkService:
             )
             return result
 
+    def delete_chunk_cascade(
+        self,
+        chunk_id: str,
+        cascade_children: bool = True,
+        delete_lance: bool = True,
+    ) -> Dict[str, int]:
+        result = {"chunks": 0, "lance": 0, "children_orphaned": 0}
+
+        try:
+            chunk_db = self._get_chunk_db()
+            doc_db = self._get_doc_db()
+
+            chunk = chunk_db.get(chunk_id)
+            if not chunk:
+                logger.warning(
+                    f"[{self.kb_id}] delete_chunk_cascade: chunk {chunk_id} not found"
+                )
+                return result
+
+            doc_id = chunk.get("doc_id")
+
+            all_chunks = chunk_db.get_by_doc(doc_id)
+            child_chunks = [
+                c for c in all_chunks if c.get("parent_chunk_id") == chunk_id
+            ]
+
+            if cascade_children and child_chunks:
+                for child in child_chunks:
+                    child_result = self.delete_chunk_cascade(
+                        child["id"],
+                        cascade_children=True,
+                        delete_lance=delete_lance,
+                    )
+                    result["chunks"] += child_result.get("chunks", 0)
+                    result["lance"] += child_result.get("lance", 0)
+                    result["children_orphaned"] += child_result.get(
+                        "children_orphaned", 0
+                    )
+            elif child_chunks:
+                for child in child_chunks:
+                    try:
+                        chunk_db.update_parent(child["id"], None)
+                        result["children_orphaned"] += 1
+                    except Exception as e:
+                        logger.warning(
+                            f"[{self.kb_id}] Failed to orphan child chunk {child['id']}: {e}"
+                        )
+
+            if chunk_db.delete(chunk_id):
+                result["chunks"] = 1
+
+            if delete_lance:
+                try:
+                    from kb.lance_crud import LanceCRUDService
+
+                    result["lance"] = LanceCRUDService.delete_by_chunk_ids(
+                        self.kb_id, [chunk_id]
+                    )
+                except Exception as e:
+                    logger.error(f"[{self.kb_id}] Delete LanceDB chunk failed: {e}")
+
+            if doc_id:
+                self.update_document_stats(doc_id)
+
+            logger.info(
+                f"[{self.kb_id}] delete_chunk_cascade({chunk_id}) completed: {result}"
+            )
+            return result
+
+        except Exception as e:
+            logger.error(
+                f"[{self.kb_id}] delete_chunk_cascade failed: {e}", exc_info=True
+            )
+            return result
+
+    def get_chunk_children(self, chunk_id: str) -> List[Dict[str, Any]]:
+        try:
+            chunk_db = self._get_chunk_db()
+            chunk = chunk_db.get(chunk_id)
+            if not chunk:
+                return []
+            doc_id = chunk.get("doc_id")
+            if not doc_id:
+                return []
+            all_chunks = chunk_db.get_by_doc(doc_id)
+            return [c for c in all_chunks if c.get("parent_chunk_id") == chunk_id]
+        except Exception as e:
+            logger.error(f"[{self.kb_id}] get_chunk_children failed: {e}")
+            return []
+
 
 def get_document_chunk_service(
     kb_id: str, persist_dir: Optional[Path] = None

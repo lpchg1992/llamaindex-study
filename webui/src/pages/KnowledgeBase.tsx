@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useKBs, useCreateKB, useDeleteKB, useKBTopics, useRefreshTopics, useConsistencyCheck, useConsistencyRepair, useInitializeKB, useRebuildDocstore, useRepairAll } from '@/api/hooks'
+import { useKBs, useCreateKB, useDeleteKB, useKBTopics, useRefreshTopics, useConsistencyCheck, useConsistencyRepair, useInitializeKB, useRebuildDocstore, useRepairAll, useDocuments, useDocumentChunks, useDeleteDocument, useUpdateChunk, useReembedChunk, useDeleteChunk, useChunkChildren, useLanceStats, useLanceDuplicates } from '@/api/hooks'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -21,11 +21,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Plus, Trash2, Database, RefreshCw, Loader2, AlertTriangle, CheckCircle, Wrench, Trash, FileText, Sparkles, Pencil, WrenchIcon } from 'lucide-react'
+import { Plus, Trash2, Database, RefreshCw, Loader2, AlertTriangle, CheckCircle, Wrench, Trash, FileText, Sparkles, Pencil, WrenchIcon, Edit2, X, Check, ChevronRight, BarChart3 } from 'lucide-react'
 import { toast } from 'sonner'
 import { KBEditDialog } from '@/components/KBEditDialog'
 import { DangerConfirmDialog } from '@/components/DangerConfirmDialog'
-import type { KBInfo } from '@/types/api'
+import type { KBInfo, DocumentInfo, ChunkInfo } from '@/types/api'
 
 function KBDetailsPanel({ kb }: { kb: KBInfo }) {
   const { data: topics, isLoading: topicsLoading, refetch: refetchTopics } = useKBTopics(kb.id)
@@ -100,9 +100,11 @@ function KBDetailsPanel({ kb }: { kb: KBInfo }) {
       </CardHeader>
       <CardContent>
         <Tabs defaultValue="overview" className="w-full">
-          <TabsList className="grid w-full grid-cols-4">
+          <TabsList className="grid w-full grid-cols-6">
             <TabsTrigger value="overview">Overview</TabsTrigger>
+            <TabsTrigger value="documents">Documents</TabsTrigger>
             <TabsTrigger value="topics">Topics</TabsTrigger>
+            <TabsTrigger value="lance">LanceDB</TabsTrigger>
             <TabsTrigger value="consistency">Consistency</TabsTrigger>
             <TabsTrigger value="maintenance">Maintenance</TabsTrigger>
           </TabsList>
@@ -162,6 +164,14 @@ function KBDetailsPanel({ kb }: { kb: KBInfo }) {
               <p className="text-sm text-muted-foreground text-center py-4">No topics available</p>
             )}
             <p className="text-xs text-muted-foreground">{topics?.topic_count || 0} topics</p>
+          </TabsContent>
+
+          <TabsContent value="documents" className="space-y-4">
+            <DocumentManagementPanel kbId={kb.id} />
+          </TabsContent>
+
+          <TabsContent value="lance" className="space-y-4">
+            <LanceStatsPanel kbId={kb.id} />
           </TabsContent>
 
           <TabsContent value="consistency" className="space-y-4">
@@ -269,6 +279,428 @@ function KBDetailsPanel({ kb }: { kb: KBInfo }) {
         />
       </CardContent>
     </Card>
+  )
+}
+
+function ChunkDeleteDialog({
+  open,
+  onOpenChange,
+  kbId,
+  chunk,
+  onConfirm,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  kbId: string
+  chunk: ChunkInfo | null
+  onConfirm: () => void
+}) {
+  const { data: childrenData, isLoading } = useChunkChildren(kbId, chunk?.id || '')
+  const hasChildren = childrenData && childrenData.count > 0
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>删除 Chunk</DialogTitle>
+        </DialogHeader>
+        {chunk && (
+          <div className="space-y-4">
+            <div className="p-3 bg-muted rounded-lg">
+              <p className="font-mono text-sm">{chunk.id.slice(0, 16)}...</p>
+              <p className="text-sm text-muted-foreground mt-1 line-clamp-2">{chunk.text}</p>
+            </div>
+            {isLoading ? (
+              <div className="flex items-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <span className="text-sm text-muted-foreground">检查子节点...</span>
+              </div>
+            ) : hasChildren ? (
+              <div className="space-y-2">
+                <AlertTriangle className="h-5 w-5 text-yellow-500" />
+                <p className="text-sm">
+                  此 chunk 有 <strong>{childrenData?.count}</strong> 个子 chunk。
+                </p>
+                <div className="flex flex-wrap gap-1">
+                  {childrenData?.children.slice(0, 5).map((child) => (
+                    <Badge key={child.id} variant="outline" className="text-xs">
+                      {child.chunk_index} (L{child.hierarchy_level})
+                    </Badge>
+                  ))}
+                  {childrenData && childrenData.count > 5 && (
+                    <Badge variant="outline" className="text-xs">
+                      +{childrenData.count - 5} more
+                    </Badge>
+                  )}
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  选择"级联删除"将同时删除所有子 chunk。
+                </p>
+              </div>
+            ) : null}
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => onOpenChange(false)}>
+                取消
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={() => {
+                  onConfirm()
+                  onOpenChange(false)
+                }}
+              >
+                {hasChildren ? '级联删除' : '删除'}
+              </Button>
+            </div>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function DocumentManagementPanel({ kbId }: { kbId: string }) {
+  const { data: documents, isLoading } = useDocuments(kbId)
+  const deleteDoc = useDeleteDocument()
+  const [expandedDoc, setExpandedDoc] = useState<string | null>(null)
+  const [selectedDocForChunks, setSelectedDocForChunks] = useState<DocumentInfo | null>(null)
+  const [editingChunk, setEditingChunk] = useState<ChunkInfo | null>(null)
+  const [deletingChunk, setDeletingChunk] = useState<ChunkInfo | null>(null)
+  const [editText, setEditText] = useState('')
+  const { data: chunks, isLoading: chunksLoading } = useDocumentChunks(kbId, expandedDoc || '')
+  const updateChunk = useUpdateChunk()
+  const reembedChunk = useReembedChunk()
+  const deleteChunk = useDeleteChunk()
+
+  const handleDeleteDoc = async (doc: DocumentInfo) => {
+    if (confirm(`Delete document "${doc.source_file}" and all its chunks?`)) {
+      await deleteDoc.mutateAsync({ kbId, docId: doc.id })
+    }
+  }
+
+  const handleEditStart = (chunk: ChunkInfo) => {
+    setEditingChunk(chunk)
+    setEditText(chunk.text)
+  }
+
+  const handleEditSave = async () => {
+    if (editingChunk) {
+      await updateChunk.mutateAsync({ kbId, chunkId: editingChunk.id, text: editText })
+      setEditingChunk(null)
+    }
+  }
+
+  const handleReembed = async (chunk: ChunkInfo) => {
+    await reembedChunk.mutateAsync({ kbId, chunkId: chunk.id })
+    toast.success('Chunk reembedded')
+  }
+
+  const handleDeleteChunk = async (chunk: ChunkInfo, cascade: boolean = true) => {
+    try {
+      const result = await deleteChunk.mutateAsync({ kbId, chunkId: chunk.id, cascade })
+      toast.success(`Deleted chunk: ${result.deleted_chunks} from db, ${result.deleted_lance} from lance`)
+      setDeletingChunk(null)
+    } catch (error) {
+      toast.error('Failed to delete chunk')
+    }
+  }
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-8">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
+    )
+  }
+
+  if (!documents || documents.length === 0) {
+    return (
+      <Card>
+        <CardContent className="flex items-center justify-center h-48">
+          <p className="text-muted-foreground">No documents found. Run migration or ingest new documents.</p>
+        </CardContent>
+      </Card>
+    )
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center justify-between">
+          <span className="flex items-center gap-2">
+            <FileText className="h-5 w-5" />
+            Documents ({documents.length})
+          </span>
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <ScrollArea className="h-[500px]">
+          <div className="space-y-2">
+            {documents.map((doc) => (
+              <div key={doc.id} className="border rounded-lg overflow-hidden">
+                <div
+                  className="flex items-center justify-between p-3 hover:bg-muted/50 cursor-pointer"
+                  onClick={() => setExpandedDoc(expandedDoc === doc.id ? null : doc.id)}
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <FileText className="h-4 w-4 text-muted-foreground" />
+                      <p className="font-medium truncate">{doc.source_file}</p>
+                    </div>
+                    <div className="flex items-center gap-2 mt-1">
+                      <Badge variant="secondary">{doc.chunk_count} chunks</Badge>
+                      <Badge variant="outline">{doc.total_chars.toLocaleString()} chars</Badge>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1 truncate">
+                      {doc.source_path}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <code className="text-xs text-muted-foreground font-mono">
+                      {doc.id.slice(0, 8)}...
+                    </code>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        handleDeleteDoc(doc)
+                      }}
+                    >
+                      <Trash2 className="h-4 w-4 text-destructive" />
+                    </Button>
+                    <ChevronRight className={`h-4 w-4 transition-transform ${expandedDoc === doc.id ? 'rotate-90' : ''}`} />
+                  </div>
+                </div>
+
+                {expandedDoc === doc.id && (
+                  <div className="border-t bg-muted/30">
+                    <div className="p-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <h4 className="font-medium text-sm">Chunks</h4>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setSelectedDocForChunks(doc)}
+                        >
+                          View All Chunks
+                        </Button>
+                      </div>
+                      <div className="text-xs text-muted-foreground space-y-1">
+                        <p>ID: {doc.id}</p>
+                        <p>File Hash: {doc.file_hash.slice(0, 16)}...</p>
+                        <p>Created: {new Date(doc.created_at * 1000).toLocaleString()}</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </ScrollArea>
+      </CardContent>
+
+      <Dialog open={!!editingChunk} onOpenChange={() => setEditingChunk(null)}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Edit Chunk</DialogTitle>
+          </DialogHeader>
+          {editingChunk && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-3 gap-2 text-sm">
+                <div className="p-2 bg-muted rounded">
+                  <p className="text-muted-foreground">Index</p>
+                  <p className="font-mono">{editingChunk.chunk_index}</p>
+                </div>
+                <div className="p-2 bg-muted rounded">
+                  <p className="text-muted-foreground">Level</p>
+                  <p className="font-mono">{editingChunk.hierarchy_level}</p>
+                </div>
+                <div className="p-2 bg-muted rounded">
+                  <p className="text-muted-foreground">Chars</p>
+                  <p className="font-mono">{editingChunk.text_length}</p>
+                </div>
+              </div>
+              {editingChunk.parent_chunk_id && (
+                <p className="text-sm">Parent: <code className="text-xs">{editingChunk.parent_chunk_id}</code></p>
+              )}
+              <div>
+                <label className="text-sm font-medium">Text</label>
+                <textarea
+                  className="w-full h-48 p-2 border rounded font-mono text-sm mt-1"
+                  value={editText}
+                  onChange={(e) => setEditText(e.target.value)}
+                />
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setEditingChunk(null)}>
+                  Cancel
+                </Button>
+                <Button onClick={handleEditSave} disabled={updateChunk.isPending}>
+                  {updateChunk.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                  Save
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!selectedDocForChunks} onOpenChange={() => setSelectedDocForChunks(null)}>
+        <DialogContent className="max-w-4xl max-h-[80vh]">
+          <DialogHeader>
+            <DialogTitle>Chunks: {selectedDocForChunks?.source_file}</DialogTitle>
+          </DialogHeader>
+          <div className="flex items-center justify-between p-2 bg-muted rounded">
+            <span className="text-sm text-muted-foreground">
+              {chunksLoading ? 'Loading...' : `${chunks?.length || 0} chunks`}
+            </span>
+            <Button variant="ghost" size="icon" onClick={() => setSelectedDocForChunks(null)}>
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+          <ScrollArea className="h-[500px]">
+            {chunksLoading ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {chunks?.map((chunk) => (
+                  <div key={chunk.id} className="p-3 border rounded-lg">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Badge variant="outline">{chunk.chunk_index}</Badge>
+                        <Badge variant="secondary">L{chunk.hierarchy_level}</Badge>
+                        <code className="text-xs text-muted-foreground">{chunk.id.slice(0, 12)}...</code>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => handleEditStart(chunk)}
+                        >
+                          <Edit2 className="h-3 w-3" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => handleReembed(chunk)}
+                          disabled={reembedChunk.isPending}
+                        >
+                          <RefreshCw className={`h-3 w-3 ${reembedChunk.isPending ? 'animate-spin' : ''}`} />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => setDeletingChunk(chunk)}
+                        >
+                          <Trash2 className="h-3 w-3 text-destructive" />
+                        </Button>
+                      </div>
+                    </div>
+                    <p className="text-sm mt-2 line-clamp-3">{chunk.text}</p>
+                    {chunk.parent_chunk_id && (
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Parent: <code>{chunk.parent_chunk_id.slice(0, 12)}...</code>
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </ScrollArea>
+        </DialogContent>
+      </Dialog>
+
+      <ChunkDeleteDialog
+        open={!!deletingChunk}
+        onOpenChange={(open) => !open && setDeletingChunk(null)}
+        kbId={kbId}
+        chunk={deletingChunk}
+        onConfirm={() => deletingChunk && handleDeleteChunk(deletingChunk, true)}
+      />
+    </Card>
+  )
+}
+
+function LanceStatsPanel({ kbId }: { kbId: string }) {
+  const { data: stats, isLoading: statsLoading } = useLanceStats(kbId)
+  const { data: duplicates, isLoading: duplicatesLoading } = useLanceDuplicates(kbId)
+
+  return (
+    <div className="grid gap-4 md:grid-cols-2">
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Database className="h-5 w-5" />
+            Table Statistics
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {statsLoading ? (
+            <div className="flex items-center justify-center py-8">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            </div>
+          ) : stats ? (
+            <div className="grid gap-4 md:grid-cols-3">
+              <div className="p-4 border rounded-lg">
+                <p className="text-sm text-muted-foreground">Total Rows</p>
+                <p className="text-2xl font-bold">{stats.row_count.toLocaleString()}</p>
+              </div>
+              <div className="p-4 border rounded-lg">
+                <p className="text-sm text-muted-foreground">Table Size</p>
+                <p className="text-2xl font-bold">{stats.size_mb.toFixed(2)} MB</p>
+              </div>
+              <div className="p-4 border rounded-lg">
+                <p className="text-sm text-muted-foreground">Knowledge Base</p>
+                <p className="text-2xl font-bold font-mono">{stats.kb_id}</p>
+              </div>
+            </div>
+          ) : (
+            <p className="text-muted-foreground text-center py-4">No statistics available</p>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <AlertTriangle className="h-5 w-5" />
+            Duplicate Sources
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {duplicatesLoading ? (
+            <div className="flex items-center justify-center py-8">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            </div>
+          ) : duplicates && duplicates.duplicates && duplicates.duplicates.length > 0 ? (
+            <ScrollArea className="h-48">
+              <div className="space-y-3">
+                {duplicates.duplicates.map((dup, index) => (
+                  <div key={index} className="p-3 border border-yellow-200 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg">
+                    <p className="font-medium">{dup.source}</p>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      {dup.count} duplicate entries
+                    </p>
+                    <div className="flex flex-wrap gap-1 mt-2">
+                      {dup.doc_ids.map((id, i) => (
+                        <Badge key={i} variant="outline" className="text-xs font-mono">
+                          {id.slice(0, 8)}...
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </ScrollArea>
+          ) : (
+            <p className="text-muted-foreground text-center py-4">No duplicates found</p>
+          )}
+        </CardContent>
+      </Card>
+    </div>
   )
 }
 

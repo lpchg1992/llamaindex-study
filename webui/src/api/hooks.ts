@@ -856,3 +856,34 @@ export function useReembedChunk() {
     },
   })
 }
+
+export function useDeleteChunk() {
+  const queryClient = useQueryClient()
+  return useMutation<
+    { status: string; chunk_id: string; deleted_chunks: number; deleted_lance: number; children_orphaned: number },
+    Error,
+    { kbId: string; chunkId: string; cascade?: boolean }
+  >({
+    mutationFn: async ({ kbId, chunkId, cascade = true }) => {
+      const { data } = await apiClient.delete(`${API_BASE}/kbs/${kbId}/chunks/${chunkId}`, {
+        params: { cascade },
+      })
+      return data
+    },
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['documents', variables.kbId] })
+      queryClient.invalidateQueries({ queryKey: ['document-chunks', variables.kbId] })
+    },
+  })
+}
+
+export function useChunkChildren(kbId: string, chunkId: string) {
+  return useQuery<{ children: ChunkInfo[]; count: number }, Error>({
+    queryKey: ['chunk-children', kbId, chunkId],
+    queryFn: async () => {
+      const { data } = await apiClient.get(`${API_BASE}/kbs/${kbId}/chunks/${chunkId}/children`)
+      return data
+    },
+    enabled: !!kbId && !!chunkId,
+  })
+}

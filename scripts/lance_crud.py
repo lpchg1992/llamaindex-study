@@ -16,7 +16,6 @@ LanceDB CRUD CLI 工具
     delete-source <kb_id> <file>    按源文件删除
     delete-nodes <kb_id> <ids>     按节点 ID 删除（逗号分隔）
     export <kb_id> <output>         导出到 JSONL
-    rebuild <kb_id>                重建 docstore
 """
 
 import sys
@@ -152,12 +151,6 @@ def cmd_export(kb_id: str, output_path: str, table_name: Optional[str]):
     print(f"已导出 {count} 条记录")
 
 
-def cmd_rebuild(kb_id: str):
-    print(f"重建 {kb_id} 的 docstore ...")
-    count = LanceCRUDService.rebuild_docstore(kb_id)
-    print(f"已重建 {count} 个节点")
-
-
 def main():
     parser = argparse.ArgumentParser(
         description="LanceDB CRUD 工具",
@@ -224,9 +217,6 @@ def main():
     p_exp.add_argument("output", help="输出文件路径")
     p_exp.add_argument("--table", help="表名（默认为 kb_id）")
 
-    p_rebuild = subparsers.add_parser("rebuild", help="重建 docstore")
-    p_rebuild.add_argument("kb_id", help="知识库 ID")
-
     args = parser.parse_args()
 
     if not args.command:
@@ -255,8 +245,6 @@ def main():
         cmd_delete_nodes(args.kb_id, args.node_ids, table_name, args.dry_run)
     elif args.command == "export":
         cmd_export(args.kb_id, args.output, table_name)
-    elif args.command == "rebuild":
-        cmd_rebuild(args.kb_id)
     else:
         print(f"未知命令: {args.command}")
         parser.print_help()

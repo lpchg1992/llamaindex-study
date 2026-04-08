@@ -785,14 +785,15 @@ class SearchService:
         )
 
         if _use_auto_merging:
-            docstore = index.storage_context.docstore
-            if not docstore or len(docstore.docs) == 0:
-                logger.warning(
-                    "Auto-Merging 需要 docstore，但当前 KB 的 docstore 为空"
-                    "（可能使用 LanceDB 向量索引创建），将使用普通 retriever"
-                )
-            else:
-                try:
+            try:
+                from src.llamaindex_study.vector_store import LanceDBDocumentStore
+
+                lance_docstore = LanceDBDocumentStore(kb_id=kb_id)
+                lance_doc_count = len(lance_docstore)
+                if lance_doc_count > 0:
+                    logger.info(f"LanceDB docstore 有 {lance_doc_count} 个节点")
+                    index.storage_context.docstore = lance_docstore
+
                     from llama_index.core.retrievers import AutoMergingRetriever
 
                     merger = AutoMergingRetriever(
@@ -802,8 +803,11 @@ class SearchService:
                         verbose=False,
                     )
                     retriever = merger
-                except Exception:
-                    pass
+                    logger.info("Auto-Merging 已启用（使用 LanceDBDocumentStore）")
+                else:
+                    logger.warning("LanceDB docstore 为空，无法启用 Auto-Merging")
+            except Exception as e:
+                logger.warning(f"Auto-Merging 初始化失败: {e}")
         else:
             retriever = base_retriever
 
@@ -866,43 +870,43 @@ class SearchService:
         top_k: int,
         settings: Any,
     ) -> Any:
-        """创建混合搜索检索器（向量 + BM25 + 融合）"""
-        try:
-            from llama_index.core.retrievers import QueryFusionRetriever
-            from llama_index.retrievers.bm25 import BM25Retriever
+        """使用 LanceDB 原生混合搜索（向量 + FTS/BM25）"""
+        import lancedb
+        from llama_index.core.vector_stores.types import VectorStoreQueryMode
+        from llama_index.core.indices.vector_store.retrievers import (
+            VectorIndexRetriever,
+        )
 
-            # 检查 docstore 是否有数据（从 LanceDB 只加载向量时不包含 docstore）
-            docstore = index.storage_context.docstore
-            if not docstore or len(docstore.docs) == 0:
-                logger.warning(
-                    "混合搜索：docstore 为空（可能使用 LanceDB 向量索引创建），"
-                    "无法使用 BM25，回退到纯向量检索"
-                )
-                return vector_retriever
+        vector_store = index.vector_store
+        if hasattr(vector_store, "_get_lance_vector_store"):
+            lance_store = vector_store._get_lance_vector_store()
+        else:
+            lance_store = vector_store
 
-            bm25_retriever = BM25Retriever.from_defaults(
-                docstore=docstore,
-                similarity_top_k=top_k * 3,
+        if hasattr(lance_store, "ensure_fts_index"):
+            lance_store.ensure_fts_index()
+
+        if settings.hybrid_search_mode == "RRF":
+            reranker = lancedb.rerankers.RRFReranker()
+        else:
+            reranker = lancedb.rerankers.LinearCombinationReranker(
+                weight=settings.hybrid_search_alpha
             )
 
-            fusion_retriever = QueryFusionRetriever(
-                retrievers=[vector_retriever, bm25_retriever],
-                similarity_top_k=top_k,
-                num_queries=1,
-                mode=settings.hybrid_search_mode,
-                use_async=False,
-                verbose=False,
-            )
-            logger.info(
-                f"混合搜索: vector + BM25, mode={settings.hybrid_search_mode}, alpha={settings.hybrid_search_alpha}"
-            )
-            return fusion_retriever
-        except ImportError as e:
-            logger.warning(f"混合搜索依赖未安装，回退到向量检索: {e}")
-            return vector_retriever
-        except Exception as e:
-            logger.warning(f"混合搜索初始化失败，回退到向量检索: {e}")
-            return vector_retriever
+        if hasattr(lance_store, "_reranker"):
+            lance_store._reranker = reranker
+
+        hybrid_retriever = VectorIndexRetriever(
+            index,
+            similarity_top_k=top_k,
+            vector_store_query_mode=VectorStoreQueryMode.HYBRID,
+            alpha=settings.hybrid_search_alpha,
+        )
+
+        logger.info(
+            f"混合搜索: LanceDB 原生 hybrid, mode={settings.hybrid_search_mode}, alpha={settings.hybrid_search_alpha}"
+        )
+        return hybrid_retriever
 
     @staticmethod
     def search_multi(

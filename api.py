@@ -1556,22 +1556,6 @@ def repair_all_consistency(
     return result
 
 
-@app.post("/kbs/{kb_id}/docstore/rebuild")
-def rebuild_docstore(kb_id: str, req: DangerousOperationRequest):
-    """从 LanceDB 数据重建 docstore"""
-    from kb.services import VectorStoreService
-
-    info = KnowledgeBaseService.get_info(kb_id)
-    if not info:
-        raise HTTPException(status_code=404, detail=f"知识库不存在: {kb_id}")
-    if req.confirmation_name != kb_id:
-        raise HTTPException(status_code=400, detail="知识库名称不匹配，操作已取消")
-
-    vs = VectorStoreService.get_vector_store(kb_id)
-    nodes = vs.rebuild_docstore()
-    return {"kb_id": kb_id, "nodes_rebuilt": nodes}
-
-
 # ============== Obsidian 全库分类导入 ==============
 
 
@@ -2071,6 +2055,58 @@ def reembed_chunk(kb_id: str, chunk_id: str):
     }
 
 
+@app.delete("/kbs/{kb_id}/chunks/{chunk_id}")
+def delete_chunk(kb_id: str, chunk_id: str, cascade: bool = True):
+    """删除单个分块及其关联数据
+
+    Args:
+        kb_id: 知识库 ID
+        chunk_id: 分块 ID
+        cascade: 是否级联删除子分块，默认为 True
+    """
+    from kb.database import init_chunk_db
+
+    chunk_db = init_chunk_db()
+    chunk = chunk_db.get(chunk_id)
+    if not chunk:
+        raise HTTPException(status_code=404, detail=f"分块 {chunk_id} 不存在")
+    if chunk["kb_id"] != kb_id:
+        raise HTTPException(status_code=404, detail=f"分块不属于知识库 {kb_id}")
+
+    from kb.document_chunk_service import get_document_chunk_service
+
+    service = get_document_chunk_service(kb_id)
+    result = service.delete_chunk_cascade(chunk_id, cascade_children=cascade)
+
+    return {
+        "status": "success",
+        "chunk_id": chunk_id,
+        "deleted_chunks": result.get("chunks", 0),
+        "deleted_lance": result.get("lance", 0),
+        "children_orphaned": result.get("children_orphaned", 0),
+        "cascade": cascade,
+    }
+
+
+@app.get("/kbs/{kb_id}/chunks/{chunk_id}/children")
+def get_chunk_children(kb_id: str, chunk_id: str):
+    """获取分块的子分块列表"""
+    from kb.database import init_chunk_db
+
+    chunk_db = init_chunk_db()
+    chunk = chunk_db.get(chunk_id)
+    if not chunk:
+        raise HTTPException(status_code=404, detail=f"分块 {chunk_id} 不存在")
+    if chunk["kb_id"] != kb_id:
+        raise HTTPException(status_code=404, detail=f"分块不属于知识库 {kb_id}")
+
+    from kb.document_chunk_service import get_document_chunk_service
+
+    service = get_document_chunk_service(kb_id)
+    children = service.get_chunk_children(chunk_id)
+    return {"children": children, "count": len(children)}
+
+
 @app.get("/lance/tables")
 def lance_list_tables():
     """列出所有知识库的 LanceDB 表"""
@@ -2224,20 +2260,6 @@ def lance_export(kb_id: str, output_path: str, table_name: Optional[str] = None)
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"导出失败: {e}")
-
-
-@app.post("/lance/{kb_id}/rebuild-docstore")
-def lance_rebuild_docstore(kb_id: str):
-    """重建 docstore（从 LanceDB 节点数据）"""
-    from kb.lance_crud import LanceCRUDService
-
-    try:
-        count = LanceCRUDService.rebuild_docstore(kb_id)
-        return {"rebuilt": count, "kb_id": kb_id}
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"重建失败: {e}")
 
 
 # ============== WebSocket 接口 ==============

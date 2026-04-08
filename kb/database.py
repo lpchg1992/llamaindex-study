@@ -1695,6 +1695,15 @@ class ChunkDB:
             )
             return result.rowcount or 0
 
+    def update_parent(self, chunk_id: str, new_parent_id: Optional[str]) -> bool:
+        with self.db.session_scope() as session:
+            result = session.execute(
+                update(ChunkModel)
+                .where(ChunkModel.id == chunk_id)
+                .values(parent_chunk_id=new_parent_id, updated_at=time.time())
+            )
+            return (result.rowcount or 0) > 0
+
     def delete(self, chunk_id: str) -> bool:
         with self.db.session_scope() as session:
             result = session.execute(

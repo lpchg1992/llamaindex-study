@@ -197,6 +197,8 @@ curl -X POST http://localhost:37241/kbs \
 | GET | `/kbs/{kb_id}/chunks/{chunk_id}` | 获取指定 chunk |
 | PUT | `/kbs/{kb_id}/chunks/{chunk_id}` | 更新 chunk 文本 |
 | POST | `/kbs/{kb_id}/chunks/{chunk_id}/reembed` | 重新生成 chunk embedding |
+| DELETE | `/kbs/{kb_id}/chunks/{chunk_id}` | 删除单个 chunk（支持级联删除子 chunk） |
+| GET | `/kbs/{kb_id}/chunks/{chunk_id}/children` | 获取 chunk 的子节点列表 |
 
 ### 系统设置
 
@@ -1045,6 +1047,79 @@ curl -X POST http://localhost:37241/kbs/tech_tools/chunks/chunk-uuid-1/reembed
   "status": "success",
   "chunk_id": "chunk-uuid-1",
   "embedding_generated": true
+}
+```
+
+---
+
+### 删除单个 Chunk
+
+#### DELETE /kbs/{kb_id}/chunks/{chunk_id} - 删除单个 chunk（支持级联）
+
+```bash
+# 级联删除（包括子 chunk）
+curl -X DELETE "http://localhost:37241/kbs/tech_tools/chunks/chunk-uuid-1?cascade=true"
+
+# 非级联删除（将子 chunk 孤立）
+curl -X DELETE "http://localhost:37241/kbs/tech_tools/chunks/chunk-uuid-1?cascade=false"
+```
+
+**参数说明：**
+- `cascade=true`（默认）：递归删除该 chunk 的所有子 chunk
+- `cascade=false`：将该 chunk 的子 chunk 的 `parent_chunk_id` 设为 null（孤立）
+
+**响应示例：**
+
+```json
+{
+  "status": "success",
+  "chunk_id": "chunk-uuid-1",
+  "deleted_chunks": 3,
+  "deleted_lance": 3,
+  "children_orphaned": 0,
+  "cascade": true
+}
+```
+
+**返回字段：**
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `status` | string | 操作状态 |
+| `chunk_id` | string | 被删除的 chunk ID |
+| `deleted_chunks` | int | 从 chunk_db 删除的 chunk 数量 |
+| `deleted_lance` | int | 从 LanceDB 删除的向量记录数 |
+| `children_orphaned` | int | 被孤立的子 chunk 数量（cascade=false 时） |
+| `cascade` | bool | 是否执行了级联删除 |
+
+---
+
+#### GET /kbs/{kb_id}/chunks/{chunk_id}/children - 获取子节点列表
+
+```bash
+curl http://localhost:37241/kbs/tech_tools/chunks/chunk-uuid-1/children
+```
+
+**响应示例：**
+
+```json
+{
+  "children": [
+    {
+      "id": "chunk-uuid-2",
+      "doc_id": "doc-uuid-1",
+      "kb_id": "tech_tools",
+      "text": "子 chunk 内容...",
+      "text_length": 150,
+      "chunk_index": 1,
+      "parent_chunk_id": "chunk-uuid-1",
+      "hierarchy_level": 1,
+      "metadata": {},
+      "embedding_generated": true,
+      "created_at": 1710000000,
+      "updated_at": 1710000000
+    }
+  ],
+  "count": 1
 }
 ```
 
