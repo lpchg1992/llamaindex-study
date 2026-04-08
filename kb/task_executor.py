@@ -358,7 +358,6 @@ class TaskExecutor:
                     await lance_write_queue.enqueue(lance_store, nodes, kb_id)
                     processed_chunks += len(nodes)
 
-                # 更新去重状态（串行访问）
                 async with DedupLock():
                     dedup_manager.mark_processed(
                         file_path=abs_path,
@@ -366,6 +365,7 @@ class TaskExecutor:
                         doc_id=rel_path,
                         chunk_count=len(nodes),
                         vault_root=vault_root,
+                        nodes=nodes,
                     )
 
                 processed_sources.append(str(abs_path))
@@ -701,6 +701,12 @@ class TaskExecutor:
         params = task.params
 
         vs = self._get_vector_store(kb_id)
+        persist_dir = (
+            Path(params.get("persist_dir")).expanduser()
+            if params.get("persist_dir")
+            else self._get_vector_store(kb_id).persist_dir
+        )
+        dedup_manager = self._get_dedup_manager(kb_id, persist_dir)
         embed_processor = get_parallel_processor()
         lance_store = vs._get_lance_vector_store()
         node_parser = get_node_parser()
@@ -773,13 +779,13 @@ class TaskExecutor:
                 docs = processor.process_file(str(file_path))
 
                 if docs:
+                    file_nodes = []
                     for doc in docs:
                         nodes = node_parser.get_nodes_from_documents([doc])
 
                         if nodes:
                             texts = [node.get_content() for node in nodes]
 
-                            # 流式处理：embedding 完成后立即写入
                             results: List = [None] * len(texts)
                             async for (
                                 idx,
@@ -793,6 +799,24 @@ class TaskExecutor:
 
                             await lance_write_queue.enqueue(lance_store, nodes, kb_id)
                             stats["nodes"] += len(nodes)
+                            file_nodes.extend(nodes)
+
+                    if file_nodes:
+                        try:
+                            content = file_path.read_text(
+                                encoding="utf-8", errors="ignore"
+                            )
+                            doc_id = file_nodes[0].id_ if file_nodes else str(file_path)
+                            dedup_manager.mark_processed(
+                                file_path=file_path,
+                                content=content,
+                                doc_id=doc_id,
+                                chunk_count=len(file_nodes),
+                                vault_root=None,
+                                nodes=file_nodes,
+                            )
+                        except Exception as e:
+                            logger.warning(f"更新去重状态失败 {file_path}: {e}")
 
                     processed_sources.append(str(file_path))
                     stats["files"] += 1

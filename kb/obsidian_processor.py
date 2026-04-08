@@ -488,6 +488,7 @@ class ObsidianImporter:
                         doc_id,
                         chunk_count=len(nodes),
                         vault_root=self.vault_root,
+                        nodes=nodes,
                     )
                 except Exception as e:
                     logger.warning(f"更新去重状态失败: {e}")

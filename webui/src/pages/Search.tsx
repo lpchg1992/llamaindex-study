@@ -1,23 +1,41 @@
 import { useState } from 'react'
-import { useKBs, useSearch } from '@/api/hooks'
+import { useKBs, useSearch, useModels } from '@/api/hooks'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Badge } from '@/components/ui/badge'
+import { Switch } from '@/components/ui/switch'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Search as SearchIcon, FileText } from 'lucide-react'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { toast } from 'sonner'
 import type { SearchResult } from '@/types/api'
 
 export function SearchPage() {
   const { data: kbs } = useKBs()
+  const { data: embeddingModels } = useModels('embedding')
   const searchMutation = useSearch()
 
   const [query, setQuery] = useState('')
   const [selectedKBs, setSelectedKBs] = useState<string[]>([])
   const [results, setResults] = useState<SearchResult[]>([])
   const [hasSearched, setHasSearched] = useState(false)
+  const [retrievalMode, setRetrievalMode] = useState<'vector' | 'hybrid'>('vector')
+  const [embedModelId, setEmbedModelId] = useState<string>('')
+  const [useAutoMerging, setUseAutoMerging] = useState(false)
+  const [kbSearch, setKbSearch] = useState('')
+
+  const filteredKBs = kbs?.filter(kb =>
+    (kb.name || kb.id).toLowerCase().includes(kbSearch.toLowerCase())
+  ) || []
 
   const toggleKB = (kbId: string) => {
     setSelectedKBs((prev) =>
@@ -34,34 +52,105 @@ export function SearchPage() {
         kb_ids: selectedKBs.join(','),
         top_k: 10,
         route_mode: 'general',
+        retrieval_mode: retrievalMode,
+        embed_model_id: embedModelId || undefined,
+        use_auto_merging: useAutoMerging || undefined,
       })
       setResults(response)
     } catch (error) {
       console.error('Search failed:', error)
+      toast.error('Search failed')
     }
+  }
+
+  const selectAllKBs = () => {
+    setSelectedKBs(filteredKBs.map(kb => kb.id))
+  }
+
+  const clearAllKBs = () => {
+    setSelectedKBs([])
   }
 
   return (
     <div className="flex h-full">
-      <div className="w-80 border-r p-4">
-        <h2 className="mb-4 text-lg font-semibold">Search</h2>
+      <div className="w-80 border-r p-4 flex flex-col">
+        <h2 className="mb-4 text-lg font-semibold">Search Settings</h2>
 
-        <div className="space-y-4">
+        <div className="space-y-4 flex-1 overflow-y-auto">
           <div className="space-y-2">
-            <Label>Knowledge Bases</Label>
-            <ScrollArea className="h-64">
+            <Label>Retrieval Mode</Label>
+            <Select value={retrievalMode} onValueChange={(v) => setRetrievalMode(v as 'vector' | 'hybrid')}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="vector">Vector Search</SelectItem>
+                <SelectItem value="hybrid">Hybrid (Vector + BM25)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-2">
+            <Label>Embedding Model</Label>
+            <Select value={embedModelId} onValueChange={setEmbedModelId}>
+              <SelectTrigger>
+                <SelectValue placeholder="Default model" />
+              </SelectTrigger>
+              <SelectContent>
+                {embeddingModels?.map((model) => (
+                  <SelectItem key={model.id} value={model.id}>
+                    {model.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div className="space-y-0.5">
+              <Label htmlFor="auto-merging" className="text-sm">Auto-Merging</Label>
+              <p className="text-xs text-muted-foreground">For hierarchical chunks</p>
+            </div>
+            <Switch
+              id="auto-merging"
+              checked={useAutoMerging}
+              onCheckedChange={setUseAutoMerging}
+            />
+          </div>
+
+          <div className="border-t pt-4">
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label>Knowledge Bases</Label>
+                <div className="flex gap-1">
+                  <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={selectAllKBs}>
+                    All
+                  </Button>
+                  <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={clearAllKBs}>
+                    Clear
+                  </Button>
+                </div>
+              </div>
+              <Input
+                placeholder="Search KBs..."
+                value={kbSearch}
+                onChange={(e) => setKbSearch(e.target.value)}
+                className="h-8"
+              />
+            </div>
+            <ScrollArea className="h-48 mt-2">
               <div className="space-y-2">
-                {kbs?.map((kb) => (
+                {filteredKBs.map((kb) => (
                   <div key={kb.id} className="flex items-center space-x-2">
                     <Checkbox
                       id={kb.id}
                       checked={selectedKBs.includes(kb.id)}
                       onCheckedChange={() => toggleKB(kb.id)}
                     />
-                    <Label htmlFor={kb.id} className="text-sm font-normal">
-                      {kb.name || kb.id}
-                      <span className="ml-2 text-xs text-muted-foreground">
-                        ({kb.row_count || 0})
+                    <Label htmlFor={kb.id} className="text-sm font-normal flex-1 cursor-pointer">
+                      <span className="block">{kb.name || kb.id}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {kb.row_count || 0} docs
                       </span>
                     </Label>
                   </div>

@@ -176,8 +176,49 @@ class ModelModel(Base):
     is_active: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     is_default: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     config: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
-    created_at: Mapped[float] = mapped_column(Float, nullable=False)
-    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+    created_at: Mapped[float] = mapped_column(Float)
+    updated_at: Mapped[float] = mapped_column(Float)
+
+
+class DocumentModel(Base):
+    __tablename__ = "documents"
+    __table_args__ = (
+        Index("idx_documents_kb_id", "kb_id"),
+        Index("idx_documents_hash", "file_hash"),
+    )
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    kb_id: Mapped[str] = mapped_column(String, nullable=False)
+    source_file: Mapped[str] = mapped_column(String, nullable=False)
+    source_path: Mapped[str] = mapped_column(String, nullable=False)
+    file_hash: Mapped[str] = mapped_column(String, nullable=False)
+    file_size: Mapped[int] = mapped_column(Integer, default=0)
+    mime_type: Mapped[str] = mapped_column(String, default="")
+    chunk_count: Mapped[int] = mapped_column(Integer, default=0)
+    total_chars: Mapped[int] = mapped_column(Integer, default=0)
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[float] = mapped_column(Float)
+    updated_at: Mapped[float] = mapped_column(Float)
+
+
+class ChunkModel(Base):
+    __tablename__ = "chunks"
+    __table_args__ = (
+        Index("idx_chunks_doc_id", "doc_id"),
+        Index("idx_chunks_kb_id", "kb_id"),
+        Index("idx_chunks_parent", "parent_chunk_id"),
+    )
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    doc_id: Mapped[str] = mapped_column(String, nullable=False)
+    kb_id: Mapped[str] = mapped_column(String, nullable=False)
+    text: Mapped[str] = mapped_column(Text)
+    text_length: Mapped[int] = mapped_column(Integer)
+    chunk_index: Mapped[int] = mapped_column(Integer, default=0)
+    parent_chunk_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    hierarchy_level: Mapped[int] = mapped_column(Integer, default=0)
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    embedding_generated: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[float] = mapped_column(Float)
+    updated_at: Mapped[float] = mapped_column(Float)
 
 
 def _json_dump(data: Any, default: Any) -> str:
@@ -1388,6 +1429,296 @@ class CategoryRuleDB:
         return count
 
 
+class DocumentDB:
+    def __init__(self, db: DatabaseManager):
+        self.db = db
+
+    @staticmethod
+    def _to_dict(row: DocumentModel) -> Dict[str, Any]:
+        return {
+            "id": row.id,
+            "kb_id": row.kb_id,
+            "source_file": row.source_file,
+            "source_path": row.source_path,
+            "file_hash": row.file_hash,
+            "file_size": row.file_size,
+            "mime_type": row.mime_type,
+            "chunk_count": row.chunk_count,
+            "total_chars": row.total_chars,
+            "metadata": _json_load(row.metadata_json, {}),
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
+        }
+
+    def create(
+        self,
+        kb_id: str,
+        source_file: str,
+        source_path: str,
+        file_hash: str,
+        file_size: int = 0,
+        mime_type: str = "",
+        metadata: Dict[str, Any] = None,
+        doc_id: str = None,
+    ) -> Dict[str, Any]:
+        now = time.time()
+        if doc_id is None:
+            doc_id = f"doc_{now}_{hash(source_file) % 100000:05d}"
+        stmt = sqlite_insert(DocumentModel).values(
+            id=doc_id,
+            kb_id=kb_id,
+            source_file=source_file,
+            source_path=source_path,
+            file_hash=file_hash,
+            file_size=file_size,
+            mime_type=mime_type,
+            chunk_count=0,
+            total_chars=0,
+            metadata_json=_json_dump(metadata, {}),
+            created_at=now,
+            updated_at=now,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[DocumentModel.id],
+            set_={
+                "source_file": stmt.excluded.source_file,
+                "source_path": stmt.excluded.source_path,
+                "file_hash": stmt.excluded.file_hash,
+                "file_size": stmt.excluded.file_size,
+                "mime_type": stmt.excluded.mime_type,
+                "metadata_json": stmt.excluded.metadata_json,
+                "updated_at": now,
+            },
+        )
+        with self.db.session_scope() as session:
+            session.execute(stmt)
+        return self.get(doc_id)
+
+    def get(self, doc_id: str) -> Optional[Dict[str, Any]]:
+        with self.db.session_scope() as session:
+            row = session.get(DocumentModel, doc_id)
+            return self._to_dict(row) if row else None
+
+    def get_by_kb(self, kb_id: str) -> List[Dict[str, Any]]:
+        with self.db.session_scope() as session:
+            rows = session.scalars(
+                select(DocumentModel)
+                .where(DocumentModel.kb_id == kb_id)
+                .order_by(DocumentModel.updated_at.desc())
+            ).all()
+            return [self._to_dict(row) for row in rows]
+
+    def update_stats(
+        self, doc_id: str, chunk_count: int = None, total_chars: int = None
+    ) -> bool:
+        with self.db.session_scope() as session:
+            updates = {"updated_at": time.time()}
+            if chunk_count is not None:
+                updates["chunk_count"] = chunk_count
+            if total_chars is not None:
+                updates["total_chars"] = total_chars
+            result = session.execute(
+                update(DocumentModel)
+                .where(DocumentModel.id == doc_id)
+                .values(**updates)
+            )
+            return (result.rowcount or 0) > 0
+
+    def delete(self, doc_id: str) -> bool:
+        with self.db.session_scope() as session:
+            result = session.execute(
+                delete(DocumentModel).where(DocumentModel.id == doc_id)
+            )
+            return (result.rowcount or 0) > 0
+
+    def get_stats(self, kb_id: str) -> Dict[str, int]:
+        with self.db.session_scope() as session:
+            total = (
+                session.scalar(
+                    select(func.count())
+                    .select_from(DocumentModel)
+                    .where(DocumentModel.kb_id == kb_id)
+                )
+                or 0
+            )
+            total_chunks = (
+                session.scalar(
+                    select(func.sum(DocumentModel.chunk_count)).where(
+                        DocumentModel.kb_id == kb_id
+                    )
+                )
+                or 0
+            )
+            return {"document_count": int(total), "total_chunks": int(total_chunks)}
+
+
+class ChunkDB:
+    def __init__(self, db: DatabaseManager):
+        self.db = db
+
+    @staticmethod
+    def _to_dict(row: ChunkModel) -> Dict[str, Any]:
+        return {
+            "id": row.id,
+            "doc_id": row.doc_id,
+            "kb_id": row.kb_id,
+            "text": row.text,
+            "text_length": row.text_length,
+            "chunk_index": row.chunk_index,
+            "parent_chunk_id": row.parent_chunk_id,
+            "hierarchy_level": row.hierarchy_level,
+            "metadata": _json_load(row.metadata_json, {}),
+            "embedding_generated": bool(row.embedding_generated),
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
+        }
+
+    def create(
+        self,
+        doc_id: str,
+        kb_id: str,
+        text: str,
+        chunk_index: int = 0,
+        parent_chunk_id: str = None,
+        hierarchy_level: int = 0,
+        metadata: Dict[str, Any] = None,
+    ) -> Dict[str, Any]:
+        now = time.time()
+        chunk_id = f"chunk_{now}_{hash(text[:50]) % 100000:05d}"
+        stmt = sqlite_insert(ChunkModel).values(
+            id=chunk_id,
+            doc_id=doc_id,
+            kb_id=kb_id,
+            text=text,
+            text_length=len(text),
+            chunk_index=chunk_index,
+            parent_chunk_id=parent_chunk_id,
+            hierarchy_level=hierarchy_level,
+            metadata_json=_json_dump(metadata or {}, {}),
+            embedding_generated=0,
+            created_at=now,
+            updated_at=now,
+        )
+        with self.db.session_scope() as session:
+            session.execute(stmt)
+        return self.get(chunk_id)
+
+    def create_bulk(self, chunks: List[Dict[str, Any]]) -> int:
+        if not chunks:
+            return 0
+        now = time.time()
+        with self.db.session_scope() as session:
+            for chunk in chunks:
+                stmt = sqlite_insert(ChunkModel).values(
+                    id=chunk.get(
+                        "id", f"chunk_{now}_{hash(chunk['text'][:50]) % 100000:05d}"
+                    ),
+                    doc_id=chunk["doc_id"],
+                    kb_id=chunk["kb_id"],
+                    text=chunk["text"],
+                    text_length=len(chunk["text"]),
+                    chunk_index=chunk.get("chunk_index", 0),
+                    parent_chunk_id=chunk.get("parent_chunk_id"),
+                    hierarchy_level=chunk.get("hierarchy_level", 0),
+                    metadata_json=_json_dump(chunk.get("metadata", {}), {}),
+                    embedding_generated=chunk.get("embedding_generated", 0),
+                    created_at=now,
+                    updated_at=now,
+                )
+                session.execute(stmt)
+        return len(chunks)
+
+    def get(self, chunk_id: str) -> Optional[Dict[str, Any]]:
+        with self.db.session_scope() as session:
+            row = session.get(ChunkModel, chunk_id)
+            return self._to_dict(row) if row else None
+
+    def get_by_doc(self, doc_id: str) -> List[Dict[str, Any]]:
+        with self.db.session_scope() as session:
+            rows = session.scalars(
+                select(ChunkModel)
+                .where(ChunkModel.doc_id == doc_id)
+                .order_by(ChunkModel.chunk_index, ChunkModel.hierarchy_level)
+            ).all()
+            return [self._to_dict(row) for row in rows]
+
+    def get_by_kb(self, kb_id: str, limit: int = 1000) -> List[Dict[str, Any]]:
+        with self.db.session_scope() as session:
+            rows = session.scalars(
+                select(ChunkModel)
+                .where(ChunkModel.kb_id == kb_id)
+                .order_by(ChunkModel.updated_at.desc())
+                .limit(limit)
+            ).all()
+            return [self._to_dict(row) for row in rows]
+
+    def get_children(self, parent_chunk_id: str) -> List[Dict[str, Any]]:
+        with self.db.session_scope() as session:
+            rows = session.scalars(
+                select(ChunkModel)
+                .where(ChunkModel.parent_chunk_id == parent_chunk_id)
+                .order_by(ChunkModel.chunk_index)
+            ).all()
+            return [self._to_dict(row) for row in rows]
+
+    def update_text(self, chunk_id: str, new_text: str) -> bool:
+        with self.db.session_scope() as session:
+            result = session.execute(
+                update(ChunkModel)
+                .where(ChunkModel.id == chunk_id)
+                .values(
+                    text=new_text,
+                    text_length=len(new_text),
+                    embedding_generated=0,
+                    updated_at=time.time(),
+                )
+            )
+            return (result.rowcount or 0) > 0
+
+    def mark_embedded(self, chunk_id: str) -> bool:
+        with self.db.session_scope() as session:
+            result = session.execute(
+                update(ChunkModel)
+                .where(ChunkModel.id == chunk_id)
+                .values(embedding_generated=1, updated_at=time.time())
+            )
+            return (result.rowcount or 0) > 0
+
+    def mark_embedded_bulk(self, chunk_ids: List[str]) -> int:
+        if not chunk_ids:
+            return 0
+        with self.db.session_scope() as session:
+            result = session.execute(
+                update(ChunkModel)
+                .where(ChunkModel.id.in_(chunk_ids))
+                .values(embedding_generated=1, updated_at=time.time())
+            )
+            return result.rowcount or 0
+
+    def delete(self, chunk_id: str) -> bool:
+        with self.db.session_scope() as session:
+            result = session.execute(
+                delete(ChunkModel).where(ChunkModel.id == chunk_id)
+            )
+            return (result.rowcount or 0) > 0
+
+    def delete_by_doc(self, doc_id: str) -> int:
+        with self.db.session_scope() as session:
+            result = session.execute(
+                delete(ChunkModel).where(ChunkModel.doc_id == doc_id)
+            )
+            return result.rowcount or 0
+
+    def get_unembedded(self, kb_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+        with self.db.session_scope() as session:
+            rows = session.scalars(
+                select(ChunkModel)
+                .where(ChunkModel.kb_id == kb_id, ChunkModel.embedding_generated == 0)
+                .limit(limit)
+            ).all()
+            return [self._to_dict(row) for row in rows]
+
+
 def init_sync_db() -> SyncStateDB:
     return SyncStateDB(get_db())
 
@@ -1406,3 +1737,11 @@ def init_kb_meta_db() -> KnowledgeBaseMetaDB:
 
 def init_category_rule_db() -> CategoryRuleDB:
     return CategoryRuleDB(get_db())
+
+
+def init_document_db() -> DocumentDB:
+    return DocumentDB(get_db())
+
+
+def init_chunk_db() -> ChunkDB:
+    return ChunkDB(get_db())

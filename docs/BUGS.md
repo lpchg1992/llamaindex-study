@@ -29,4 +29,4 @@ A lone surrogate character (U+DC88 high surrogate) exists in the query string or
 **Workaround:**
 Disable reranker temporarily to isolate the issue.
 
-**Status:** Open - needs investigation
+**Status:** Open - investigation in progress

@@ -186,6 +186,31 @@ curl -X POST http://localhost:37241/kbs \
 > 导入相关端点统一走 `kb/import_service.py` 的 `ImportApplicationService`。  
 > 同一类导入在 API、CLI、脚本三种入口保持同一业务语义与参数解释。
 
+### 文档管理
+
+| 方法 | 端点 | 功能 |
+|------|------|------|
+| GET | `/kbs/{kb_id}/documents` | 列出知识库的所有文档 |
+| GET | `/kbs/{kb_id}/documents/{doc_id}` | 获取指定文档 |
+| DELETE | `/kbs/{kb_id}/documents/{doc_id}` | 删除文档及其 chunks |
+| GET | `/kbs/{kb_id}/documents/{doc_id}/chunks` | 列出文档的所有 chunks |
+| GET | `/kbs/{kb_id}/chunks/{chunk_id}` | 获取指定 chunk |
+| PUT | `/kbs/{kb_id}/chunks/{chunk_id}` | 更新 chunk 文本 |
+| POST | `/kbs/{kb_id}/chunks/{chunk_id}/reembed` | 重新生成 chunk embedding |
+
+### 系统设置
+
+| 方法 | 端点 | 功能 |
+|------|------|------|
+| GET | `/settings` | 获取系统设置 |
+| PUT | `/settings` | 更新系统设置 |
+
+### 管理操作
+
+| 方法 | 端点 | 功能 |
+|------|------|------|
+| POST | `/admin/restart-scheduler` | 重启任务调度器 |
+
 ### 检索查询
 
 | 方法 | 端点 | 功能 |
@@ -198,8 +223,9 @@ curl -X POST http://localhost:37241/kbs \
 | 方法 | 端点 | 功能 |
 |------|------|------|
 | GET | `/vendors` | 列出所有供应商 |
-| POST | `/vendors` | 创建/更新供应商 |
+| POST | `/vendors` | 创建供应商 |
 | GET | `/vendors/{vendor_id}` | 获取指定供应商 |
+| PUT | `/vendors/{vendor_id}` | 更新供应商 |
 | DELETE | `/vendors/{vendor_id}` | 删除供应商 |
 
 **供应商示例**:
@@ -229,8 +255,9 @@ curl -X POST http://localhost:37241/vendors \
 | 方法 | 端点 | 功能 |
 |------|------|------|
 | GET | `/models` | 列出所有模型（支持 `?type=` 筛选） |
-| POST | `/models` | 创建/更新模型（供应商不存在时自动创建） |
+| POST | `/models` | 创建模型（供应商不存在时自动创建） |
 | GET | `/models/{model_id}` | 获取指定模型 |
+| PUT | `/models/{model_id}` | 更新模型 |
 | DELETE | `/models/{model_id}` | 删除模型 |
 | PUT | `/models/{model_id}/default` | 设置默认模型 |
 
@@ -893,6 +920,192 @@ curl -X POST "http://localhost:37241/category/classify" \
   "matched_by": "llm",
   "confidence": 0.85,
   "reason": "基于 LLM 分析，文件夹内容与 IT 技术相关"
+}
+```
+
+---
+
+## 文档管理
+
+### 列出文档
+
+#### GET /kbs/{kb_id}/documents - 列出知识库的所有文档
+
+```bash
+curl http://localhost:37241/kbs/tech_tools/documents
+```
+
+```json
+{
+  "id": "doc-uuid-1234",
+  "kb_id": "tech_tools",
+  "source_file": "guide.md",
+  "source_path": "/path/to/guide.md",
+  "file_hash": "abc123...",
+  "file_size": 12345,
+  "mime_type": "text/markdown",
+  "chunk_count": 5,
+  "total_chars": 15000,
+  "metadata": {},
+  "created_at": 1712500000.0,
+  "updated_at": 1712500000.0
+}
+```
+
+### 获取文档详情
+
+#### GET /kbs/{kb_id}/documents/{doc_id} - 获取指定文档
+
+```bash
+curl http://localhost:37241/kbs/tech_tools/documents/doc-uuid-1234
+```
+
+### 删除文档
+
+#### DELETE /kbs/{kb_id}/documents/{doc_id} - 删除文档及其所有 chunks
+
+```bash
+curl -X DELETE http://localhost:37241/kbs/tech_tools/documents/doc-uuid-1234
+```
+
+```json
+{
+  "status": "deleted",
+  "doc_id": "doc-uuid-1234",
+  "chunks_deleted": 5
+}
+```
+
+### 列出文档的 Chunks
+
+#### GET /kbs/{kb_id}/documents/{doc_id}/chunks - 列出文档的所有 chunks
+
+```bash
+curl http://localhost:37241/kbs/tech_tools/documents/doc-uuid-1234/chunks
+```
+
+```json
+[
+  {
+    "id": "chunk-uuid-1",
+    "doc_id": "doc-uuid-1234",
+    "kb_id": "tech_tools",
+    "text": "这是第一个 chunk 的内容...",
+    "text_length": 500,
+    "chunk_index": 0,
+    "parent_chunk_id": null,
+    "hierarchy_level": 0,
+    "metadata": {},
+    "embedding_generated": true,
+    "created_at": 1712500000.0,
+    "updated_at": 1712500000.0
+  }
+]
+```
+
+## Chunk 管理
+
+### 获取 Chunk
+
+#### GET /kbs/{kb_id}/chunks/{chunk_id} - 获取指定 chunk
+
+```bash
+curl http://localhost:37241/kbs/tech_tools/chunks/chunk-uuid-1
+```
+
+### 更新 Chunk 文本
+
+#### PUT /kbs/{kb_id}/chunks/{chunk_id} - 更新 chunk 文本
+
+```bash
+curl -X PUT http://localhost:37241/kbs/tech_tools/chunks/chunk-uuid-1 \
+  -H "Content-Type: application/json" \
+  -d '{"text": "更新后的 chunk 内容..."}'
+```
+
+### 重新生成 Chunk Embedding
+
+#### POST /kbs/{kb_id}/chunks/{chunk_id}/reembed - 重新生成 embedding
+
+```bash
+curl -X POST http://localhost:37241/kbs/tech_tools/chunks/chunk-uuid-1/reembed
+```
+
+```json
+{
+  "status": "success",
+  "chunk_id": "chunk-uuid-1",
+  "embedding_generated": true
+}
+```
+
+---
+
+## 系统设置
+
+### 获取系统设置
+
+#### GET /settings - 获取当前系统配置
+
+```bash
+curl http://localhost:37241/settings
+```
+
+```json
+{
+  "use_hybrid_search": false,
+  "hybrid_search_mode": "relative_score",
+  "hybrid_search_alpha": 0.5,
+  "use_auto_merging": false,
+  "use_hyde": false,
+  "use_multi_query": false,
+  "multi_query_num": 3,
+  "use_reranker": true,
+  "response_mode": "compact",
+  "chunk_strategy": "hierarchical",
+  "chunk_size": 1024,
+  "chunk_overlap": 100,
+  "hierarchical_chunk_sizes": [2048, 1024, 512],
+  "siliconflow_api_key": "***",
+  "siliconflow_base_url": "https://api.siliconflow.cn/v1",
+  "siliconflow_model": "Pro/deepseek-ai/DeepSeek-V3.2",
+  "ollama_base_url": "http://localhost:11434",
+  "ollama_llm_model": "tomng/lfm2.5-instruct:1.2b",
+  "ollama_embed_model": "bge-m3",
+  "embed_model_id": null,
+  "max_retries": 5,
+  "max_concurrent_tasks": 10,
+  "scheduler_interval": 30.0
+}
+```
+
+### 更新系统设置
+
+#### PUT /settings - 更新系统配置
+
+```bash
+curl -X PUT http://localhost:37241/settings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "use_hybrid_search": true,
+    "use_auto_merging": true
+  }'
+```
+
+## 管理操作
+
+### 重启调度器
+
+#### POST /admin/restart-scheduler - 重启任务调度器
+
+```bash
+curl -X POST http://localhost:37241/admin/restart-scheduler
+```
+
+```json
+{
+  "status": "restarting",
+  "message": "调度器正在重启..."
 }
 ```
 

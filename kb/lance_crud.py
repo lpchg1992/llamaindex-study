@@ -705,6 +705,51 @@ class LanceCRUDService:
         return nodes_rebuilt
 
     @staticmethod
+    def delete_by_chunk_ids(
+        kb_id: str,
+        chunk_ids: List[str],
+        table_name: Optional[str] = None,
+    ) -> int:
+        return LanceCRUDService.delete_by_node_ids(kb_id, chunk_ids, table_name)
+
+    @staticmethod
+    def upsert_vector(
+        chunk_id: str,
+        doc_id: str,
+        vector: List[float],
+        kb_id: str = None,
+        table_name: Optional[str] = None,
+    ) -> bool:
+        import lancedb
+
+        if table_name is None and kb_id:
+            table_name = kb_id
+
+        if not table_name:
+            raise ValueError("需要提供 kb_id 或 table_name")
+
+        db = LanceCRUDService.connect(kb_id or table_name)
+        result = db.list_tables()
+        table_names = list(result.tables) if hasattr(result, "tables") else []
+
+        if table_name not in table_names:
+            raise ValueError(f"表 {table_name} 不存在")
+
+        table = db.open_table(table_name)
+
+        import pyarrow as pa
+
+        table.upsert(
+            {
+                "id": [chunk_id],
+                "doc_id": [doc_id],
+                "vector": [vector],
+            }
+        )
+
+        return True
+
+    @staticmethod
     def get_schema(kb_id: str, table_name: Optional[str] = None) -> Dict[str, Any]:
         """获取表结构
 

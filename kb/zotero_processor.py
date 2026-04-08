@@ -16,7 +16,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple
+from typing import Any, Callable, List, Optional, Tuple
 
 from llama_index.core import SimpleDirectoryReader
 from llama_index.core.schema import Document as LlamaDocument
@@ -431,7 +431,7 @@ class ZoteroImporter:
         vector_store,
         embed_model,
         progress: ProcessingProgress = None,
-    ) -> int:
+    ) -> Tuple[int, List[Any]]:
         """
         导入单个文献
 
@@ -442,7 +442,7 @@ class ZoteroImporter:
             progress: 进度记录
 
         Returns:
-            生成的节点数
+            (生成的节点数, 所有节点列表)
         """
         from kb.zotero_reader import create_zotero_reader
 
@@ -453,6 +453,7 @@ class ZoteroImporter:
         )
 
         total_nodes = 0
+        all_nodes = []
         creators_str = ", ".join(item.creators) if item.creators else ""
         base_metadata = {
             "item_id": item.item_id,
@@ -461,7 +462,6 @@ class ZoteroImporter:
             "tags": ", ".join(item.tags),
         }
 
-        # 1. 处理标注/笔记
         if item.annotations or item.notes:
             text_parts = [f"# {item.title}"]
             if item.creators:
@@ -491,6 +491,7 @@ class ZoteroImporter:
                 )
                 nodes = node_parser.get_nodes_from_documents([doc])
                 total_nodes += self.processor.save_nodes(vector_store, nodes, progress)
+                all_nodes.extend(nodes)
 
         if item.annotations or item.notes:
             logger.debug(
@@ -531,10 +532,11 @@ class ZoteroImporter:
                     total_nodes += self.processor.save_nodes(
                         vector_store, nodes, progress
                     )
+                    all_nodes.extend(nodes)
             else:
                 logger.warning(f"文档处理返回空结果: {file_path}")
 
-        return total_nodes
+        return total_nodes, all_nodes
 
     def import_collection(
         self,
@@ -625,13 +627,15 @@ class ZoteroImporter:
             logger.debug(f"处理文献: {item.title} (item_id={item_id})")
 
             try:
-                nodes = self.import_item(item, vector_store, embed_model, progress)
-                if nodes > 0:
-                    stats["nodes"] += nodes
+                total_nodes, all_nodes = self.import_item(
+                    item, vector_store, embed_model, progress
+                )
+                if total_nodes > 0:
+                    stats["nodes"] += total_nodes
                     stats["items"] += 1
                     if item.file_path:
                         stats["processed_sources"].append(item.file_path)
-                    logger.info(f"文献导入成功: {item.title}, 节点数: {nodes}")
+                    logger.info(f"文献导入成功: {item.title}, 节点数: {total_nodes}")
 
                     if self.dedup_manager:
                         self.dedup_manager.mark_processed(
@@ -640,7 +644,8 @@ class ZoteroImporter:
                             else Path(str(item_id)),
                             content=f"zotero_{item_id}_{item.title}",
                             doc_id=f"zotero_{item_id}",
-                            chunk_count=nodes,
+                            chunk_count=total_nodes,
+                            nodes=all_nodes,
                         )
 
                     if progress:

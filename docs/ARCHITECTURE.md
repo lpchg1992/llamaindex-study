@@ -591,8 +591,9 @@ models 表 (embedding 类型):
 | 方法 | 端点 | 功能 |
 |------|------|------|
 | GET | `/vendors` | 列出所有供应商 |
-| POST | `/vendors` | 创建/更新供应商 |
+| POST | `/vendors` | 创建供应商 |
 | GET | `/vendors/{vendor_id}` | 获取指定供应商 |
+| PUT | `/vendors/{vendor_id}` | 更新供应商 |
 | DELETE | `/vendors/{vendor_id}` | 删除供应商 |
 
 **模型管理**：
@@ -600,12 +601,70 @@ models 表 (embedding 类型):
 | 方法 | 端点 | 功能 |
 |------|------|------|
 | GET | `/models` | 列出所有模型（支持 `?type=` 筛选） |
-| POST | `/models` | 创建/更新模型（供应商不存在时自动创建） |
+| POST | `/models` | 创建模型（供应商不存在时自动创建） |
 | GET | `/models/{model_id}` | 获取指定模型 |
+| PUT | `/models/{model_id}` | 更新模型 |
 | DELETE | `/models/{model_id}` | 删除模型 |
 | PUT | `/models/{model_id}/default` | 设置默认模型 |
 
 **类型筛选**: `GET /models?type=llm`、`GET /models?type=embedding`、`GET /models?type=reranker`
+
+#### 双向 LLM 降级机制
+
+系统支持 **SiliconFlow ↔ Ollama** 双向自动降级：
+
+```
+请求 → SiliconFlow API
+    ├── 成功 → 返回结果
+    └── 失败 (503/网络错误) → 降级到 Ollama
+            ├── Ollama 成功 → 返回结果
+            └── Ollama 失败 → 返回错误
+```
+
+**核心组件**：
+
+| 组件 | 文件 | 说明 |
+|------|------|------|
+| `RetryableSiliconFlowLLM` | `src/llamaindex_study/ollama_utils.py` | SiliconFlow LLM 封装，支持 503 时自动降级到 Ollama |
+| `OllamaWithSiliconFlowFallback` | `src/llamaindex_study/ollama_utils.py` | Ollama LLM 封装，支持失败时回退到 SiliconFlow |
+
+**降级场景**：
+
+| 场景 | 降级路径 |
+|------|---------|
+| SiliconFlow API 503 | → Ollama (本地) |
+| SiliconFlow API 超时 | → Ollama (本地) |
+| Ollama 本地模型不可用 | → SiliconFlow (云端) |
+
+**配置方式**：
+
+```python
+# 使用 SiliconFlow，失败自动降级到 Ollama
+llm = RetryableSiliconFlowLLM(
+    model="Pro/deepseek-ai/DeepSeek-V3.2",
+    api_key="your-key",
+    api_base="https://api.siliconflow.cn/v1",
+    fallback_to_ollama=True,  # 启用降级
+    ollama_model="tomng/lfm2.5-instruct:1.2b",
+    ollama_base_url="http://localhost:11434"
+)
+
+# 使用 Ollama，失败自动降级到 SiliconFlow
+llm = OllamaWithSiliconFlowFallback(
+    model="tomng/lfm2.5-instruct:1.2b",
+    base_url="http://localhost:11434",
+    fallback_to_siliconflow=True,  # 启用降级
+    siliconflow_model="Pro/deepseek-ai/DeepSeek-V3.2",
+    siliconflow_api_key="your-key"
+)
+```
+
+**熔断器保护**：
+
+每个 Ollama 端点独立维护熔断器：
+- 连续 5 次失败 → 熔断打开
+- 60 秒后进入半开状态
+- 试探成功 → 熔断关闭
 
 #### CLI 命令
 

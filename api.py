@@ -918,6 +918,24 @@ def delete_vendor(vendor_id: str):
     return {"status": "deleted", "vendor_id": vendor_id}
 
 
+@app.put("/vendors/{vendor_id}", response_model=VendorInfo)
+def update_vendor(vendor_id: str, req: VendorCreateRequest):
+    """更新供应商"""
+    from kb.database import init_vendor_db
+
+    db = init_vendor_db()
+    if not db.get(vendor_id):
+        raise HTTPException(status_code=404, detail=f"供应商 {vendor_id} 不存在")
+    db.upsert(
+        vendor_id=vendor_id,
+        name=req.name,
+        api_base=req.api_base,
+        api_key=req.api_key,
+        is_active=req.is_active,
+    )
+    return VendorInfo(**db.get(vendor_id))
+
+
 # ============== 模型管理 ==============
 
 
@@ -990,6 +1008,30 @@ def delete_model(model_id: str):
     db.delete(model_id)
     get_model_registry().reload()
     return {"status": "deleted", "model_id": model_id}
+
+
+@app.put("/models/{model_id}", response_model=ModelInfo)
+def update_model(model_id: str, req: ModelCreateRequest):
+    """更新模型"""
+    from kb.database import init_model_db
+    from llamaindex_study.config import get_model_registry
+
+    db = init_model_db()
+    if not db.get(model_id):
+        raise HTTPException(status_code=404, detail=f"模型 {model_id} 不存在")
+    db.upsert(
+        model_id=model_id,
+        vendor_id=req.vendor_id,
+        name=req.name or model_id.split("/")[-1],
+        type=req.type,
+        is_active=req.is_active,
+        is_default=req.is_default,
+        config=req.config,
+    )
+    if req.is_default:
+        db.set_default(model_id)
+    get_model_registry().reload()
+    return ModelInfo(**db.get(model_id))
 
 
 @app.put("/models/{model_id}/default")
@@ -1831,6 +1873,182 @@ def reload_config():
     except Exception as e:
         logger.error(f"配置重载失败: {e}")
         raise HTTPException(status_code=500, detail=f"配置重载失败: {str(e)}")
+
+
+# ============== 文档管理接口 ==============
+
+
+class DocumentResponse(BaseModel):
+    id: str
+    kb_id: str
+    source_file: str
+    source_path: str
+    file_hash: str
+    file_size: int
+    mime_type: str
+    chunk_count: int
+    total_chars: int
+    metadata: Dict[str, Any]
+    created_at: float
+    updated_at: float
+
+
+class ChunkResponse(BaseModel):
+    id: str
+    doc_id: str
+    kb_id: str
+    text: str
+    text_length: int
+    chunk_index: int
+    parent_chunk_id: Optional[str]
+    hierarchy_level: int
+    metadata: Dict[str, Any]
+    embedding_generated: bool
+    created_at: float
+    updated_at: float
+
+
+@app.get("/kbs/{kb_id}/documents", response_model=List[DocumentResponse])
+def list_documents(kb_id: str):
+    """获取知识库的所有文档"""
+    from kb.database import init_document_db
+
+    docs = init_document_db().get_by_kb(kb_id)
+    return docs
+
+
+@app.get("/kbs/{kb_id}/documents/{doc_id}", response_model=DocumentResponse)
+def get_document(kb_id: str, doc_id: str):
+    """获取文档详情"""
+    from kb.database import init_document_db
+
+    doc = init_document_db().get(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail=f"文档 {doc_id} 不存在")
+    if doc["kb_id"] != kb_id:
+        raise HTTPException(status_code=404, detail=f"文档不属于知识库 {kb_id}")
+    return doc
+
+
+@app.delete("/kbs/{kb_id}/documents/{doc_id}")
+def delete_document(kb_id: str, doc_id: str):
+    """删除文档及其所有分块"""
+    from kb.database import init_document_db, init_chunk_db
+    from kb.lance_crud import LanceCRUDService
+
+    doc_db = init_document_db()
+    chunk_db = init_chunk_db()
+
+    doc = doc_db.get(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail=f"文档 {doc_id} 不存在")
+    if doc["kb_id"] != kb_id:
+        raise HTTPException(status_code=404, detail=f"文档不属于知识库 {kb_id}")
+
+    chunk_ids = [c["id"] for c in chunk_db.get_by_doc(doc_id)]
+
+    chunk_db.delete_by_doc(doc_id)
+    doc_db.delete(doc_id)
+
+    if chunk_ids:
+        LanceCRUDService.delete_by_chunk_ids(kb_id, chunk_ids)
+
+    return {"status": "deleted", "doc_id": doc_id, "chunks_deleted": len(chunk_ids)}
+
+
+@app.get("/kbs/{kb_id}/documents/{doc_id}/chunks", response_model=List[ChunkResponse])
+def list_document_chunks(kb_id: str, doc_id: str):
+    """获取文档的所有分块"""
+    from kb.database import init_document_db, init_chunk_db
+
+    doc_db = init_document_db()
+    doc = doc_db.get(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail=f"文档 {doc_id} 不存在")
+    if doc["kb_id"] != kb_id:
+        raise HTTPException(status_code=404, detail=f"文档不属于知识库 {kb_id}")
+
+    chunks = init_chunk_db().get_by_doc(doc_id)
+    return chunks
+
+
+@app.get("/kbs/{kb_id}/chunks/{chunk_id}", response_model=ChunkResponse)
+def get_chunk(kb_id: str, chunk_id: str):
+    """获取分块详情"""
+    from kb.database import init_chunk_db
+
+    chunk = init_chunk_db().get(chunk_id)
+    if not chunk:
+        raise HTTPException(status_code=404, detail=f"分块 {chunk_id} 不存在")
+    if chunk["kb_id"] != kb_id:
+        raise HTTPException(status_code=404, detail=f"分块不属于知识库 {kb_id}")
+    return chunk
+
+
+@app.put("/kbs/{kb_id}/chunks/{chunk_id}", response_model=ChunkResponse)
+def update_chunk_text(kb_id: str, chunk_id: str, req: Dict[str, str]):
+    """更新分块文本内容"""
+    from kb.database import init_chunk_db
+
+    if "text" not in req:
+        raise HTTPException(status_code=400, detail="需要提供 text 字段")
+
+    chunk_db = init_chunk_db()
+    chunk = chunk_db.get(chunk_id)
+    if not chunk:
+        raise HTTPException(status_code=404, detail=f"分块 {chunk_id} 不存在")
+    if chunk["kb_id"] != kb_id:
+        raise HTTPException(status_code=404, detail=f"分块不属于知识库 {kb_id}")
+
+    chunk_db.update_text(chunk_id, req["text"])
+    return chunk_db.get(chunk_id)
+
+
+@app.post("/kbs/{kb_id}/chunks/{chunk_id}/reembed")
+def reembed_chunk(kb_id: str, chunk_id: str):
+    """重新生成分块的 embedding"""
+    from kb.database import init_chunk_db
+    from llamaindex_study.config import get_model_registry
+
+    chunk_db = init_chunk_db()
+    chunk = chunk_db.get(chunk_id)
+    if not chunk:
+        raise HTTPException(status_code=404, detail=f"分块 {chunk_id} 不存在")
+    if chunk["kb_id"] != kb_id:
+        raise HTTPException(status_code=404, detail=f"分块不属于知识库 {kb_id}")
+
+    registry = get_model_registry()
+    registry.reload()
+
+    embed_model = None
+    try:
+        from llama_index.core import Settings as LlamaSettings
+        from llamaindex_study.llama_utils import get_default_embed_model
+
+        embed_model = get_default_embed_model()
+    except Exception as e:
+        logger.warning(f"获取 embedding 模型失败: {e}")
+
+    if embed_model:
+        try:
+            embedding = embed_model.get_text_embedding(chunk["text"])
+            from kb.lance_crud import LanceCRUDService
+
+            LanceCRUDService.upsert_vector(chunk_id, chunk["doc_id"], embedding)
+            chunk_db.mark_embedded(chunk_id)
+            return {
+                "status": "success",
+                "chunk_id": chunk_id,
+                "message": "embedding 已重新生成",
+            }
+        except Exception as e:
+            return {"status": "error", "chunk_id": chunk_id, "message": str(e)}
+
+    return {
+        "status": "pending",
+        "chunk_id": chunk_id,
+        "message": "需要重新启动服务以加载 embedding 模型",
+    }
 
 
 @app.get("/lance/tables")

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useKBs, useCreateKB, useDeleteKB, useKBTopics, useRefreshTopics, useConsistencyCheck, useConsistencyRepair, useInitializeKB, useRebuildDocstore } from '@/api/hooks'
+import { useKBs, useCreateKB, useDeleteKB, useKBTopics, useRefreshTopics, useConsistencyCheck, useConsistencyRepair, useInitializeKB, useRebuildDocstore, useRepairAll } from '@/api/hooks'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -21,7 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Plus, Trash2, Database, RefreshCw, Loader2, AlertTriangle, CheckCircle, Wrench, Trash, FileText, Sparkles, Pencil } from 'lucide-react'
+import { Plus, Trash2, Database, RefreshCw, Loader2, AlertTriangle, CheckCircle, Wrench, Trash, FileText, Sparkles, Pencil, WrenchIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import { KBEditDialog } from '@/components/KBEditDialog'
 import { DangerConfirmDialog } from '@/components/DangerConfirmDialog'
@@ -346,6 +346,7 @@ function KBListItem({
 export function KnowledgeBase() {
   const { data: kbs, isLoading } = useKBs()
   const createKB = useCreateKB()
+  const repairAll = useRepairAll()
 
   const [isCreateOpen, setIsCreateOpen] = useState(false)
   const [newKB, setNewKB] = useState<Partial<KBInfo>>({
@@ -366,12 +367,32 @@ export function KnowledgeBase() {
     }
   }
 
+  const handleRepairAll = async () => {
+    if (!confirm('Repair consistency for all knowledge bases?')) return
+    try {
+      const result = await repairAll.mutateAsync('sync')
+      toast.success(result.message)
+    } catch (error) {
+      toast.error('Repair all failed')
+    }
+  }
+
   const selectedKB = kbs?.find(kb => kb.id === selectedKBId)
 
   return (
     <div className="p-6">
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-2xl font-bold">Knowledge Base</h1>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            onClick={handleRepairAll}
+            disabled={repairAll.isPending || !kbs?.length}
+          >
+            {repairAll.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <WrenchIcon className="mr-2 h-4 w-4" />}
+            Repair All
+          </Button>
+        </div>
 
         <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
           <DialogTrigger asChild>

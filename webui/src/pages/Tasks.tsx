@@ -21,9 +21,10 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { Pause, Play, X, RefreshCw, Loader2, PauseCircle, PlayCircle, Trash2, Wrench, Eye, Info, AlertTriangle } from 'lucide-react'
+import { Pause, Play, X, RefreshCw, Loader2, PauseCircle, PlayCircle, Trash2, Wrench, Eye, Info, AlertTriangle, Wifi } from 'lucide-react'
 import { toast } from 'sonner'
 import type { TaskResponse } from '@/types/api'
+import { useTaskWebSocket } from '@/lib/websocket'
 
 interface TaskDetailDialogProps {
   taskId: string
@@ -338,6 +339,8 @@ export function Tasks() {
   const [detailDialog, setDetailDialog] = useState<string | null>(null)
   const [deleteAllConfirm, setDeleteAllConfirm] = useState('')
 
+  useTaskWebSocket(true)
+
   const handlePauseAll = async () => {
     try {
       const result = await pauseAllTasks.mutateAsync(statusFilter === 'all' ? 'running' : statusFilter)
@@ -382,7 +385,13 @@ export function Tasks() {
   return (
     <div className="p-6">
       <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Task Management</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-2xl font-bold">Task Management</h1>
+          <Badge variant="outline" className="gap-1">
+            <Wifi className="h-3 w-3" />
+            Live
+          </Badge>
+        </div>
         <div className="flex gap-2 flex-wrap">
           <Select value={statusFilter} onValueChange={setStatusFilter}>
             <SelectTrigger className="w-36">

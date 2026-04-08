@@ -39,6 +39,8 @@ import type {
   SystemSettings,
   SettingsUpdateRequest,
   RestartResponse,
+  DocumentInfo,
+  ChunkInfo,
 } from '@/types/api'
 
 const API_BASE = ''
@@ -613,6 +615,19 @@ export function useDeleteVendor() {
   })
 }
 
+export function useUpdateVendor() {
+  const queryClient = useQueryClient()
+  return useMutation<VendorInfo, Error, VendorCreateRequest>({
+    mutationFn: async (req) => {
+      const { data } = await apiClient.put<VendorInfo>(`${API_BASE}/vendors/${req.id}`, req)
+      return data
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['vendors'] })
+    },
+  })
+}
+
 export function useCreateModel() {
   const queryClient = useQueryClient()
   return useMutation<ModelInfo, Error, ModelCreateRequest>({
@@ -632,6 +647,19 @@ export function useDeleteModel() {
     mutationFn: async (modelId) => {
       const { data } = await apiClient.delete(`${API_BASE}/models/${modelId}`)
       return data
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['models'] })
+    },
+  })
+}
+
+export function useUpdateModel() {
+  const queryClient = useQueryClient()
+  return useMutation<ModelInfo, Error, { modelId: string; data: ModelCreateRequest }>({
+    mutationFn: async ({ modelId, data }) => {
+      const { data: result } = await apiClient.put<ModelInfo>(`${API_BASE}/models/${modelId}`, data)
+      return result
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['models'] })
@@ -752,6 +780,70 @@ export function useReloadConfig() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['settings'] })
       queryClient.invalidateQueries({ queryKey: ['models'] })
+    },
+  })
+}
+
+export function useDocuments(kbId: string) {
+  return useQuery<DocumentInfo[]>({
+    queryKey: ['documents', kbId],
+    queryFn: async () => {
+      const { data } = await apiClient.get<DocumentInfo[]>(`${API_BASE}/kbs/${kbId}/documents`)
+      return data
+    },
+    enabled: !!kbId,
+  })
+}
+
+export function useDocument(kbId: string, docId: string) {
+  return useQuery<DocumentInfo>({
+    queryKey: ['document', kbId, docId],
+    queryFn: async () => {
+      const { data } = await apiClient.get<DocumentInfo>(`${API_BASE}/kbs/${kbId}/documents/${docId}`)
+      return data
+    },
+    enabled: !!kbId && !!docId,
+  })
+}
+
+export function useDocumentChunks(kbId: string, docId: string) {
+  return useQuery<ChunkInfo[]>({
+    queryKey: ['document-chunks', kbId, docId],
+    queryFn: async () => {
+      const { data } = await apiClient.get<ChunkInfo[]>(`${API_BASE}/kbs/${kbId}/documents/${docId}/chunks`)
+      return data
+    },
+    enabled: !!kbId && !!docId,
+  })
+}
+
+export function useDeleteDocument() {
+  const queryClient = useQueryClient()
+  return useMutation<{ status: string; doc_id: string; chunks_deleted: number }, Error, { kbId: string; docId: string }>({
+    mutationFn: async ({ kbId, docId }) => {
+      const { data } = await apiClient.delete(`${API_BASE}/kbs/${kbId}/documents/${docId}`)
+      return data
+    },
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['documents', variables.kbId] })
+    },
+  })
+}
+
+export function useUpdateChunk() {
+  return useMutation<ChunkInfo, Error, { kbId: string; chunkId: string; text: string }>({
+    mutationFn: async ({ kbId, chunkId, text }) => {
+      const { data } = await apiClient.put<ChunkInfo>(`${API_BASE}/kbs/${kbId}/chunks/${chunkId}`, { text })
+      return data
+    },
+  })
+}
+
+export function useReembedChunk() {
+  return useMutation<{ status: string; chunk_id: string; message: string }, Error, { kbId: string; chunkId: string }>({
+    mutationFn: async ({ kbId, chunkId }) => {
+      const { data } = await apiClient.post(`${API_BASE}/kbs/${kbId}/chunks/${chunkId}/reembed`)
+      return data
     },
   })
 }

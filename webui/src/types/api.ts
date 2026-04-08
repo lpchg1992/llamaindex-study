@@ -55,6 +55,7 @@ export interface SearchRequest {
   kb_ids?: string
   exclude?: string[]
   use_auto_merging?: boolean
+  retrieval_mode?: 'vector' | 'hybrid'
 }
 
 export interface QueryRequest {
@@ -187,16 +188,18 @@ export interface LanceTableStats {
 
 export interface LanceDocSummary {
   doc_id: string
-  source: string
-  doc_hash: string
+  source_file: string | null
   node_count: number
-  created_at: string
+  total_chars: number
+  first_node_id: string
+  last_node_id: string
 }
 
 export interface LanceNode {
-  node_id: string
+  id: string
   doc_id: string
   text: string
+  text_length: number
   metadata: Record<string, unknown>
   score?: number
 }
@@ -205,6 +208,37 @@ export interface LanceDuplicate {
   source: string
   doc_ids: string[]
   count: number
+}
+
+// Document Management
+export interface DocumentInfo {
+  id: string
+  kb_id: string
+  source_file: string
+  source_path: string
+  file_hash: string
+  file_size: number
+  mime_type: string
+  chunk_count: number
+  total_chars: number
+  metadata: Record<string, unknown>
+  created_at: number
+  updated_at: number
+}
+
+export interface ChunkInfo {
+  id: string
+  doc_id: string
+  kb_id: string
+  text: string
+  text_length: number
+  chunk_index: number
+  parent_chunk_id: string | null
+  hierarchy_level: number
+  metadata: Record<string, unknown>
+  embedding_generated: boolean
+  created_at: number
+  updated_at: number
 }
 
 // Chat

@@ -175,9 +175,157 @@ class DeduplicationManager:
 
     def _init_sqlite(self):
         """初始化 SQLite 数据库"""
-        from kb.database import init_dedup_db
+        from kb.database import init_dedup_db, init_document_db, init_chunk_db
 
         self._dedup_db = init_dedup_db()
+        self._document_db = init_document_db()
+        self._chunk_db = init_chunk_db()
+
+    @staticmethod
+    def _parse_node_content(metadata: dict) -> Optional[dict]:
+        """Parse _node_content from node metadata"""
+        try:
+            node_content = metadata.get("_node_content", "")
+            if node_content:
+                if isinstance(node_content, str):
+                    return json.loads(node_content)
+                return node_content
+            return None
+        except Exception:
+            return None
+
+    def _extract_parent_chunk_id(self, node: Any) -> Optional[str]:
+        """Extract parent chunk ID from node relationships"""
+        try:
+            if hasattr(node, "metadata") and node.metadata:
+                metadata = node.metadata
+                if isinstance(metadata, str):
+                    metadata = json.loads(metadata)
+                node_data = self._parse_node_content(metadata)
+                if not node_data:
+                    return None
+                relationships = node_data.get("relationships", {})
+                for key, rel in relationships.items():
+                    if key.isdigit() and key != "1":
+                        parent_node_id = rel.get("node_id")
+                        if parent_node_id:
+                            return parent_node_id
+            return None
+        except Exception:
+            return None
+
+    def _extract_hierarchy_level(self, node: Any) -> int:
+        """Extract hierarchy level from node metadata"""
+        try:
+            if hasattr(node, "metadata") and node.metadata:
+                metadata = node.metadata
+                if isinstance(metadata, str):
+                    metadata = json.loads(metadata)
+                node_data = self._parse_node_content(metadata)
+                if not node_data:
+                    return 0
+                relationships = node_data.get("relationships", {})
+                if "1" in relationships:
+                    return 0
+                if "2" in relationships:
+                    return 1
+                if "3" in relationships:
+                    return 2
+            return 0
+        except Exception:
+            return 0
+
+    def _create_document_chunks(
+        self,
+        rel_path: str,
+        abs_path: Path,
+        content: str,
+        nodes: List[Any],
+    ) -> Optional[str]:
+        """
+        Create Document and Chunk records after processing.
+
+        Args:
+            rel_path: Relative path (used as doc_id)
+            abs_path: Absolute file path
+            content: File content
+            nodes: List of parsed nodes
+
+        Returns:
+            doc_id if created, None if failed
+        """
+        if not self.use_sqlite or not self._document_db or not self._chunk_db:
+            return None
+
+        try:
+            from pathlib import Path
+
+            file_hash = self.compute_hash(content)
+            try:
+                file_size = abs_path.stat().st_size
+            except Exception:
+                file_size = len(content)
+
+            source_file = Path(rel_path).name
+            doc = self._document_db.create(
+                kb_id=self.kb_id,
+                doc_id=rel_path,
+                source_file=source_file,
+                source_path=str(abs_path),
+                file_hash=file_hash,
+                file_size=file_size,
+            )
+            doc_id = doc["id"]
+
+            chunks = []
+            total_chars = 0
+            for idx, node in enumerate(nodes):
+                parent_id = self._extract_parent_chunk_id(node)
+                hierarchy_level = self._extract_hierarchy_level(node)
+
+                metadata = {}
+                if hasattr(node, "metadata") and node.metadata:
+                    if isinstance(node.metadata, dict):
+                        metadata = node.metadata
+                    else:
+                        try:
+                            metadata = json.loads(node.metadata)
+                        except Exception:
+                            metadata = {}
+
+                chunk = {
+                    "id": node.node_id if hasattr(node, "node_id") else node.id_,
+                    "doc_id": doc_id,
+                    "kb_id": self.kb_id,
+                    "text": node.get_content()
+                    if hasattr(node, "get_content")
+                    else str(node),
+                    "text_length": len(node.get_content())
+                    if hasattr(node, "get_content")
+                    else len(str(node)),
+                    "chunk_index": idx,
+                    "parent_chunk_id": parent_id,
+                    "hierarchy_level": hierarchy_level,
+                    "metadata": metadata,
+                    "embedding_generated": 1
+                    if (hasattr(node, "embedding") and node.embedding)
+                    else 0,
+                }
+                chunks.append(chunk)
+                total_chars += chunk["text_length"]
+
+            if chunks:
+                self._chunk_db.create_bulk(chunks)
+
+            self._document_db.update_stats(
+                doc_id, chunk_count=len(chunks), total_chars=total_chars
+            )
+
+            return doc_id
+
+        except Exception as e:
+            logger.warning(f"创建文档/分块记录失败: {e}", exc_info=True)
+            return None
 
     def _load(self):
         """从存储加载状态"""
@@ -448,6 +596,7 @@ class DeduplicationManager:
         doc_id: str,
         chunk_count: int = 0,
         vault_root: Optional[Path] = None,
+        nodes: Optional[List[Any]] = None,
     ):
         """
         标记文件已处理
@@ -458,8 +607,8 @@ class DeduplicationManager:
             doc_id: 文档 ID
             chunk_count: 生成的块数量
             vault_root: Vault 根目录
+            nodes: 可选的节点列表，用于创建 Document/Chunk 记录
         """
-        # 计算相对路径
         if vault_root:
             try:
                 rel_path = str(file_path.relative_to(vault_root))
@@ -468,13 +617,11 @@ class DeduplicationManager:
         else:
             rel_path = str(file_path)
 
-        # 获取文件修改时间
         try:
             mtime = file_path.stat().st_mtime
         except Exception:
             mtime = time.time()
 
-        # 创建记录
         record = ProcessingRecord(
             rel_path=rel_path,
             abs_path=str(file_path),
@@ -487,7 +634,6 @@ class DeduplicationManager:
 
         self._records[rel_path] = record
 
-        # 持久化到 SQLite
         if self.use_sqlite and self._dedup_db:
             try:
                 result = self._dedup_db.add_record(
@@ -501,6 +647,9 @@ class DeduplicationManager:
                     logger.warning("保存去重记录返回 False")
             except Exception as e:
                 logger.warning(f"保存去重记录失败: {e}", exc_info=True)
+
+        if nodes and self.use_sqlite:
+            self._create_document_chunks(rel_path, file_path, content, nodes)
 
     def mark_deleted(self, rel_path: str):
         """
@@ -773,6 +922,7 @@ class IncrementalProcessor:
                         nodes[0].id_ if nodes else str(change.rel_path),
                         chunk_count=len(nodes),
                         vault_root=vault_root,
+                        nodes=nodes,
                     )
             except Exception as e:
                 stats["failed"] += 1
@@ -800,6 +950,7 @@ class IncrementalProcessor:
                         nodes[0].id_ if nodes else str(change.rel_path),
                         chunk_count=len(nodes),
                         vault_root=vault_root,
+                        nodes=nodes,
                     )
             except Exception as e:
                 stats["failed"] += 1
