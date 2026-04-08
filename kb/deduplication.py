@@ -287,6 +287,8 @@ class DeduplicationManager:
             )
             doc_id = doc["id"]
 
+            self._chunk_db.delete_by_doc(doc_id)
+
             chunks = []
             total_chars = 0
             for idx, node in enumerate(nodes):

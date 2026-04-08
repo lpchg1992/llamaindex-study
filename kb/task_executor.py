@@ -161,6 +161,28 @@ class TaskExecutor:
         self.queue.update_status(task_id, "running", "继续执行")
         return False
 
+    def _save_partial_progress(
+        self,
+        task_id: str,
+        kb_id: str,
+        processed_sources: List[str],
+        processed_files: int,
+        processed_chunks: int,
+        error_msg: str = "任务已取消（部分数据已处理）",
+    ) -> None:
+        """保存部分进度，用于取消/失败时"""
+        self.queue.complete_task(
+            task_id,
+            result={
+                "sources": processed_sources,
+                "partial": True,
+                "partial_sources": processed_sources,
+                "processed_files": processed_files,
+                "processed_chunks": processed_chunks,
+            },
+            error=error_msg,
+        )
+
     def _get_vector_store(self, kb_id: str) -> "LanceDBVectorStore":
         """获取向量存储（使用服务层）"""
         from kb.services import VectorStoreService
@@ -317,8 +339,24 @@ class TaskExecutor:
 
         for rel_path, abs_path in all_docs:
             if await self._check_cancelled(task.task_id):
+                self._save_partial_progress(
+                    task.task_id,
+                    kb_id,
+                    processed_sources,
+                    processed_files,
+                    processed_chunks,
+                    "任务已取消（部分数据已处理）",
+                )
                 return
             if await self._check_paused(task.task_id):
+                self._save_partial_progress(
+                    task.task_id,
+                    kb_id,
+                    processed_sources,
+                    processed_files,
+                    processed_chunks,
+                    "任务已暂停（部分数据已处理）",
+                )
                 return
 
             try:
@@ -454,6 +492,19 @@ class TaskExecutor:
 
         for change in to_delete:
             dedup_manager.remove_record(change.rel_path)
+
+        try:
+            from kb.document_chunk_service import get_document_chunk_service
+
+            doc_chunk_service = get_document_chunk_service(kb_id)
+            for doc_id in doc_ids:
+                doc_chunk_service.delete_document_cascade(
+                    doc_id,
+                    delete_lance=False,
+                    delete_dedup=False,
+                )
+        except Exception as e:
+            logger.error(f"清理 documents/chunks 失败: {e}")
 
     # ==================== 其他任务类型 ====================
 
@@ -617,11 +668,23 @@ class TaskExecutor:
                     processed = (
                         stats_result[0].get("items", 0) if stats_result[0] else 0
                     )
+                    processed_sources = (
+                        stats_result[0].get("processed_sources", [])
+                        if stats_result[0]
+                        else []
+                    )
                     self.queue.update_progress(
                         task_id,
                         message=f"导入已取消 (已处理 {processed} 篇)",
                     )
-                    self.queue.complete_task(task_id, error="任务被取消")
+                    self._save_partial_progress(
+                        task_id,
+                        kb_id,
+                        processed_sources,
+                        processed,
+                        0,
+                        "任务已取消（部分数据已处理）",
+                    )
                     return
                 current_items = (
                     stats_result[0].get("items", 0) if stats_result[0] else 0
@@ -759,8 +822,24 @@ class TaskExecutor:
 
         for i, file_path in enumerate(all_files):
             if await self._check_cancelled(task.task_id):
+                self._save_partial_progress(
+                    task.task_id,
+                    kb_id,
+                    processed_sources,
+                    stats["files"],
+                    stats["nodes"],
+                    "任务已取消（部分数据已处理）",
+                )
                 return
             if await self._check_paused(task.task_id):
+                self._save_partial_progress(
+                    task.task_id,
+                    kb_id,
+                    processed_sources,
+                    stats["files"],
+                    stats["nodes"],
+                    "任务已暂停（部分数据已处理）",
+                )
                 return
 
             try:

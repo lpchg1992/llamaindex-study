@@ -1083,6 +1083,157 @@ Table: {kb_id}
 └── _row_id (TEXT)             -- 行 ID
 ```
 
+## 数据存储架构
+
+项目采用**多层存储架构**，包含 SQLite 数据库、文件系统、向量存储等多种存储机制。
+
+### 存储层次总览
+
+```
+~/.llamaindex/                          # 数据根目录
+├── project.db                          # 核心元数据 (SQLite, WAL模式)
+│   ├── knowledge_bases                # 知识库定义
+│   ├── sync_states                    # 文件同步状态
+│   ├── dedup_records                  # 去重记录
+│   ├── progress                       # 导入进度
+│   ├── documents                      # 文档记录
+│   ├── chunks                         # 分块记录
+│   ├── task_history                   # 任务历史
+│   ├── kb_category_rules               # 分类规则
+│   ├── vendors                        # 供应商配置
+│   └── models                        # 模型配置
+│
+├── tasks.db                          # 任务队列 (SQLite, WAL模式)
+│   └── tasks                         # 异步任务
+│
+├── storage/                          # 向量存储根目录
+│   └── {kb_id}/                      # 每个知识库独立目录
+│       ├── default__vector_store.json # LanceDB 向量数据
+│       ├── docstore.json              # 文档存储
+│       └── (LanceDB data files)
+│
+├── zotero_{collection_id}_progress.json  # Zotero 导入进度 (JSON)
+├── obsidian_progress.json              # Obsidian 导入进度 (JSON)
+└── (其他缓存)
+
+/Volumes/online/llamaindex/mddocs/         # PDF 转 MD 缓存
+├── {pdf_stem}.md                      # 转换后的 Markdown
+└── {pdf_stem}.meta.json               # 转换元数据
+```
+
+### 存储类型详解
+
+#### 1. SQLite 数据库 (project.db)
+
+**位置**: `~/.llamaindex/project.db`
+
+**使用的 WAL 模式**: `PRAGMA journal_mode=WAL`
+
+| 表名 | 用途 | 关键字段 |
+|------|------|---------|
+| `knowledge_bases` | 知识库元数据 | kb_id, name, source_type, topics, persist_path |
+| `sync_states` | 文件同步状态 | kb_id, file_path, hash, mtime, doc_id |
+| `dedup_records` | 去重记录 | kb_id, file_path, hash, doc_id, chunk_count |
+| `progress` | 导入进度 | kb_id, task_type, current, total, processed_items |
+| `documents` | 文档记录 | id, kb_id, source_file, file_hash, chunk_count |
+| `chunks` | 分块记录 | id, doc_id, kb_id, text, parent_chunk_id, hierarchy_level |
+| `task_history` | 任务历史 | task_id, kb_id, status, result, error |
+| `kb_category_rules` | 分类规则 | kb_id, rule_type, pattern, priority |
+| `vendors` | 供应商配置 | id, name, api_base, api_key |
+| `models` | 模型配置 | id, vendor_id, type, is_default |
+
+#### 2. SQLite 数据库 (tasks.db)
+
+**位置**: `~/.llamaindex/tasks.db`
+
+| 表名 | 用途 | 关键字段 |
+|------|------|---------|
+| `tasks` | 异步任务队列 | task_id, task_type, status, kb_id, progress, heartbeat |
+
+**索引**: `idx_tasks_status`, `idx_tasks_kb_id`
+
+#### 3. 向量存储 (LanceDB)
+
+**位置**: `~/.llamaindex/storage/{kb_id}/`
+
+每个知识库有独立的 LanceDB 存储，包含：
+- `default__vector_store.json` - 向量数据
+- `docstore.json` - 文档存储
+
+#### 4. JSON 进度文件
+
+| 文件 | 用途 | 结构 |
+|------|------|------|
+| `~/.llamaindex/zotero_{collection_id}_progress.json` | Zotero 导入进度 | ProcessingProgress |
+| `~/.llamaindex/obsidian_progress.json` | Obsidian 导入进度 | ProcessingProgress |
+
+**ProcessingProgress 结构**:
+```python
+@dataclass
+class ProcessingProgress:
+    total_items: int
+    processed_items: List[str]      # item_id 列表
+    skipped_items: List[str]
+    failed_items: List[str]
+    converted_files: dict           # file_path -> md_path
+    started_at: float
+    last_item: str
+    total_nodes: int
+    file_hashes: dict              # file_path -> hash
+```
+
+#### 5. MD 缓存存储
+
+**位置**: `/Volumes/online/llamaindex/mddocs/`
+
+| 文件 | 用途 |
+|------|------|
+| `{pdf_stem}.md` | PDF 转换后的 Markdown 内容 |
+| `{pdf_stem}.meta.json` | 转换元数据 (uid, is_truncated, source_pdf) |
+
+**ConversionMetadata 结构**:
+```python
+@dataclass
+class ConversionMetadata:
+    uid: Optional[str]              # doc2x UID
+    mineru_batch_id: Optional[str]
+    is_truncated: bool             # 是否截断
+    converted_at: Optional[str]
+    source_pdf: Optional[str]
+    page_count: int
+```
+
+#### 6. 配置文件
+
+| 文件 | 用途 |
+|------|------|
+| `~/.llamaindex-study/.runtime_settings.json` | 运行时设置 (top_k, use_hybrid_search 等) |
+| `~/.llamaindex-study/.env` | 环境变量配置 |
+
+### 清除/重置存储
+
+| 清除目标 | 操作方式 |
+|---------|---------|
+| 知识库向量数据 | `KnowledgeBaseService.delete()` → 删除 `storage/{kb_id}/` |
+| 去重状态 | `dedup_manager.clear()` → 清空 `dedup_records` 表 |
+| 同步状态 | `sync_state.clear()` → 清空 `sync_states` 表 |
+| 导入进度 | `progress.save()` 重新初始化 ProcessingProgress |
+| Zotero 进度文件 | `rm ~/.llamaindex/zotero_*_progress.json` |
+| 全部重置 | `rm -rf ~/.llamaindex/` |
+
+### 存储与模块对应关系
+
+| 模块 | 存储位置 |
+|------|---------|
+| `KnowledgeBaseService` | `knowledge_bases` 表, `storage/{kb_id}/` |
+| `DeduplicationManager` | `dedup_records` 表, `file_hashes.json` (legacy) |
+| `SyncState` | `sync_states` 表, `.sync_state.json` (legacy) |
+| `TaskQueue` | `tasks.db` → `tasks` 表 |
+| `DocumentProcessor` | `documents`, `chunks` 表, `/Volumes/online/llamaindex/mddocs/` |
+| `ProgressDB` | `progress` 表 |
+| `VendorDB` | `vendors` 表 |
+| `ModelDB` | `models` 表 |
+
 ## 配置说明
 
 ### 环境变量 (.env)

@@ -303,6 +303,7 @@ class DocumentProcessor:
         方法：
         1. 文字密度（字符数/页面面积）
         2. 图片比例
+        3. 综合判断：只有同时满足"低密度"和"高图片比例"才认为是扫描件
         """
         try:
             from pypdf import PdfReader
@@ -332,12 +333,6 @@ class DocumentProcessor:
 
             avg_density = total_text_len / (total_page_area / (72 * 72))
 
-            if total_text_len < 50:
-                return True
-
-            if avg_density < self.config.pdf_scan_threshold:
-                return True
-
             # 2. 检查图片比例
             image_pages = 0
             for page in reader.pages[:pages_to_check]:
@@ -354,7 +349,23 @@ class DocumentProcessor:
                 except Exception:
                     pass
 
-            if image_pages / pages_to_check > self.config.pdf_image_ratio_threshold:
+            image_ratio = image_pages / pages_to_check
+
+            # 综合判断逻辑：
+            # - 如果文字密度极低（<30 chars/sq inch）且图片比例高（>50%），认为是扫描件
+            # - 如果文字密度极低但图片比例不高，降低阈值继续判断
+            # - 如果文字密度正常（>50 chars/sq inch），认为是文本PDF
+            # - 纯图片页面（密度<10且图片比例>70%）判定为扫描件
+            if avg_density < 10 and image_ratio > 0.7:
+                return True
+
+            if avg_density < 30 and image_ratio > 0.5:
+                return True
+
+            if avg_density < 50:
+                return True
+
+            if avg_density < self.config.pdf_scan_threshold and image_ratio > 0.5:
                 return True
 
             return False
@@ -1173,17 +1184,39 @@ class DocumentProcessor:
         docs = []
         ext = Path(pdf_path).suffix.lower()
 
+        md_file_path = (
+            Path("/Volumes/online/llamaindex/mddocs") / f"{Path(pdf_path).stem}.md"
+        )
+
+        # 优先检查是否已有完整转换的 MD
+        if md_file_path.exists() and md_file_path.stat().st_size > 100:
+            meta = ConversionMetadata.load(md_file_path)
+            if meta and not meta.is_truncated:
+                print(f"   📄 使用已缓存的 MD: {md_file_path.name}")
+                try:
+                    md_content = md_file_path.read_text(encoding="utf-8")
+                    doc = LlamaDocument(
+                        text=md_content,
+                        metadata={
+                            "source": "pdf_scanned",
+                            "file_path": pdf_path,
+                            "converted": True,
+                            "md_file_path": str(md_file_path),
+                            **(metadata or {}),
+                        },
+                    )
+                    docs.append(doc)
+                    return docs
+                except Exception:
+                    pass
+
+        # 无缓存 MD，进行扫描检测
         is_scanned = self.is_scanned_pdf(pdf_path)
 
         if is_scanned:
             print(f"   🔍 检测为扫描件，尝试 OCR 转换...")
             md_content = self.convert_pdf_to_markdown(pdf_path)
             if md_content:
-                md_file_path = (
-                    Path("/Volumes/online/llamaindex/mddocs")
-                    / f"{Path(pdf_path).stem}.md"
-                )
-
                 doc = LlamaDocument(
                     text=md_content,
                     metadata={

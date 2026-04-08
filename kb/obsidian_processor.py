@@ -546,6 +546,19 @@ class ObsidianImporter:
         for change in to_delete:
             dedup_manager.remove_record(change.rel_path)
 
+        try:
+            from kb.document_chunk_service import get_document_chunk_service
+
+            doc_chunk_service = get_document_chunk_service(self.kb_id)
+            for doc_id in doc_ids:
+                doc_chunk_service.delete_document_cascade(
+                    doc_id,
+                    delete_lance=False,
+                    delete_dedup=False,
+                )
+        except Exception as e:
+            logger.warning(f"清理 documents/chunks 失败: {e}")
+
     def import_pdf_attachments(
         self,
         directory: Path,

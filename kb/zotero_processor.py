@@ -106,12 +106,12 @@ class ZoteroImporter:
         - 独立附件：itemID 本身就是要查询的附件 ID
         - 子附件：需要通过 parentItemID 查找父 item 下的附件
 
-        修复: 优先选择包含 [kb] 标记的附件，确保多附件时选中正确的文件
+        重要：必须严格只处理包含 [kb] 标记的附件，没有 [kb] 标记的附件会被跳过。
         """
         conn = self.connect()
         cursor = conn.cursor()
 
-        # 先尝试查找包含 [kb] 标记的附件
+        # 只查找包含 [kb] 标记的附件，不再回退到其他附件
         cursor.execute(
             """
             SELECT ia.itemID, ia.path, ia.storageHash, ia.contentType, v.value as attachment_title
@@ -126,26 +126,12 @@ class ZoteroImporter:
         )
         row = cursor.fetchone()
 
-        # 如果没找到 [kb] 附件，尝试查找任何有效的附件
-        if not row:
-            cursor.execute(
-                """
-                SELECT ia.itemID, ia.path, ia.storageHash, ia.contentType, v.value as attachment_title
-                FROM itemAttachments ia
-                JOIN itemData d ON d.itemID = ia.itemID AND d.fieldID = 1
-                JOIN itemDataValues v ON d.valueID = v.valueID
-                WHERE ia.itemID = ? OR ia.parentItemID = ?
-                LIMIT 1
-            """,
-                (item_id, item_id),
-            )
-            row = cursor.fetchone()
-
         if not row or not row["path"]:
             return None
 
         title = row["attachment_title"] if row["attachment_title"] else ""
-        if "[kb]" not in title and row["itemID"] != item_id:
+        # 严格检查：必须有 [kb] 标记
+        if "[kb]" not in title:
             return None
 
         storage_hash = row["storageHash"]

@@ -21,6 +21,7 @@ from llamaindex_study.ollama_utils import (
 )
 from kb.registry import get_storage_root
 from kb.deduplication import DeduplicationManager
+from kb.document_chunk_service import get_document_chunk_service
 
 logger = get_logger(__name__)
 
@@ -679,11 +680,13 @@ class KnowledgeBaseService:
 
     @staticmethod
     def delete(kb_id: str) -> bool:
-        """删除知识库（软删除 + 清理物理数据 + 清理去重状态）"""
+        """删除知识库（软删除 + 清理物理数据 + 清理去重状态）
+
+        注意：sync_states 表已废弃，不再清理。
+        """
         from kb.registry import registry
         from kb.database import (
             init_kb_meta_db,
-            init_sync_db,
             init_dedup_db,
             init_progress_db,
         )
@@ -709,7 +712,6 @@ class KnowledgeBaseService:
         dedup_manager = DeduplicationManager(kb_id, persist_dir)
         dedup_manager.clear()
 
-        init_sync_db().clear(kb_id)
         init_dedup_db().clear(kb_id)
         init_progress_db().reset(kb_id)
 
@@ -724,10 +726,10 @@ class KnowledgeBaseService:
     def initialize(kb_id: str) -> bool:
         """初始化知识库（清空所有数据）
 
-        清除向量存储、去重状态、进度、同步状态，但保留知识库配置。
+        清除向量存储、去重状态、进度，但保留知识库配置。
         用于完全重置知识库到初始状态。
         """
-        from kb.database import init_progress_db, init_sync_db
+        from kb.database import init_progress_db
         from kb.deduplication import DeduplicationManager
 
         vs = VectorStoreService.get_vector_store(kb_id)
@@ -738,7 +740,6 @@ class KnowledgeBaseService:
         dedup_manager.clear()
 
         init_progress_db().reset(kb_id)
-        init_sync_db().clear(kb_id)
 
         return True
 
@@ -1597,7 +1598,13 @@ class TaskService:
         return task.to_dict() if task else None
 
     @staticmethod
-    def cancel(task_id: str) -> Dict[str, Any]:
+    def cancel(task_id: str, cleanup: bool = False) -> Dict[str, Any]:
+        """取消任务
+
+        Args:
+            task_id: 任务ID
+            cleanup: 是否清理已处理的数据（默认 False）
+        """
         from kb.task_queue import TaskQueue, TaskStatus
         from kb.task_executor import task_executor
 
@@ -1607,11 +1614,18 @@ class TaskService:
             raise ValueError(f"任务不存在: {task_id}")
 
         if task.status == TaskStatus.CANCELLED.value:
-            return {
+            result = {
                 "status": "cancelled",
                 "task_id": task_id,
                 "message": "任务已取消",
             }
+            if cleanup:
+                result["cleanup"] = TaskService._cleanup_task_data(
+                    task.kb_id,
+                    task.task_type,
+                    sources=task.result.get("partial_sources") if task.result else None,
+                )
+            return result
 
         if task.status in (TaskStatus.COMPLETED.value, TaskStatus.FAILED.value):
             return {
@@ -1623,11 +1637,22 @@ class TaskService:
         queue.update_status(task_id, TaskStatus.CANCELLED.value, "已取消")
         task_executor.cancel_task(task_id)
 
-        return {
+        result = {
             "status": "cancelled",
             "task_id": task_id,
             "message": "已取消任务",
         }
+
+        if cleanup:
+            task = queue.get_task(task_id)
+            if task and task.result:
+                partial_sources = task.result.get("partial_sources", [])
+                if partial_sources:
+                    result["cleanup"] = TaskService._cleanup_task_data(
+                        task.kb_id, task.task_type, sources=partial_sources
+                    )
+
+        return result
 
     @staticmethod
     def cleanup_orphan_task(task_id: str) -> bool:
@@ -1823,14 +1848,15 @@ class TaskService:
         return result
 
     @staticmethod
-    def delete(task_id: str, cleanup: bool = False) -> Dict[str, Any]:
+    def delete(task_id: str, cleanup: Optional[bool] = None) -> Dict[str, Any]:
         """删除任务（物理删除）
 
         Args:
             task_id: 任务ID
-            cleanup: 是否清理关联的知识库数据
-                    - True: 同时清空该知识库的 dedup 状态和向量数据
-                    - False: 仅删除任务记录
+            cleanup: 是否清理关联的知识库数据（可选）
+                    - None: 自动模式（任务状态为 failed/cancelled 时自动清理）
+                    - True: 强制清理
+                    - False: 不清理
         """
         from kb.task_queue import TaskQueue
 
@@ -1848,8 +1874,14 @@ class TaskService:
 
         result = {"status": "deleted", "task_id": task_id, "message": "任务已删除"}
 
-        if cleanup:
+        should_cleanup = cleanup if cleanup is not None else False
+        if task.status in ("failed", "cancelled"):
+            should_cleanup = True
+
+        if should_cleanup:
             sources = task.result.get("sources") if task.result else None
+            if not sources:
+                sources = task.result.get("partial_sources") if task.result else None
             cleaned = TaskService._cleanup_task_data(
                 task.kb_id, task.task_type, sources=sources
             )
@@ -1859,7 +1891,10 @@ class TaskService:
 
     @staticmethod
     def _cleanup_task_data(
-        kb_id: str, task_type: str, sources: Optional[List[str]] = None
+        kb_id: str,
+        task_type: str,
+        sources: Optional[List[str]] = None,
+        cleanup_mode: str = "sources",
     ) -> Dict[str, Any]:
         """清理任务产生的关联数据
 
@@ -1867,16 +1902,25 @@ class TaskService:
             kb_id: 知识库ID
             task_type: 任务类型
             sources: 要删除的源文件路径列表
+            cleanup_mode:
+                - "full": 清空整个知识库数据（仅用于 initialize 类型）
+                - "sources": 只清理指定的 sources（推荐，用于取消/删除任务）
         """
         from kb.deduplication import DeduplicationManager
         from kb.registry import get_storage_root
 
-        cleaned = {"dedup_state": False, "vector_store": False, "deleted_nodes": 0}
+        cleaned = {
+            "dedup_state": False,
+            "vector_store": False,
+            "documents": False,
+            "chunks": False,
+            "deleted_nodes": 0,
+        }
 
         persist_dir = get_storage_root() / kb_id
         dedup_manager = DeduplicationManager(kb_id, persist_dir)
 
-        if task_type == "initialize":
+        if task_type == "initialize" or cleanup_mode == "full":
             dedup_manager.clear()
             cleaned["dedup_state"] = True
 
@@ -1885,7 +1929,19 @@ class TaskService:
             vs = VectorStoreService.get_vector_store(kb_id)
             vs.delete_table()
             cleaned["vector_store"] = True
-        elif task_type == "zotero":
+
+            doc_service = get_document_chunk_service(kb_id)
+            all_docs = doc_service.get_all_documents()
+            for doc in all_docs:
+                doc_service.delete_document_cascade(
+                    doc["id"],
+                    delete_lance=False,
+                    delete_dedup=False,
+                )
+            cleaned["documents"] = True
+            cleaned["chunks"] = True
+
+        elif task_type == "zotero" and cleanup_mode == "full":
             dedup_manager.clear()
             cleaned["dedup_state"] = True
 
@@ -1894,6 +1950,18 @@ class TaskService:
             vs = VectorStoreService.get_vector_store(kb_id)
             vs.delete_table()
             cleaned["vector_store"] = True
+
+            doc_service = get_document_chunk_service(kb_id)
+            all_docs = doc_service.get_all_documents()
+            for doc in all_docs:
+                doc_service.delete_document_cascade(
+                    doc["id"],
+                    delete_lance=False,
+                    delete_dedup=False,
+                )
+            cleaned["documents"] = True
+            cleaned["chunks"] = True
+
         elif sources:
             for source in sources:
                 dedup_manager.remove_record(source)
@@ -1906,6 +1974,17 @@ class TaskService:
             deleted = lance_store.delete_by_source(sources)
             cleaned["deleted_nodes"] = deleted
             cleaned["vector_store"] = deleted > 0
+
+            doc_service = get_document_chunk_service(kb_id)
+            for source in sources:
+                result = doc_service.delete_documents_by_source(source)
+                if result.get("documents", 0) > 0:
+                    cleaned["documents"] = cleaned.get("documents", 0) + result.get(
+                        "documents", 0
+                    )
+                    cleaned["chunks"] = cleaned.get("chunks", 0) + result.get(
+                        "chunks", 0
+                    )
 
         return cleaned
 
