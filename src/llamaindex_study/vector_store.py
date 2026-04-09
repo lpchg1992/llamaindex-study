@@ -254,7 +254,7 @@ class LanceDBVectorStore(BaseVectorStore):
     ) -> Any:
         """从文档构建索引"""
         from llama_index.core import VectorStoreIndex, Settings as LlamaSettings
-        from llama_index.core.storage.docstore import SimpleDocumentStore
+
         from llamaindex_study.node_parser import get_node_parser
 
         embed_model = self._get_embed_model()

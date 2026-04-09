@@ -58,7 +58,6 @@ API 端点:
     DELETE /lance/{kb_id}/source     - 按源文件删除
     DELETE /lance/{kb_id}/nodes      - 按 node_ids 删除
     POST /lance/{kb_id}/export      - 导出到 JSONL
-    POST /lance/{kb_id}/rebuild-docstore - 重建 docstore
 """
 
 import asyncio

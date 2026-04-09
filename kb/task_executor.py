@@ -404,7 +404,7 @@ class TaskExecutor:
                 if doc_record:
                     doc_id = doc_record.get("id")
                     if doc_id:
-                        svc.delete_document_cascade(doc_id, delete_lance=False)
+                        svc.delete_document_cascade(doc_id, delete_lance=True)
 
                 file_size = abs_path.stat().st_size if abs_path.exists() else 0
                 doc_db.create(

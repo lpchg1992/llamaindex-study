@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useKBs, useCreateKB, useDeleteKB, useKBTopics, useRefreshTopics, useConsistencyCheck, useConsistencyRepair, useInitializeKB, useRebuildDocstore, useRepairAll } from '@/api/hooks'
+import { useKBs, useCreateKB, useDeleteKB, useKBTopics, useRefreshTopics, useConsistencyCheck, useConsistencyRepair, useInitializeKB, useRepairAll } from '@/api/hooks'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -21,7 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Plus, Trash2, Database, RefreshCw, Loader2, AlertTriangle, CheckCircle, Wrench, Trash, FileText, Sparkles, Pencil, WrenchIcon, HardDrive, Upload } from 'lucide-react'
+import { Plus, Trash2, Database, RefreshCw, Loader2, AlertTriangle, CheckCircle, Wrench, Trash, Sparkles, Pencil, WrenchIcon, HardDrive, Upload } from 'lucide-react'
 import { toast } from 'sonner'
 import { KBEditDialog } from '@/components/KBEditDialog'
 import { DangerConfirmDialog } from '@/components/DangerConfirmDialog'
@@ -35,12 +35,10 @@ function KBDetailsPanel({ kb }: { kb: KBInfo }) {
   const { data: consistency, isLoading: consistencyLoading } = useConsistencyCheck(kb.id)
   const repairConsistency = useConsistencyRepair()
   const initializeKB = useInitializeKB()
-  const rebuildDocstore = useRebuildDocstore()
 
   const [isRefreshingTopics, setIsRefreshingTopics] = useState(false)
   const [repairMode, setRepairMode] = useState<string>('dry')
   const [isInitializeOpen, setIsInitializeOpen] = useState(false)
-  const [isRebuildOpen, setIsRebuildOpen] = useState(false)
 
   const handleRefreshTopics = async () => {
     setIsRefreshingTopics(true)
@@ -72,18 +70,6 @@ function KBDetailsPanel({ kb }: { kb: KBInfo }) {
       setIsInitializeOpen(false)
     } catch (error: any) {
       const message = error?.response?.data?.detail || 'Initialization failed'
-      toast.error(message)
-      throw error
-    }
-  }
-
-  const handleConfirmRebuild = async () => {
-    try {
-      const result = await rebuildDocstore.mutateAsync({ kbId: kb.id, confirmationName: kb.id })
-      toast.success(`Rebuilt ${result.nodes_rebuilt} nodes`)
-      setIsRebuildOpen(false)
-    } catch (error: any) {
-      const message = error?.response?.data?.detail || 'Rebuild failed'
       toast.error(message)
       throw error
     }
@@ -235,19 +221,6 @@ function KBDetailsPanel({ kb }: { kb: KBInfo }) {
                   Initialize
                 </Button>
               </div>
-              <div className="flex items-center justify-between p-3 border rounded-lg">
-                <div className="flex items-center gap-3">
-                  <FileText className="h-5 w-5 text-muted-foreground" />
-                  <div>
-                    <p className="text-sm font-medium">Rebuild Docstore</p>
-                    <p className="text-xs text-muted-foreground">Rebuild docstore from LanceDB data</p>
-                  </div>
-                </div>
-                <Button variant="outline" size="sm" onClick={() => setIsRebuildOpen(true)} disabled={rebuildDocstore.isPending} title="从 LanceDB 数据重建 docstore">
-                  {rebuildDocstore.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-1" />}
-                  Rebuild
-                </Button>
-              </div>
             </div>
           </TabsContent>
         </Tabs>
@@ -259,15 +232,6 @@ function KBDetailsPanel({ kb }: { kb: KBInfo }) {
           kbName={kb.id}
           onConfirm={handleConfirmInitialize}
           variant="initialize"
-        />
-        <DangerConfirmDialog
-          open={isRebuildOpen}
-          onOpenChange={setIsRebuildOpen}
-          title="重建 Docstore"
-          description="此操作将从 LanceDB 数据重建 docstore，可能会覆盖现有数据。"
-          kbName={kb.id}
-          onConfirm={handleConfirmRebuild}
-          variant="rebuild"
         />
       </CardContent>
     </Card>

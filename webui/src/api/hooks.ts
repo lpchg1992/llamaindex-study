@@ -823,21 +823,6 @@ export function useRepairAll() {
   })
 }
 
-export function useRebuildDocstore() {
-  const queryClient = useQueryClient()
-  return useMutation<{ kb_id: string; nodes_rebuilt: number }, Error, { kbId: string; confirmationName: string }>({
-    mutationFn: async ({ kbId, confirmationName }) => {
-      const { data } = await apiClient.post(`${API_BASE}/kbs/${kbId}/docstore/rebuild`, {
-        confirmation_name: confirmationName,
-      })
-      return data
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['kbs'] })
-    },
-  })
-}
-
 export function useSettings() {
   return useQuery<SystemSettings>({
     queryKey: ['settings'],

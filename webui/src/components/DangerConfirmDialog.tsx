@@ -19,7 +19,7 @@ interface DangerConfirmDialogProps {
   description: string
   kbName: string
   onConfirm: () => Promise<void>
-  variant?: 'delete' | 'initialize' | 'rebuild'
+  variant?: 'delete' | 'initialize'
 }
 
 export function DangerConfirmDialog({
@@ -64,7 +64,6 @@ export function DangerConfirmDialog({
   const variantColors = {
     delete: 'text-destructive',
     initialize: 'text-orange-500',
-    rebuild: 'text-blue-500',
   }
 
   return (
