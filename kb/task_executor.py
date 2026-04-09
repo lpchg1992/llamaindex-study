@@ -225,7 +225,7 @@ class TaskExecutor:
         from kb.database import init_document_db
         from llama_index.core.schema import Document as LlamaDocument
         from kb.parallel_embedding import get_parallel_processor
-        from kb.lancedb_write_queue import lance_write_queue
+        from kb.lancedb_write_queue import write_nodes_sync
         from llamaindex_study.node_parser import get_node_parser
 
         kb_id = task.kb_id
@@ -321,7 +321,6 @@ class TaskExecutor:
         lance_store = vs._get_lance_vector_store()
         node_parser = get_node_parser()
 
-        await lance_write_queue.start()
         processed_sources = []
 
         embed_processor = get_parallel_processor()
@@ -387,7 +386,15 @@ class TaskExecutor:
                         _, embedding, _ = result_item
                         nodes[j].embedding = embedding
 
-                    await lance_write_queue.enqueue(lance_store, nodes, kb_id)
+                    # 同步写入 LanceDB，等待完成才继续（确保原子性）
+                    write_ok, write_err = await write_nodes_sync(
+                        lance_store, nodes, kb_id
+                    )
+                    if not write_ok:
+                        logger.warning(
+                            f"LanceDB 写入失败，跳过文档: {rel_path}, 错误: {write_err}"
+                        )
+                        continue
                     processed_chunks += len(nodes)
 
                 current_hash = ""
@@ -435,8 +442,6 @@ class TaskExecutor:
 
             except Exception as e:
                 logger.warning(f"处理失败 {rel_path}: {e}")
-
-        await lance_write_queue.wait_until_empty()
 
         stats = embed_processor.get_stats()
         failure_stats = embed_processor.get_failure_stats()
@@ -527,6 +532,9 @@ class TaskExecutor:
                     )
                     stats["files"] += result.get("items", 0)
                     stats["nodes"] += result.get("nodes", 0)
+                    stats["processed_sources"].extend(
+                        result.get("processed_sources", [])
+                    )
 
                 elif item_type == "item":
                     logger.info(f"[{task_id}] 处理 Zotero 文献: {item_id}")
@@ -539,6 +547,9 @@ class TaskExecutor:
                     )
                     stats["files"] += result.get("items", 0)
                     stats["nodes"] += result.get("nodes", 0)
+                    stats["processed_sources"].extend(
+                        result.get("processed_sources", [])
+                    )
 
                 elif item_type == "folder":
                     vault_path = item.get("vault_path")
@@ -552,6 +563,9 @@ class TaskExecutor:
                         )
                         stats["files"] += result.get("files", 0)
                         stats["nodes"] += result.get("nodes", 0)
+                        stats["processed_sources"].extend(
+                            result.get("processed_sources", [])
+                        )
 
                 elif item_type == "file":
                     path = item.get("path")
@@ -821,7 +835,7 @@ class TaskExecutor:
         """执行通用文件导入"""
         from kb.generic_processor import GenericImporter
         from kb.parallel_embedding import get_parallel_processor
-        from kb.lancedb_write_queue import lance_write_queue
+        from kb.lancedb_write_queue import write_nodes_sync
         from llamaindex_study.node_parser import get_node_parser
 
         kb_id = task.kb_id
@@ -874,8 +888,6 @@ class TaskExecutor:
                 },
             )
             return
-
-        await lance_write_queue.start()
 
         stats = {"files": 0, "nodes": 0, "failed": 0}
         processed_sources = []
@@ -937,7 +949,15 @@ class TaskExecutor:
                                 if results[j] is not None:
                                     nodes[j].embedding = embedding
 
-                            await lance_write_queue.enqueue(lance_store, nodes, kb_id)
+                            # 同步写入 LanceDB，等待完成才继续（确保原子性）
+                            write_ok, write_err = await write_nodes_sync(
+                                lance_store, nodes, kb_id
+                            )
+                            if not write_ok:
+                                logger.warning(
+                                    f"LanceDB 写入失败，跳过文档: {file_path}, 错误: {write_err}"
+                                )
+                                continue
                             stats["nodes"] += len(nodes)
                             file_nodes.extend(nodes)
 
@@ -991,8 +1011,6 @@ class TaskExecutor:
             except Exception as e:
                 logger.warning(f"处理文件失败 {file_path}: {e}")
                 stats["failed"] += 1
-
-        await lance_write_queue.wait_until_empty()
 
         settings = get_settings()
         self.queue.complete_task(

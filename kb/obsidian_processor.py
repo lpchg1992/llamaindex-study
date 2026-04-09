@@ -322,7 +322,7 @@ class ObsidianImporter:
         # 兼容旧的 progress.processed_items 方式
         processed_set = set(progress.processed_items) if progress else set()
 
-        stats = {"files": 0, "nodes": 0, "failed": 0}
+        stats = {"files": 0, "nodes": 0, "failed": 0, "processed_sources": []}
 
         for i, file_path in enumerate(files):
             try:
@@ -420,12 +420,15 @@ class ObsidianImporter:
 
             nodes = [clean_node_metadata(n) for n in nodes]
 
-            # 保存
-            saved = self.processor.save_nodes(vector_store, nodes, progress)
-            stats["nodes"] += saved
-            stats["files"] += 1
+            try:
+                # 同步写入 LanceDB
+                lance_store = vector_store._get_lance_vector_store()
+                self.processor._upsert_nodes(lance_store, nodes)
+            except Exception as write_ex:
+                logger.warning(f"LanceDB 写入失败: {file_path}, 错误: {write_ex}")
+                continue
 
-            # 写入 Document 表
+            # LanceDB 写入成功后才写入 Document 表
             try:
                 doc_chunk_service = get_document_chunk_service(self.kb_id)
                 file_hash = self.processor.compute_file_hash(str(file_path))
@@ -437,18 +440,24 @@ class ObsidianImporter:
                     file_size=file_path.stat().st_size,
                     doc_id=doc_id,
                 )
-            except Exception as e:
-                logger.warning(f"写入 Document 记录失败: {e}")
+                stats["nodes"] += len(nodes)
+                stats["files"] += 1
+                stats["processed_sources"].append(str(file_path))
 
-            if progress:
-                progress.processed_items.append(str(file_path))
-                progress.save(Path.home() / ".llamaindex" / "obsidian_progress.json")
+                if progress:
+                    progress.processed_items.append(str(file_path))
+                    progress.save(
+                        Path.home() / ".llamaindex" / "obsidian_progress.json"
+                    )
+            except Exception as e:
+                logger.error(f"Document 记录创建失败: {file_path}, 错误: {e}")
 
         # 处理 PDF 附件
         pdf_stats = self.import_pdf_attachments(
             directory, vector_store, embed_model, progress
         )
         stats["nodes"] += pdf_stats.get("nodes", 0)
+        stats["processed_sources"].extend(pdf_stats.get("processed_sources", []))
 
         # 恢复原来的排除模式
         self.exclude_patterns = original_exclude
@@ -475,7 +484,8 @@ class ObsidianImporter:
 
         self.processor.set_embed_model(embed_model)
 
-        stats = {"files": 0, "nodes": 0}
+        stats = {"files": 0, "nodes": 0, "processed_sources": []}
+        doc_chunk_service = get_document_chunk_service(self.kb_id)
 
         for pdf_path in pdf_files:
             if progress and str(pdf_path) in progress.processed_items:
@@ -498,13 +508,37 @@ class ObsidianImporter:
 
             if docs:
                 node_parser = self.processor.node_parser
+                all_file_nodes = []
                 for doc in docs:
                     nodes = node_parser.get_nodes_from_documents([doc])
-                    saved = self.processor.save_nodes(vector_store, nodes, progress)
-                    stats["nodes"] += saved
-                    stats["files"] += 1
+                    all_file_nodes.extend(nodes)
 
-                if progress:
-                    progress.processed_items.append(str(pdf_path))
+                if all_file_nodes:
+                    # 先写入 LanceDB
+                    try:
+                        lance_store = vector_store._get_lance_vector_store()
+                        self.processor._upsert_nodes(lance_store, all_file_nodes)
+                    except Exception as e:
+                        logger.warning(f"LanceDB 写入失败: {pdf_path}, 错误: {e}")
+                        continue
+
+                    # LanceDB 成功后才创建 Document 记录
+                    try:
+                        file_hash = self.processor.compute_file_hash(str(pdf_path))
+                        doc_chunk_service.create_document(
+                            source_file=pdf_path.name,
+                            source_path=str(pdf_path),
+                            file_hash=file_hash,
+                            nodes=all_file_nodes,
+                            file_size=pdf_path.stat().st_size,
+                            doc_id=f"obsidian_pdf_{pdf_path.stat().st_ino}",
+                        )
+                        stats["nodes"] += len(all_file_nodes)
+                        stats["files"] += 1
+                        stats["processed_sources"].append(str(pdf_path))
+                        if progress:
+                            progress.processed_items.append(str(pdf_path))
+                    except Exception as e:
+                        logger.error(f"Document 记录创建失败: {pdf_path}, 错误: {e}")
 
         return stats

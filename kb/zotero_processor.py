@@ -430,7 +430,7 @@ class ZoteroImporter:
         progress: ProcessingProgress = None,
         kb_id: Optional[str] = None,
         force_ocr: bool = False,
-    ) -> Tuple[int, List[Any]]:
+    ) -> Tuple[int, List[Any], List[str]]:
         """
         导入单个文献
 
@@ -442,7 +442,7 @@ class ZoteroImporter:
             kb_id: 知识库 ID（用于写入 document 表）
 
         Returns:
-            (生成的节点数, 所有节点列表)
+            (生成的节点数, 所有节点列表, 处理过的源文件路径列表)
         """
         from kb.zotero_reader import create_zotero_reader
         from kb.document_chunk_service import get_document_chunk_service
@@ -458,6 +458,7 @@ class ZoteroImporter:
 
         total_nodes = 0
         all_nodes = []
+        processed_sources = []
         creators_str = ", ".join(item.creators) if item.creators else ""
         base_metadata = {
             "item_id": item.item_id,
@@ -494,8 +495,32 @@ class ZoteroImporter:
                     id_=f"zotero_meta_{item.item_id}",
                 )
                 nodes = node_parser.get_nodes_from_documents([doc])
-                total_nodes += self.processor.save_nodes(vector_store, nodes, progress)
-                all_nodes.extend(nodes)
+
+                # 先写入 LanceDB
+                try:
+                    self.processor._upsert_nodes(
+                        vector_store._get_lance_vector_store(), nodes
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"LanceDB 写入失败 (zotero_meta): {item.title}, 错误: {e}"
+                    )
+                else:
+                    # LanceDB 成功后才创建 Document 记录
+                    meta_doc_id = f"zotero_meta_{item.item_id}"
+                    result = doc_chunk_service.create_document(
+                        source_file=f"zotero_meta_{item.item_id}",
+                        source_path=f"zotero://item/{item.item_id}",
+                        file_hash="",
+                        nodes=nodes,
+                        file_size=len(text.encode("utf-8")),
+                        doc_id=meta_doc_id,
+                        zotero_doc_id=str(item.item_id),
+                    )
+                    if result:
+                        total_nodes += len(nodes)
+                        all_nodes.extend(nodes)
+                        processed_sources.append("zotero_meta")
 
         if item.annotations or item.notes:
             logger.debug(
@@ -540,6 +565,16 @@ class ZoteroImporter:
                     nodes = node_parser.get_nodes_from_documents([doc])
                     doc_id = doc.id_
                     zotero_doc_id = str(item.item_id)
+
+                    # 先写入 LanceDB，确保成功后才创建 SQLite 记录
+                    try:
+                        self.processor._upsert_nodes(
+                            vector_store._get_lance_vector_store(), nodes
+                        )
+                    except Exception as e:
+                        logger.warning(f"LanceDB 写入失败: {file_path}, 错误: {e}")
+                        continue
+
                     result = doc_chunk_service.create_document(
                         source_file=file_path.name,
                         source_path=str(file_path),
@@ -552,10 +587,11 @@ class ZoteroImporter:
                     if result:
                         total_nodes += len(nodes)
                         all_nodes.extend(nodes)
+                        processed_sources.append(str(file_path))
             else:
                 logger.warning(f"文档处理返回空结果: {file_path}")
 
-        return total_nodes, all_nodes
+        return total_nodes, all_nodes, processed_sources
 
     def import_collection(
         self,

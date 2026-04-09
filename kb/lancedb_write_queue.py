@@ -1,9 +1,21 @@
 import asyncio
-from typing import Any, Optional
+from dataclasses import dataclass
+from typing import Any, Callable, Optional
 
 from llamaindex_study.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+@dataclass
+class WriteTask:
+    """写入任务，包含数据和完成回调"""
+
+    lance_store: Any
+    nodes: list
+    kb_id: str
+    callback: Optional[Callable[[bool, str], None]] = None
+    error: Optional[str] = None
 
 
 class LanceDBWriteQueue:
@@ -23,6 +35,9 @@ class LanceDBWriteQueue:
         self._queue: asyncio.Queue = asyncio.Queue()
         self._workers: list = []
         self._running = False
+        self._pending_tasks: dict[
+            int, WriteTask
+        ] = {}  # task_id -> WriteTask for callback lookup
 
     async def start(self):
         if self._running:
@@ -50,23 +65,56 @@ class LanceDBWriteQueue:
             logger.warning("写入队列等待超时")
             return False
 
-    async def enqueue(self, lance_store: Any, nodes: list, kb_id: str):
-        await self._queue.put((lance_store, nodes, kb_id))
+    async def enqueue(
+        self,
+        lance_store: Any,
+        nodes: list,
+        kb_id: str,
+        callback: Optional[Callable[[bool, str], None]] = None,
+    ):
+        """
+        将写入任务加入队列。
+
+        Args:
+            lance_store: LanceDB store 实例
+            nodes: 要写入的节点列表
+            kb_id: 知识库 ID
+            callback: 写入完成后的回调，签名: callback(success: bool, error: str)
+                     - success=True 表示写入成功
+                     - success=False 表示写入失败，error 包含错误信息
+        """
+        task = WriteTask(
+            lance_store=lance_store,
+            nodes=nodes,
+            kb_id=kb_id,
+            callback=callback,
+        )
+        await self._queue.put(task)
 
     async def _worker(self, worker_id: int):
         while self._running:
             try:
-                lance_store, nodes, kb_id = await self._queue.get()
+                task: WriteTask = await self._queue.get()
+                success = False
+                error_msg = None
                 try:
                     await asyncio.get_event_loop().run_in_executor(
-                        None, lambda: lance_store.add(nodes)
+                        None, lambda: task.lance_store.add(task.nodes)
                     )
+                    success = True
                     logger.debug(
-                        f"Worker {worker_id}: 写入 {len(nodes)} 个节点到 {kb_id}"
+                        f"Worker {worker_id}: 写入 {len(task.nodes)} 个节点到 {task.kb_id}"
                     )
                 except Exception as e:
-                    logger.error(f"LanceDB 写入失败 ({kb_id}): {e}")
+                    error_msg = str(e)
+                    logger.error(f"LanceDB 写入失败 ({task.kb_id}): {e}")
                 finally:
+                    # 调用回调（如果提供）
+                    if task.callback is not None:
+                        try:
+                            task.callback(success, error_msg)
+                        except Exception as cb_err:
+                            logger.error(f"写入回调执行失败: {cb_err}")
                     self._queue.task_done()
             except asyncio.CancelledError:
                 break
@@ -76,3 +124,22 @@ class LanceDBWriteQueue:
 
 
 lance_write_queue = LanceDBWriteQueue()
+
+
+async def write_nodes_sync(
+    lance_store: Any, nodes: list, kb_id: str
+) -> tuple[bool, str]:
+    """
+    同步写入节点到 LanceDB（通过线程池）。
+
+    Returns:
+        (success, error_message)
+    """
+    loop = asyncio.get_event_loop()
+    try:
+        await loop.run_in_executor(None, lambda: lance_store.add(nodes))
+        logger.debug(f"同步写入 {len(nodes)} 个节点到 {kb_id}")
+        return (True, "")
+    except Exception as e:
+        logger.error(f"LanceDB 同步写入失败 ({kb_id}): {e}")
+        return (False, str(e))
