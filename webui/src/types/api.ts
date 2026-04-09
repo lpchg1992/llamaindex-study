@@ -29,6 +29,8 @@ export interface TaskResponse {
   kb_id: string
   message: string
   progress: number
+  current?: number
+  total?: number
   result?: {
     kb_id: string
     files: number

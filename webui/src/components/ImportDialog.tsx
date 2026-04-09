@@ -7,7 +7,7 @@ import {
   useObsidianVaultTree,
   useZoteroPreview,
 } from '@/api/hooks'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Input } from '@/components/ui/input'
@@ -53,12 +53,17 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
 
   const [zoteroSelectedIds, setZoteroSelectedIds] = useState<Set<string>>(new Set())
   const [zoteroSelectedItems, setZoteroSelectedItems] = useState<FileTreeItem[]>([])
+  // 预览确认后的项目（只有确认后才会显示在已选择框）
+  const [zoteroConfirmedItems, setZoteroConfirmedItems] = useState<FileTreeItem[]>([])
+  // 是否已预览并确认（Zotero特有）
+  const [zoteroPreviewConfirmed, setZoteroPreviewConfirmed] = useState(false)
   const [obsidianSelectedIds, setObsidianSelectedIds] = useState<Set<string>>(new Set())
   const [obsidianSelectedItems, setObsidianSelectedItems] = useState<FileTreeItem[]>([])
   const [fileSelectedItems, setFileSelectedItems] = useState<FileTreeItem[]>([])
 
   const [importProgress, setImportProgress] = useState<DocumentProgress[]>([])
   const [importCompleted, setImportCompleted] = useState(0)
+  const [currentTaskId, setCurrentTaskId] = useState<string | null>(null)
 
   const { data: zoteroCollectionsData, isLoading: zoteroLoading, refetch: refetchZotero } =
     useAllZoteroCollectionsWithItems()
@@ -78,6 +83,13 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
   })
   const [zoteroPrefix, setZoteroPrefix] = useState("[kb]")
   const [zoteroForceOcrIds, setZoteroForceOcrIds] = useState<Set<number>>(new Set())
+
+  // 预览缓存
+  const [previewCache, setPreviewCache] = useState<{
+    data: ZoteroPreviewItem[]
+    meta: typeof previewMeta
+    itemIds: number[]
+  } | null>(null)
 
   const zoteroTreeItems = useMemo<FileTreeItem[]>(() => {
     if (!zoteroCollectionsData?.collections) return []
@@ -127,11 +139,100 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
     (ids: Set<string>, items: FileTreeItem[]) => {
       setZoteroSelectedIds(ids)
       setZoteroSelectedItems(items)
+      // 选择改变时清除预览缓存
+      setPreviewCache(null)
+      setZoteroPreviewConfirmed(false)
     },
     []
   )
 
   const handlePreviewZotero = async () => {
+    // 重置确认状态
+    setZoteroPreviewConfirmed(false)
+    
+    const itemIds = zoteroSelectedItems
+      .filter((item) => item.type === 'item')
+      .map((item) => item.item_id)
+      .filter((id): id is number => id !== undefined)
+
+    if (itemIds.length === 0) {
+      toast.error('请先选择要预览的文献')
+      return
+    }
+
+    // 检查缓存：如果缓存的itemIds与当前一致，直接使用缓存
+    if (previewCache && 
+        previewCache.itemIds.length === itemIds.length &&
+        previewCache.itemIds.every((id, idx) => id === itemIds[idx])) {
+      setPreviewData(previewCache.data)
+      setPreviewMeta(previewCache.meta)
+      setPreviewOpen(true)
+      return
+    }
+
+    try {
+      const result = await zoteroPreview.mutateAsync({
+        kb_id: kbId,
+        item_ids: itemIds,
+        prefix: zoteroPrefix,
+      })
+      const newMeta = {
+        totalItems: result.total_items,
+        eligibleItems: result.eligible_items,
+        ineligibleItems: result.ineligible_items,
+        filteringRules: result.filtering_rules,
+      }
+      setPreviewData(result.items)
+      setPreviewMeta(newMeta)
+      // 更新缓存
+      setPreviewCache({
+        data: result.items,
+        meta: newMeta,
+        itemIds,
+      })
+      setPreviewOpen(true)
+    } catch (error: any) {
+      toast.error(error.response?.data?.detail || '预览失败')
+    }
+  }
+
+  const handlePreviewConfirm = (selectedPreviewItems: ZoteroPreviewItem[], forceOcrIds: number[]) => {
+    const selectedItemIds = new Set(selectedPreviewItems.map((item) => item.item_id))
+
+    // 只将用户在预览窗口中确认的项目添加到确认列表
+    const confirmedItems = zoteroSelectedItems
+      .filter(
+        (item) =>
+          item.type === 'item' &&
+          item.item_id !== undefined &&
+          selectedItemIds.has(item.item_id)
+      )
+    setZoteroConfirmedItems(confirmedItems)
+    setZoteroPreviewConfirmed(true)
+
+    setZoteroForceOcrIds((prev) => {
+      const next = new Set(prev)
+      forceOcrIds.forEach((id) => next.add(id))
+      return next
+    })
+
+    if (forceOcrIds.length > 0) {
+      toast.success(`已确认 ${selectedPreviewItems.length} 篇文献（${forceOcrIds.length} 篇强制OCR）`)
+    } else {
+      toast.success(`已确认 ${selectedPreviewItems.length} 篇文献`)
+    }
+  }
+
+  const handleObsidianSelectionChange = useCallback(
+    (ids: Set<string>, items: FileTreeItem[]) => {
+      setObsidianSelectedIds(ids)
+      setObsidianSelectedItems(items)
+    },
+    []
+  )
+
+  // 刷新预览（强制从后端获取最新数据）
+  const handleRefreshPreview = async () => {
     const itemIds = zoteroSelectedItems
       .filter((item) => item.type === 'item')
       .map((item) => item.item_id)
@@ -148,64 +249,23 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
         item_ids: itemIds,
         prefix: zoteroPrefix,
       })
-      setPreviewData(result.items)
-      setPreviewMeta({
+      const newMeta = {
         totalItems: result.total_items,
         eligibleItems: result.eligible_items,
         ineligibleItems: result.ineligible_items,
         filteringRules: result.filtering_rules,
+      }
+      setPreviewData(result.items)
+      setPreviewMeta(newMeta)
+      setPreviewCache({
+        data: result.items,
+        meta: newMeta,
+        itemIds,
       })
-      setPreviewOpen(true)
     } catch (error: any) {
-      toast.error(error.response?.data?.detail || '预览失败')
+      toast.error(error.response?.data?.detail || '刷新预览失败')
     }
   }
-
-  const handlePreviewConfirm = (selectedPreviewItems: ZoteroPreviewItem[], forceOcrIds: number[]) => {
-    const selectedItemIds = new Set(selectedPreviewItems.map((item) => item.item_id))
-
-    setZoteroSelectedItems((prev) => {
-      const otherItems = prev.filter(
-        (item) => item.type !== 'item' || !item.item_id || !selectedItemIds.has(item.item_id)
-      )
-      const newZoteroItems = zoteroSelectedItems
-        .filter(
-          (item) =>
-            item.type === 'item' &&
-            item.item_id !== undefined &&
-            selectedItemIds.has(item.item_id)
-        )
-      return [...otherItems, ...newZoteroItems]
-    })
-
-    setZoteroSelectedIds((prev) => {
-      const next = new Set(prev)
-      zoteroSelectedItems
-        .filter((item) => item.type === 'item' && item.item_id !== undefined && selectedItemIds.has(item.item_id))
-        .forEach((item) => next.add(item.id))
-      return next
-    })
-
-    setZoteroForceOcrIds((prev) => {
-      const next = new Set(prev)
-      forceOcrIds.forEach((id) => next.add(id))
-      return next
-    })
-
-    if (forceOcrIds.length > 0) {
-      toast.success(`已添加 ${selectedPreviewItems.length} 篇文献（${forceOcrIds.length} 篇强制OCR）到选择列表`)
-    } else {
-      toast.success(`已添加 ${selectedPreviewItems.length} 篇文献到选择列表`)
-    }
-  }
-
-  const handleObsidianSelectionChange = useCallback(
-    (ids: Set<string>, items: FileTreeItem[]) => {
-      setObsidianSelectedIds(ids)
-      setObsidianSelectedItems(items)
-    },
-    []
-  )
 
   const handleFileRemove = (id: string) => {
     setFileSelectedItems((prev) => prev.filter((item) => item.id !== id))
@@ -282,10 +342,8 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
 
         if (result.task_id) {
           toast.success(`导入任务已提交: ${result.task_id}`)
-          setImportCompleted(itemsToImport.length)
-          setImportProgress((prev) =>
-            prev.map((p) => ({ ...p, status: 'success' as const }))
-          )
+          setCurrentTaskId(result.task_id)
+          setImportCompleted(0)
         }
       } else {
         const importItems = itemsToImport.map((item) => {
@@ -315,10 +373,8 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
 
         if (result.task_id) {
           toast.success(`导入任务已提交: ${result.task_id}`)
-          setImportCompleted(itemsToImport.length)
-          setImportProgress((prev) =>
-            prev.map((p) => ({ ...p, status: 'success' as const }))
-          )
+          setCurrentTaskId(result.task_id)
+          setImportCompleted(0)
         }
       }
     } catch (error: any) {
@@ -330,27 +386,36 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
           error: '导入失败',
         }))
       )
+      setCurrentTaskId(null)
     } finally {
       setIsImporting(false)
     }
   }
 
+  // Zotero使用确认后的项目列表，其他来源直接使用选择的项目
   const allSelectedItems =
     activeSource === 'zotero'
-      ? zoteroSelectedItems
+      ? zoteroConfirmedItems
       : activeSource === 'obsidian'
         ? obsidianSelectedItems
         : fileSelectedItems
+
+  // Zotero需要先预览并确认才能导入
+  const canImportZotero = activeSource !== 'zotero' || zoteroPreviewConfirmed
 
   const resetState = () => {
     setActiveSource('zotero')
     setZoteroSelectedIds(new Set())
     setZoteroSelectedItems([])
+    setZoteroConfirmedItems([])
+    setZoteroPreviewConfirmed(false)
     setObsidianSelectedIds(new Set())
     setObsidianSelectedItems([])
     setFileSelectedItems([])
     setImportProgress([])
     setImportCompleted(0)
+    setCurrentTaskId(null)
+    setPreviewCache(null)
     setIsImporting(false)
     setAsyncMode(true)
   }
@@ -374,230 +439,150 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
         </DialogHeader>
 
         <div className="flex-1 min-h-0 flex flex-col gap-4 overflow-hidden">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 flex-1 min-h-0 overflow-hidden">
-            <Card className="flex flex-col overflow-hidden">
-              <CardHeader className="pb-2 shrink-0">
-                <CardTitle className="text-base flex items-center gap-2">
-                  <FolderOpen className="h-5 w-5" />
-                  选择来源
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="flex-1 min-h-0 overflow-hidden flex flex-col">
-                <Tabs value={activeSource} onValueChange={setActiveSource} className="flex-1 flex flex-col overflow-hidden">
-                  <TabsList className="grid w-full grid-cols-3 shrink-0">
-                    <TabsTrigger value="zotero" className="flex items-center gap-1">
-                      <Book className="h-4 w-4" />
-                      Zotero
-                    </TabsTrigger>
-                    <TabsTrigger value="obsidian" className="flex items-center gap-1">
-                      <Book className="h-4 w-4" />
-                      Obsidian
-                    </TabsTrigger>
-                    <TabsTrigger value="files" className="flex items-center gap-1">
-                      <FileText className="h-4 w-4" />
-                      文件
-                    </TabsTrigger>
-                  </TabsList>
+          <div className="flex gap-4 flex-1 min-h-0 overflow-hidden">
+            <div className="flex flex-col border rounded-lg p-4 flex-1 min-h-0 overflow-hidden">
+              <div className="flex items-center gap-2 mb-4 shrink-0">
+                <FolderOpen className="h-5 w-5" />
+                <span className="font-medium">选择来源</span>
+              </div>
+              
+              <Tabs value={activeSource} onValueChange={setActiveSource} className="flex flex-col flex-1 min-h-0 overflow-hidden">
+                <TabsList className="grid w-full grid-cols-3 shrink-0">
+                  <TabsTrigger value="zotero" className="flex items-center gap-1">
+                    <Book className="h-4 w-4" />
+                    Zotero
+                  </TabsTrigger>
+                  <TabsTrigger value="obsidian" className="flex items-center gap-1">
+                    <Book className="h-4 w-4" />
+                    Obsidian
+                  </TabsTrigger>
+                  <TabsTrigger value="files" className="flex items-center gap-1">
+                    <FileText className="h-4 w-4" />
+                    文件
+                  </TabsTrigger>
+                </TabsList>
 
-                  <TabsContent value="zotero" className="flex-1 min-h-0 flex flex-col mt-2 overflow-hidden">
-                    <div className="flex items-center gap-3 mb-3 shrink-0 flex-wrap">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => refetchZotero()}
-                        disabled={zoteroLoading}
-                        title="刷新 Zotero 收藏夹"
-                      >
-                        <RefreshCw className={`h-4 w-4 ${zoteroLoading ? 'animate-spin' : ''}`} />
-                      </Button>
-                      <div className="flex items-center gap-2">
-                        <Label htmlFor="prefix" className="text-xs whitespace-nowrap text-muted-foreground">前缀</Label>
-                        <Input
-                          id="prefix"
-                          value={zoteroPrefix}
-                          onChange={(e) => setZoteroPrefix(e.target.value)}
-                          placeholder="[kb]"
-                          className="h-8 w-24 text-sm"
-                        />
-                      </div>
-                      <Button
-                        variant="default"
-                        size="sm"
-                        onClick={handlePreviewZotero}
-                        disabled={zoteroSelectedItems.filter(i => i.type === 'item').length === 0 || zoteroPreview.isPending}
-                        title="预览导入效果（应用筛选规则）"
-                      >
-                        <Eye className={`h-4 w-4 ${zoteroPreview.isPending ? 'animate-spin' : ''}`} />
-                        预览
-                      </Button>
-                      <span className="text-sm text-muted-foreground ml-auto">
-                        已选 {zoteroSelectedItems.length} 篇文献
-                      </span>
-                    </div>
-                    <div className="border rounded-lg flex-1 min-h-0">
+                <TabsContent value="zotero" className="flex flex-col flex-1 min-h-0 overflow-hidden">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Button variant="outline" size="sm" onClick={() => refetchZotero()} disabled={zoteroLoading}>
+                      <RefreshCw className={`h-4 w-4 ${zoteroLoading ? 'animate-spin' : ''}`} />
+                    </Button>
+                    <Label htmlFor="prefix" className="text-xs text-muted-foreground">前缀</Label>
+                    <Input id="prefix" value={zoteroPrefix} onChange={(e) => setZoteroPrefix(e.target.value)} className="h-7 w-20 text-xs" />
+                    <Button variant="default" size="sm" onClick={handlePreviewZotero} disabled={zoteroSelectedItems.filter(i => i.type === 'item').length === 0 || zoteroPreview.isPending} className="ml-auto">
+                      <Eye className={`h-4 w-4 ${zoteroPreview.isPending ? 'animate-spin' : ''}`} />
+                    </Button>
+                  </div>
+                  <div className="text-sm text-muted-foreground mb-2">
+                    已选 {zoteroSelectedItems.length} 篇文献
+                    {zoteroPreviewConfirmed && `（已确认 ${zoteroConfirmedItems.length} 篇）`}
+                    {!zoteroPreviewConfirmed && zoteroSelectedItems.length > 0 && ' → 请预览确认'}
+                  </div>
+                  <div className="border rounded-lg flex-1 min-h-0 overflow-hidden">
+                    <FileTree
+                      items={zoteroTreeItems}
+                      selectedIds={zoteroSelectedIds}
+                      onSelectionChange={handleZoteroSelectionChange}
+                      loading={zoteroLoading}
+                      searchPlaceholder="搜索收藏夹或文献..."
+                    />
+                  </div>
+                </TabsContent>
+
+                <TabsContent value="obsidian" className="flex flex-col flex-1 min-h-0 overflow-hidden">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Select value={selectedVault} onValueChange={setSelectedVault}>
+                      <SelectTrigger className="flex-1"><SelectValue placeholder="选择 Vault..." /></SelectTrigger>
+                      <SelectContent>
+                        {vaultsLoading ? (
+                          <div className="p-2 text-center"><Loader2 className="h-4 w-4 animate-spin mx-auto" /></div>
+                        ) : obsidianVaults?.vaults && obsidianVaults.vaults.length > 0 ? (
+                          obsidianVaults.vaults.map((vault) => (
+                            <SelectItem key={vault.name} value={vault.name}>{vault.name} ({vault.note_count || 0} notes)</SelectItem>
+                          ))
+                        ) : (
+                          <div className="p-2 text-sm text-muted-foreground">未找到 Vault</div>
+                        )}
+                      </SelectContent>
+                    </Select>
+                    <Button variant="outline" size="sm" onClick={() => refetchVaults()} disabled={vaultsLoading}>
+                      <RefreshCw className={`h-4 w-4 ${vaultsLoading ? 'animate-spin' : ''}`} />
+                    </Button>
+                  </div>
+                  <div className="text-sm text-muted-foreground mb-2">
+                    {obsidianSelectedItems.length} 个文件已选择
+                  </div>
+                  <div className="border rounded-lg flex-1 min-h-0 overflow-hidden">
+                    {selectedVault ? (
                       <FileTree
-                        items={zoteroTreeItems}
-                        selectedIds={zoteroSelectedIds}
-                        onSelectionChange={handleZoteroSelectionChange}
-                        loading={zoteroLoading}
-                        searchPlaceholder="搜索收藏夹或文献..."
+                        items={obsidianTreeItems}
+                        selectedIds={obsidianSelectedIds}
+                        onSelectionChange={handleObsidianSelectionChange}
+                        loading={treeLoading}
+                        searchPlaceholder="搜索文件夹或笔记..."
                       />
-                    </div>
-                  </TabsContent>
+                    ) : (
+                      <div className="flex items-center justify-center h-full text-muted-foreground text-sm">请先选择 Vault</div>
+                    )}
+                  </div>
+                </TabsContent>
 
-                  <TabsContent value="obsidian" className="flex-1 min-h-0 flex flex-col mt-2 overflow-hidden">
-                    <div className="space-y-2 mb-2 shrink-0">
-                      <Select value={selectedVault} onValueChange={setSelectedVault}>
-                        <SelectTrigger>
-                          <SelectValue placeholder="选择 Vault..." />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {vaultsLoading ? (
-                            <div className="p-2 text-center">
-                              <Loader2 className="h-4 w-4 animate-spin mx-auto" />
-                            </div>
-                          ) : obsidianVaults?.vaults && obsidianVaults.vaults.length > 0 ? (
-                            obsidianVaults.vaults.map((vault) => (
-                              <SelectItem key={vault.name} value={vault.name}>
-                                {vault.name} ({vault.note_count || 0} notes)
-                              </SelectItem>
-                            ))
-                          ) : (
-                            <div className="p-2 text-sm text-muted-foreground">
-                              未找到 Vault
-                            </div>
-                          )}
-                        </SelectContent>
-                      </Select>
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm text-muted-foreground">
-                          {obsidianSelectedItems.length} 个文件已选择
-                        </span>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => refetchVaults()}
-                          disabled={vaultsLoading}
-                          title="刷新 Obsidian Vaults"
-                        >
-                          <RefreshCw className={`h-4 w-4 ${vaultsLoading ? 'animate-spin' : ''}`} />
-                        </Button>
-                      </div>
-                    </div>
-                    <div className="border rounded-lg flex-1 min-h-0">
-                      {selectedVault ? (
-                        <FileTree
-                          items={obsidianTreeItems}
-                          selectedIds={obsidianSelectedIds}
-                          onSelectionChange={handleObsidianSelectionChange}
-                          loading={treeLoading}
-                          searchPlaceholder="搜索文件夹或笔记..."
-                        />
-                      ) : (
-                        <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
-                          请先选择 Vault
-                        </div>
-                      )}
-                    </div>
-                  </TabsContent>
+                <TabsContent value="files" className="flex flex-col flex-1 min-h-0 overflow-hidden">
+                  <div className="flex flex-col items-center justify-center flex-1 gap-4">
+                    <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFileChange} />
+                    <Button onClick={handleFilePicker} variant="outline" className="w-full max-w-xs">
+                      <Upload className="h-4 w-4 mr-2" />选择文件
+                    </Button>
+                    <p className="text-xs text-muted-foreground text-center">支持 PDF, DOCX, XLSX, PPTX, MD, TXT 等格式</p>
+                  </div>
+                </TabsContent>
+              </Tabs>
+            </div>
 
-                  <TabsContent value="files" className="flex-1 min-h-0 flex flex-col mt-2 overflow-hidden">
-                    <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-4">
-                      <input
-                        ref={fileInputRef}
-                        type="file"
-                        multiple
-                        className="hidden"
-                        onChange={handleFileChange}
-                      />
-                      <Button onClick={handleFilePicker} variant="outline" className="w-full max-w-sm" title="选择要上传的文件">
-                        <Upload className="h-4 w-4 mr-2" />
-                        选择文件
-                      </Button>
-                      <p className="text-xs text-muted-foreground text-center">
-                        支持 PDF, DOCX, XLSX, PPTX, MD, TXT 等格式
-                      </p>
-                    </div>
-                  </TabsContent>
-                </Tabs>
-              </CardContent>
-            </Card>
-
-            <div className="space-y-4 flex flex-col min-h-0 overflow-hidden">
-              <div className="flex-1 min-h-0 overflow-hidden">
-                <SelectedFilesPanel
-                  selectedItems={allSelectedItems}
-                  onRemove={
-                    activeSource === 'files'
-                      ? handleFileRemove
-                      : activeSource === 'zotero'
-                        ? (id) => {
-                            setZoteroSelectedItems((prev) => prev.filter((i) => i.id !== id))
-                            setZoteroSelectedIds((prev) => {
-                              const next = new Set(prev)
-                              next.delete(id)
-                              return next
-                            })
-                          }
-                        : (id) => {
-                            setObsidianSelectedItems((prev) => prev.filter((i) => i.id !== id))
-                            setObsidianSelectedIds((prev) => {
-                              const next = new Set(prev)
-                              next.delete(id)
-                              return next
-                            })
-                          }
-                  }
-                  onClearAll={
-                    activeSource === 'files'
-                      ? handleClearAllFiles
-                      : activeSource === 'zotero'
-                        ? () => {
-                            setZoteroSelectedItems([])
-                            setZoteroSelectedIds(new Set())
-                          }
-                        : () => {
-                            setObsidianSelectedItems([])
-                            setObsidianSelectedIds(new Set())
-                          }
-                  }
-                />
-              </div>
-
-              <div className="shrink-0">
-                <ImportProgressPanel
-                  documents={importProgress}
-                  documentsTotal={allSelectedItems.length}
-                  documentsCompleted={importCompleted}
-                />
-              </div>
+            <div className="flex flex-col gap-4 w-[400px] shrink-0">
+              <SelectedFilesPanel
+                selectedItems={allSelectedItems}
+                onRemove={
+                  activeSource === 'files'
+                    ? handleFileRemove
+                    : activeSource === 'zotero'
+                      ? (id) => {
+                          setZoteroSelectedItems((prev) => prev.filter((i) => i.id !== id))
+                          setZoteroSelectedIds((prev) => { const next = new Set(prev); next.delete(id); return next })
+                        }
+                      : (id) => {
+                          setObsidianSelectedItems((prev) => prev.filter((i) => i.id !== id))
+                          setObsidianSelectedIds((prev) => { const next = new Set(prev); next.delete(id); return next })
+                        }
+                }
+                onClearAll={
+                  activeSource === 'files'
+                    ? handleClearAllFiles
+                    : activeSource === 'zotero'
+                      ? () => { setZoteroSelectedItems([]); setZoteroSelectedIds(new Set()) }
+                      : () => { setObsidianSelectedItems([]); setObsidianSelectedIds(new Set()) }
+                }
+              />
+              <ImportProgressPanel
+                documents={importProgress}
+                documentsTotal={allSelectedItems.length}
+                documentsCompleted={importCompleted}
+                taskId={currentTaskId || undefined}
+              />
             </div>
           </div>
 
           <div className="flex items-center justify-between shrink-0 border-t pt-4">
             <div className="flex items-center gap-3">
               <span className="text-sm text-muted-foreground">导入模式：</span>
-              <Button
-                variant={asyncMode ? 'default' : 'outline'}
-                size="sm"
-                onClick={() => setAsyncMode(true)}
-                title="立即返回，任务在后台执行，可在任务列表查看进度"
-              >
-                异步
-              </Button>
-              <Button
-                variant={!asyncMode ? 'default' : 'outline'}
-                size="sm"
-                onClick={() => setAsyncMode(false)}
-                title="等待所有文档处理完成后再返回"
-              >
-                同步
-              </Button>
+              <Button variant={asyncMode ? 'default' : 'outline'} size="sm" onClick={() => setAsyncMode(true)}>异步</Button>
+              <Button variant={!asyncMode ? 'default' : 'outline'} size="sm" onClick={() => setAsyncMode(false)}>同步</Button>
             </div>
             <Button
               onClick={handleImport}
-              disabled={allSelectedItems.length === 0 || isImporting}
+              disabled={allSelectedItems.length === 0 || isImporting || !canImportZotero}
               size="lg"
+              title={!canImportZotero ? '请先预览并确认要导入的文献' : ''}
             >
               {isImporting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               {isImporting ? '导入中...' : `开始导入 (${allSelectedItems.length})`}
@@ -616,6 +601,7 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
       eligibleItems={previewMeta.eligibleItems}
       ineligibleItems={previewMeta.ineligibleItems}
       onConfirm={handlePreviewConfirm}
+      onRefresh={handleRefreshPreview}
       isLoading={zoteroPreview.isPending}
     />
     </>

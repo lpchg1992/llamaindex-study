@@ -1,5 +1,7 @@
+import { useState, useEffect } from 'react'
 import { CheckCircle, Circle, Loader2, XCircle, AlertCircle } from 'lucide-react'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { useTaskWebSocket } from '@/lib/websocket'
 import { cn } from '@/lib/utils'
 
 export interface DocumentProgress {
@@ -15,13 +17,78 @@ interface ImportProgressPanelProps {
   documents: DocumentProgress[]
   documentsTotal: number
   documentsCompleted: number
+  taskId?: string
 }
 
 export function ImportProgressPanel({
   documents,
   documentsTotal,
   documentsCompleted,
+  taskId,
 }: ImportProgressPanelProps) {
+  const [localDocuments, setLocalDocuments] = useState<DocumentProgress[]>(documents)
+
+  useTaskWebSocket(!!taskId)
+
+  useEffect(() => {
+    setLocalDocuments(documents)
+  }, [documents])
+
+  useEffect(() => {
+    if (!taskId) return
+
+    const wsUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.hostname}:${import.meta.env.VITE_API_PORT || '37241'}/ws/tasks`
+    
+    const ws = new WebSocket(wsUrl)
+    
+    ws.onmessage = (event) => {
+      try {
+        const message = JSON.parse(event.data)
+        if (message.type === 'task_update' && message.task_id === taskId) {
+          const data = message.data
+          
+          if (data.status === 'completed' || data.status === 'failed') {
+            setLocalDocuments(prev => prev.map(doc => ({
+              ...doc,
+              status: data.status === 'completed' ? 'success' as const : 'failed' as const,
+              error: data.error
+            })))
+            ws.close()
+            return
+          }
+
+          if (data.message) {
+            const match = data.message.match(/\[(\d+)\/(\d+)\]\s*处理:\s*(\w+)\s*-\s*(.+)/)
+            if (match) {
+              const current = parseInt(match[1], 10)
+              
+              setLocalDocuments(prev => prev.map((doc, index) => {
+                const isCurrentItem = index + 1 === current
+                const isProcessed = index + 1 < current
+                return {
+                  ...doc,
+                  status: isCurrentItem ? 'processing' as const : 
+                         isProcessed ? 'success' as const : 
+                         doc.status === 'failed' ? 'failed' as const : 'pending' as const
+                }
+              }))
+            }
+          }
+        }
+      } catch (e) {
+        console.error('Failed to parse WebSocket message:', e)
+      }
+    }
+
+    ws.onerror = () => {
+      console.warn('WebSocket error (may be expected)')
+    }
+
+    return () => {
+      ws.close()
+    }
+  }, [taskId])
+
   const getStatusIcon = (status: DocumentProgress['status']) => {
     switch (status) {
       case 'pending':
@@ -60,6 +127,8 @@ export function ImportProgressPanel({
   const overallProgress =
     documentsTotal > 0 ? Math.round((documentsCompleted / documentsTotal) * 100) : 0
 
+  const displayDocuments = taskId ? localDocuments : documents
+
   return (
     <div className="flex flex-col h-full border rounded-lg">
       <div className="p-3 border-b bg-muted/30">
@@ -77,13 +146,13 @@ export function ImportProgressPanel({
         </div>
       </div>
       <ScrollArea className="flex-1">
-        {documents.length === 0 ? (
+        {displayDocuments.length === 0 ? (
           <div className="text-center text-muted-foreground py-8 text-sm">
             暂无导入任务
           </div>
         ) : (
           <div className="p-2 space-y-2">
-            {documents.map((doc) => (
+            {displayDocuments.map((doc) => (
               <div
                 key={doc.id}
                 className={cn(

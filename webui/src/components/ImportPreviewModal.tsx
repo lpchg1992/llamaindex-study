@@ -31,6 +31,7 @@ interface ImportPreviewModalProps {
   eligibleItems: number
   ineligibleItems: number
   onConfirm: (selectedItems: ZoteroPreviewItem[], forceOcrIds: number[]) => void
+  onRefresh?: () => void
   isLoading?: boolean
 }
 
@@ -84,6 +85,7 @@ export function ImportPreviewModal({
   eligibleItems,
   ineligibleItems,
   onConfirm,
+  onRefresh,
   isLoading,
 }: ImportPreviewModalProps) {
   const [selectedIds, setSelectedIds] = useState<Set<number>>(() => {
@@ -157,8 +159,8 @@ export function ImportPreviewModal({
             应用筛选规则后，共 {totalItems} 篇文献，其中 {eligibleItems} 篇符合条件，{ineligibleItems} 篇将跳过，{duplicateCount} 篇已导入
           </DialogDescription>
         </DialogHeader>
-
-        <div className="flex-1 min-h-0 flex flex-col gap-4 overflow-hidden px-1">
+        
+        <div className="flex items-center justify-between px-1">
           <div className="flex flex-wrap gap-2 text-sm">
             {filteringRules.map((rule, i) => (
               <Badge key={i} variant="outline" className="text-xs">
@@ -166,7 +168,21 @@ export function ImportPreviewModal({
               </Badge>
             ))}
           </div>
+          {onRefresh && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onRefresh}
+              disabled={isLoading}
+              title="刷新预览"
+            >
+              <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
+              刷新
+            </Button>
+          )}
+        </div>
 
+        <div className="flex-1 min-h-0 flex flex-col gap-4 overflow-hidden px-1">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
             <div className="flex items-center gap-3 p-3 border rounded-lg bg-green-50/50">
               <CheckCircle2 className="h-5 w-5 text-green-600 shrink-0" />

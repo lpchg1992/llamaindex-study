@@ -7,6 +7,8 @@ export interface TaskWebSocketMessage {
   data: {
     status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused'
     progress: number
+    current?: number
+    total?: number
     message: string
     result?: {
       kb_id: string
@@ -55,6 +57,8 @@ export function useTaskWebSocket(enabled: boolean = true) {
                   kb_id: message.data.result?.kb_id || '',
                   message: message.data.message,
                   progress: message.data.progress,
+                  current: message.data.current,
+                  total: message.data.total,
                   result: message.data.result,
                   error: message.data.error,
                 } as TaskResponse, ...oldData]
@@ -65,6 +69,8 @@ export function useTaskWebSocket(enabled: boolean = true) {
                 ...updatedTasks[taskIndex],
                 status: message.data.status,
                 progress: message.data.progress,
+                current: message.data.current,
+                total: message.data.total,
                 message: message.data.message,
                 result: message.data.result,
                 error: message.data.error,
@@ -128,6 +134,8 @@ interface TaskResponse {
   kb_id: string
   message: string
   progress: number
+  current?: number
+  total?: number
   result?: {
     kb_id: string
     files: number
