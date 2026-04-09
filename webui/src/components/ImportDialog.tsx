@@ -440,7 +440,7 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
 
         <div className="flex-1 min-h-0 flex flex-col gap-4 overflow-hidden">
           <div className="flex gap-4 flex-1 min-h-0 overflow-hidden">
-            <div className="flex flex-col border rounded-lg p-4 flex-1 min-h-0 overflow-hidden">
+            <div className="flex flex-col border rounded-lg p-4 w-[500px] shrink-0 min-h-0 overflow-hidden">
               <div className="flex items-center gap-2 mb-4 shrink-0">
                 <FolderOpen className="h-5 w-5" />
                 <span className="font-medium">选择来源</span>
@@ -463,17 +463,20 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
                 </TabsList>
 
                 <TabsContent value="zotero" className="flex flex-col flex-1 min-h-0 overflow-hidden">
-                  <div className="flex items-center gap-2 mb-2">
+                  <div className="flex items-center gap-3 mb-3">
                     <Button variant="outline" size="sm" onClick={() => refetchZotero()} disabled={zoteroLoading}>
                       <RefreshCw className={`h-4 w-4 ${zoteroLoading ? 'animate-spin' : ''}`} />
                     </Button>
-                    <Label htmlFor="prefix" className="text-xs text-muted-foreground">前缀</Label>
-                    <Input id="prefix" value={zoteroPrefix} onChange={(e) => setZoteroPrefix(e.target.value)} className="h-7 w-20 text-xs" />
-                    <Button variant="default" size="sm" onClick={handlePreviewZotero} disabled={zoteroSelectedItems.filter(i => i.type === 'item').length === 0 || zoteroPreview.isPending} className="ml-auto">
-                      <Eye className={`h-4 w-4 ${zoteroPreview.isPending ? 'animate-spin' : ''}`} />
+                    <div className="flex items-center gap-2">
+                      <Label htmlFor="prefix" className="text-xs text-muted-foreground">前缀</Label>
+                      <Input id="prefix" value={zoteroPrefix} onChange={(e) => setZoteroPrefix(e.target.value)} className="h-7 w-20 text-xs" />
+                    </div>
+                    <Button variant="default" size="sm" onClick={handlePreviewZotero} disabled={zoteroSelectedItems.filter(i => i.type === 'item').length === 0 || zoteroPreview.isPending}>
+                      <Eye className={`h-4 w-4 ${zoteroPreview.isPending ? 'animate-spin' : ''} mr-1`} />
+                      预览
                     </Button>
                   </div>
-                  <div className="text-sm text-muted-foreground mb-2">
+                  <div className="text-sm text-muted-foreground mb-3">
                     已选 {zoteroSelectedItems.length} 篇文献
                     {zoteroPreviewConfirmed && `（已确认 ${zoteroConfirmedItems.length} 篇）`}
                     {!zoteroPreviewConfirmed && zoteroSelectedItems.length > 0 && ' → 请预览确认'}
@@ -490,7 +493,7 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
                 </TabsContent>
 
                 <TabsContent value="obsidian" className="flex flex-col flex-1 min-h-0 overflow-hidden">
-                  <div className="flex items-center gap-2 mb-2">
+                  <div className="flex items-center gap-3 mb-3">
                     <Select value={selectedVault} onValueChange={setSelectedVault}>
                       <SelectTrigger className="flex-1"><SelectValue placeholder="选择 Vault..." /></SelectTrigger>
                       <SelectContent>
@@ -509,7 +512,7 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
                       <RefreshCw className={`h-4 w-4 ${vaultsLoading ? 'animate-spin' : ''}`} />
                     </Button>
                   </div>
-                  <div className="text-sm text-muted-foreground mb-2">
+                  <div className="text-sm text-muted-foreground mb-3">
                     {obsidianSelectedItems.length} 个文件已选择
                   </div>
                   <div className="border rounded-lg flex-1 min-h-0 overflow-hidden">
@@ -539,7 +542,7 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
               </Tabs>
             </div>
 
-            <div className="flex flex-col gap-4 w-[400px] shrink-0">
+            <div className="flex flex-col gap-4 flex-1 min-h-0 overflow-hidden">
               <SelectedFilesPanel
                 selectedItems={allSelectedItems}
                 onRemove={

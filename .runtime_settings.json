@@ -1,0 +1,14 @@
+{
+  "top_k": 20,
+  "use_hybrid_search": false,
+  "use_auto_merging": false,
+  "use_hyde": false,
+  "use_multi_query": false,
+  "num_multi_queries": 3,
+  "hybrid_search_alpha": 0.5,
+  "chunk_strategy": "hierarchical",
+  "chunk_size": 1024,
+  "chunk_overlap": 100,
+  "use_reranker": true,
+  "response_mode": "compact"
+}
