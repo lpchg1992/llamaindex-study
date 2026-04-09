@@ -105,6 +105,33 @@ class QueryEngineWrapper:
                 chunk_strategy = self.vector_store.get_chunk_strategy()
 
             if is_docstore_empty:
+                # 尝试使用 LanceDBDocumentStore（从 LanceDB 读取完整节点信息）
+                try:
+                    from src.llamaindex_study.vector_store import LanceDBDocumentStore
+
+                    # 从 vector_store 获取 kb_id
+                    kb_id = None
+                    if hasattr(self.vector_store, "kb_id"):
+                        kb_id = self.vector_store.kb_id
+                    elif hasattr(self.vector_store, "table_name"):
+                        kb_id = self.vector_store.table_name
+
+                    if kb_id:
+                        lance_docstore = LanceDBDocumentStore(kb_id=kb_id)
+                        lance_doc_count = len(lance_docstore)
+                        if lance_doc_count > 0:
+                            logger.info(f"LanceDB docstore 有 {lance_doc_count} 个节点")
+                            self.index.storage_context.docstore = lance_docstore
+                            docstore = lance_docstore
+                            is_docstore_empty = False
+                        else:
+                            logger.warning(
+                                "LanceDB docstore 为空，无法启用 Auto-Merging"
+                            )
+                except Exception as e:
+                    logger.warning(f"LanceDB docstore 初始化失败: {e}")
+
+            if is_docstore_empty:
                 logger.warning(
                     "Auto-Merging 需要 docstore，但当前 KB 的 docstore 为空"
                     "（可能使用 LanceDB 向量索引创建），将使用普通 retriever"
