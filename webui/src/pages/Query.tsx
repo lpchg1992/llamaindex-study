@@ -402,22 +402,22 @@ export function QueryPage() {
         <ScrollArea className="flex-1">
           {response ? (
             <div className="space-y-4">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <MessageSquare className="h-5 w-5" />
+              <Card className="border-l-4 border-l-primary">
+                <CardHeader className="pb-2">
+                  <CardTitle className="flex items-center gap-2 text-lg">
+                    <MessageSquare className="h-5 w-5 text-primary" />
                     Response
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="prose prose-sm max-w-none">
-                    <p className="whitespace-pre-wrap">{response.response}</p>
+                  <div className="prose prose-sm max-w-none dark:prose-invert">
+                    <p className="whitespace-pre-wrap break-words leading-relaxed">{response.response}</p>
                   </div>
                 </CardContent>
               </Card>
 
               {response.sources && response.sources.length > 0 && (
-                <Card>
+                <Card className="hover:shadow-md transition-shadow">
                   <CardHeader>
                     <CardTitle className="flex items-center gap-2">
                       <FileText className="h-5 w-5" />
@@ -426,13 +426,13 @@ export function QueryPage() {
                   </CardHeader>
                   <CardContent className="space-y-3">
                     {response.sources.map((source, index) => (
-                      <div key={index} className="p-3 border rounded-lg">
+                      <div key={index} className="p-4 border rounded-lg hover:bg-muted/50 transition-colors">
                         <div className="flex items-center justify-between mb-2">
-                          <Badge variant="outline">
-                            Score: {(source.score * 100).toFixed(1)}%
+                          <Badge variant={source.score > 0.8 ? 'default' : 'outline'} className="font-mono">
+                            {(source.score * 100).toFixed(0)}%
                           </Badge>
                         </div>
-                        <p className="text-sm text-muted-foreground line-clamp-3">
+                        <p className="text-sm text-muted-foreground line-clamp-3 break-words leading-relaxed">
                           {source.text}
                         </p>
                       </div>

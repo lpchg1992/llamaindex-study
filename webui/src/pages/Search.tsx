@@ -181,27 +181,27 @@ export function SearchPage() {
           ) : (
             <div className="space-y-4">
               {results.map((result, index) => (
-                <Card key={index}>
+                <Card key={index} className="hover:shadow-md transition-shadow">
                   <CardHeader className="pb-2">
                     <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <FileText className="h-4 w-4 text-muted-foreground" />
-                        <CardTitle className="text-sm">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <FileText className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                        <CardTitle className="text-sm truncate">
                           {result.metadata?.file_name as string || 'Document'}
                         </CardTitle>
                       </div>
-                      <Badge variant="outline">
-                        Score: {(result.score * 100).toFixed(1)}%
+                      <Badge variant={result.score > 0.8 ? 'default' : 'outline'} className="flex-shrink-0">
+                        {(result.score * 100).toFixed(0)}%
                       </Badge>
                     </div>
                   </CardHeader>
                   <CardContent>
-                    <p className="text-sm text-muted-foreground line-clamp-3">
+                    <p className="text-sm text-muted-foreground line-clamp-3 break-words">
                       {result.text}
                     </p>
                     {result.kb_id && (
-                      <p className="mt-2 text-xs text-muted-foreground">
-                        KB: {result.kb_id}
+                      <p className="mt-2 text-xs text-muted-foreground flex items-center gap-1">
+                        <span className="font-medium">KB:</span> {result.kb_id}
                       </p>
                     )}
                   </CardContent>

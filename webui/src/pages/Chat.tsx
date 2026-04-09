@@ -10,7 +10,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { MessageSquare, Loader2, Send, Trash2, Plus, Clock } from 'lucide-react'
+import { MessageSquare, Loader2, Send, Trash2, Plus, Clock, User, Bot } from 'lucide-react'
 import { toast } from 'sonner'
 import type { ChatMessage } from '@/types/api'
 
@@ -188,24 +188,37 @@ export function Chat() {
                   messages.map((msg, index) => (
                     <div
                       key={index}
-                      className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                      className={`flex gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`
+                      }
                     >
+                      <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${
+                        msg.role === 'user' ? 'bg-primary' : 'bg-muted'
+                      }`}>
+                        {msg.role === 'user' ? (
+                          <User className="w-4 h-4 text-primary-foreground" />
+                        ) : (
+                          <Bot className="w-4 h-4 text-muted-foreground" />
+                        )}
+                      </div>
                       <div
-                        className={`max-w-[70%] p-3 rounded-lg ${
+                        className={`max-w-[70%] p-4 rounded-2xl ${
                           msg.role === 'user'
-                            ? 'bg-primary text-primary-foreground'
-                            : 'bg-muted'
+                            ? 'bg-primary text-primary-foreground rounded-tr-sm'
+                            : 'bg-muted rounded-tl-sm'
                         }`}
                       >
-                        <p className="whitespace-pre-wrap">{msg.content}</p>
+                        <p className="whitespace-pre-wrap break-words leading-relaxed">{msg.content}</p>
                       </div>
                     </div>
                   ))
                 )}
                 {chatMutation.isPending && (
-                  <div className="flex justify-start">
-                    <div className="bg-muted p-3 rounded-lg">
-                      <Loader2 className="h-5 w-5 animate-spin" />
+                  <div className="flex gap-3">
+                    <div className="flex-shrink-0 w-8 h-8 rounded-full bg-muted flex items-center justify-center">
+                      <Bot className="w-4 h-4 text-muted-foreground" />
+                    </div>
+                    <div className="bg-muted p-4 rounded-2xl rounded-tl-sm">
+                      <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
                     </div>
                   </div>
                 )}
