@@ -11,7 +11,7 @@
 │                        任务执行流程                               │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
-│   任务提交 ──→ 调度器 ──→ 去重锁 ──→ dedup.db（串行访问）      │
+│   任务提交 ──→ 调度器 ──→ documents 表（串行访问）              │
 │       │                    │                                   │
 │       │                    ▼                                   │
 │       │              Embedding 处理                             │
@@ -36,23 +36,23 @@
 | 层级 | 组件 | 并行/串行 | 原因 |
 |------|------|----------|------|
 | 计算层 | Embedding | **自适应负载均衡** | 快的端点多分配，慢的端点少分配 |
-| 存储层 | dedup.db | 串行 | SQLite 不支持高并发 |
+| 存储层 | documents 表 | 串行 | SQLite 不支持高并发 |
 | 存储层 | LanceDB | 串行 | WriteQueue 避免锁定 |
 
 ### 2. 资源保护机制
 
-#### 去重数据库（Semaphore）
+#### documents 表（串行访问）
+
+documents 表用于记录文档元数据（source_path、file_hash、zotero_doc_id 等），实现增量同步。
 
 ```python
-# kb/task_lock.py
-class DedupLock:
-    async def __aenter__(self):
-        await self.lock.acquire()  # Semaphore(1)
-        
-# 使用方式
-async with DedupLock():
-    dedup_manager.detect_changes(...)
-    dedup_manager.mark_processed(...)
+# 增量检测：基于 documents 表
+doc_db = init_document_db()
+existing = doc_db.get_by_source_path(kb_id, str(file_path))
+if existing:
+    current_hash = compute_file_hash(str(file_path))
+    if existing.get("file_hash") == current_hash:
+        continue  # 跳过未变更文件
 ```
 
 #### LanceDB 写入队列
@@ -202,17 +202,22 @@ TaskScheduler.run()
 # kb/task_executor.py - _execute_obsidian()
 
 async def _execute_obsidian(self, task):
-    # 阶段1: 去重阶段（串行访问）
-    async with DedupLock():
-        dedup_manager.clear()  # 可选：重建
-        to_add, to_update = dedup_manager.detect_changes(...)
-        all_docs = [(c.rel_path, c.abs_path) for c in to_add + to_update]
+    # 阶段1: 增量检测（基于 documents 表）
+    doc_db = init_document_db()
+    for file_path in all_files:
+        existing = doc_db.get_by_source_path(kb_id, str(file_path))
+        if not existing:
+            files_to_process.append(file_path)
+        else:
+            current_hash = compute_file_hash(str(file_path))
+            if existing.get("file_hash") != current_hash:
+                files_to_process.append(file_path)
     
     # 阶段2: 并行处理（embedding - 自适应负载均衡）
     embed_processor = get_parallel_processor()
     await lance_write_queue.start()
     
-    for rel_path, abs_path in all_docs:
+    for rel_path, abs_path in files_to_process:
         nodes = node_parser.get_nodes_from_documents([doc])
         
         # 并行获取 embeddings（自适应负载均衡）
@@ -224,9 +229,8 @@ async def _execute_obsidian(self, task):
     
     await lance_write_queue.wait_until_empty()
     
-    # 阶段3: 保存状态（串行访问）
-    async with DedupLock():
-        dedup_manager._save()
+    # 阶段3: 保存文档记录
+    doc_db.create(kb_id=kb_id, source_file=rel_path, ...)
 ```
 
 ### 2. 并行 Embedding 处理器（自适应负载均衡 + 数据库驱动）
@@ -308,40 +312,18 @@ class ParallelEmbeddingProcessor:
 - `_health_check_loop()` 每30秒检查所有端点
 - 成功时标记 `is_healthy=True`，失败不立即标记（由实际调用处理）
 
-### 3. 去重数据库锁
+### 3. 增量同步机制（基于 documents 表）
 
-```python
-# kb/task_lock.py
+文档导入时通过 `documents` 表实现增量同步，避免重复处理。
 
-_dedup_lock = None  # 全局单例
-
-def get_dedup_lock() -> asyncio.Semaphore:
-    global _dedup_lock
-    if _dedup_lock is None:
-        _dedup_lock = asyncio.Semaphore(1)
-    return _dedup_lock
-
-class DedupLock:
-    """异步上下文管理器"""
-    async def __aenter__(self):
-        await self.lock.acquire()
-    async def __aexit__(self, *args):
-        self.lock.release()
-```
-
-### 增量同步机制
-
-文档导入时通过 `DeduplicationManager` 实现增量同步，避免重复处理。
-
-**代码位置**：`kb/deduplication.py`
+**代码位置**：`kb/database.py` → `DocumentDB`
 
 #### 核心概念
 
 | 概念 | 说明 |
 |------|------|
-| `ChangeType` | 变更类型枚举：ADD（新增）、UPDATE（更新）、DELETE（删除）、UNCHANGE（未变更） |
-| `FileChange` | 文件变更记录，包含路径、哈希、变更类型 |
-| `ProcessingRecord` | 处理记录，持久化到 dedup.db |
+| `DocumentModel` | 文档记录，包含 source_path、file_hash、zotero_doc_id 等 |
+| `ChunkModel` | 分块记录，包含 text、embedding、parent_chunk_id 等 |
 
 #### 检测流程
 
@@ -350,52 +332,35 @@ class DedupLock:
     ↓
 遍历文件，计算 SHA256 哈希
     ↓
-查询 dedup.db 中的历史记录
+查询 documents 表中的历史记录（按 source_path 或 zotero_doc_id）
     ↓
 比较哈希值
-    ├── 哈希相同 → UNCHANGED（跳过）
-    ├── 哈希不同 → UPDATE
-    └── 新文件 → ADD
-    ↓
-同步检测删除的文件（历史记录存在但当前文件不存在 → DELETE）
+    ├── 哈希相同 → 跳过
+    ├── 哈希不同 → 重新处理
+    └── 新文件 → 新增
 ```
 
 #### 关键方法
 
 | 方法 | 说明 |
 |------|------|
-| `detect_changes()` | 检测文件变更，返回 (to_add, to_update, to_delete, unchanged) |
-| `mark_processed()` | 标记文件为已处理 |
-| `clear()` | 清除所有记录（用于重建模式） |
-| `_save()` | 保存状态到 dedup.db |
-
-#### 数据库 Schema
-
-```sql
-CREATE TABLE dedup_records (
-    kb_id TEXT NOT NULL,       -- 知识库 ID
-    file_path TEXT NOT NULL,   -- 文件相对路径
-    hash TEXT NOT NULL,        -- SHA256 哈希值
-    doc_id TEXT NOT NULL,      -- 文档 ID（LlamaIndex 生成）
-    chunk_count INTEGER,        -- 分块数量
-    mtime REAL NOT NULL,       -- 文件修改时间
-    last_processed REAL,       -- 最后处理时间
-    PRIMARY KEY (kb_id, file_path)
-);
-```
+| `get_by_source_path()` | 按源路径查询文档 |
+| `get_by_zotero_doc_id()` | 按 Zotero ID 查询文档 |
+| `create()` | 创建或更新文档记录 |
+| `get_by_kb()` | 获取知识库下所有文档 |
 
 #### 与 LanceDB 配合
 
-去重管理层与 LanceDB 的 upsert 机制配合：
+documents 表与 LanceDB 配合：
 
 ```
-detect_changes() → 找出需要处理的文件
+get_by_source_path() → 找出需要处理的文件
     ↓
-处理文件，生成 nodes（含 doc_id）
+处理文件，生成 nodes
     ↓
-Upsert 到 LanceDB（基于 doc_id 去重）
+Upsert 到 LanceDB
     ↓
-mark_processed() → 更新 dedup.db 记录
+doc_db.create() → 更新 documents 记录
 ```
 
 #### CLI 控制
@@ -404,7 +369,7 @@ mark_processed() → 更新 dedup.db 记录
 # 增量同步（默认行为）
 uv run llamaindex-study ingest obsidian my_kb
 
-# 强制重建（清除 dedup.db，清空 LanceDB）
+# 强制重建（清空 LanceDB，重新导入）
 uv run llamaindex-study ingest obsidian my_kb --rebuild
 ```
 
@@ -721,7 +686,7 @@ API 提交任务
 ┌─────────────────────┐
 │   TaskExecutor      │  # 异步执行器
 │  - _execute_obsidian│
-│  - 去重锁保护       │
+│  - documents 表保护  │
 │  - 并行 embedding   │
 │  - 串行写入         │
 └─────────┬───────────┘
@@ -743,8 +708,8 @@ API 提交任务
    └── TaskQueue.submit_task()
 
 3. 任务执行 (TaskExecutor.execute_task)
-   ├── 阶段1: 去重（串行）
-   │   └── DedupLock() → detect_changes() → mark_processed()
+   ├── 阶段1: 增量检测（串行）
+   │   └── doc_db.get_by_source_path() → hash 比较
    │
    ├── 阶段2: 并行处理（embedding - 自适应负载均衡）
    │   ├── 解析文档
@@ -752,8 +717,8 @@ API 提交任务
    │   ├── 并行 Embedding（自适应负载均衡）
    │   └── 串行写入 LanceDB（WriteQueue）
    │
-   └── 阶段3: 保存状态（串行）
-       └── DedupLock() → _save()
+   └── 阶段3: 保存文档记录
+       └── doc_db.create()
 
 4. 进度推送（WebSocket）
    └── WebSocketManager.send_task_update()
@@ -998,18 +963,6 @@ CREATE TABLE sync_states (
     PRIMARY KEY (kb_id, file_path)
 );
 
--- 去重记录
-CREATE TABLE dedup_records (
-    kb_id TEXT NOT NULL,
-    file_path TEXT NOT NULL,
-    hash TEXT NOT NULL,
-    doc_id TEXT NOT NULL,
-    chunk_count INTEGER DEFAULT 0,
-    mtime REAL NOT NULL,
-    last_processed REAL NOT NULL,
-    PRIMARY KEY (kb_id, file_path)
-);
-
 -- 进度记录
 CREATE TABLE progress (
     kb_id TEXT UNIQUE NOT NULL,
@@ -1094,7 +1047,6 @@ Table: {kb_id}
 ├── project.db                          # 核心元数据 (SQLite, WAL模式)
 │   ├── knowledge_bases                # 知识库定义
 │   ├── sync_states                    # 文件同步状态
-│   ├── dedup_records                  # 去重记录
 │   ├── progress                       # 导入进度
 │   ├── documents                      # 文档记录
 │   ├── chunks                         # 分块记录
@@ -1133,7 +1085,6 @@ Table: {kb_id}
 |------|------|---------|
 | `knowledge_bases` | 知识库元数据 | kb_id, name, source_type, topics, persist_path |
 | `sync_states` | 文件同步状态 | kb_id, file_path, hash, mtime, doc_id |
-| `dedup_records` | 去重记录 | kb_id, file_path, hash, doc_id, chunk_count |
 | `progress` | 导入进度 | kb_id, task_type, current, total, processed_items |
 | `documents` | 文档记录 | id, kb_id, source_file, file_hash, chunk_count |
 | `chunks` | 分块记录 | id, doc_id, kb_id, text, parent_chunk_id, hierarchy_level |
@@ -1215,7 +1166,7 @@ class ConversionMetadata:
 | 清除目标 | 操作方式 |
 |---------|---------|
 | 知识库向量数据 | `KnowledgeBaseService.delete()` → 删除 `storage/{kb_id}/` |
-| 去重状态 | `dedup_manager.clear()` → 清空 `dedup_records` 表 |
+| 文档记录 | `doc_db.delete()` → 清空 `documents` 表 |
 | 同步状态 | `sync_state.clear()` → 清空 `sync_states` 表 |
 | 导入进度 | `progress.save()` 重新初始化 ProcessingProgress |
 | Zotero 进度文件 | `rm ~/.llamaindex/zotero_*_progress.json` |
@@ -1226,7 +1177,7 @@ class ConversionMetadata:
 | 模块 | 存储位置 |
 |------|---------|
 | `KnowledgeBaseService` | `knowledge_bases` 表, `storage/{kb_id}/` |
-| `DeduplicationManager` | `dedup_records` 表, `file_hashes.json` (legacy) |
+| `DocumentDB` | `documents` 表 |
 | `SyncState` | `sync_states` 表, `.sync_state.json` (legacy) |
 | `TaskQueue` | `tasks.db` → `tasks` 表 |
 | `DocumentProcessor` | `documents`, `chunks` 表, `/Volumes/online/llamaindex/mddocs/` |
@@ -1301,9 +1252,9 @@ DEFAULT_MAX_CONCURRENT = int(os.getenv("MAX_CONCURRENT_TASKS", "10"))
 ```python
 # 1. 添加执行器 kb/task_executor.py
 async def _execute_notion(self, task):
-    async with DedupLock():
-        # 处理 Notion 页面
-        pass
+    doc_db = init_document_db()
+    # 处理 Notion 页面
+    pass
 
 # 2. 添加 API 端点 api.py
 @app.post("/kbs/{kb_id}/ingest/notion")
@@ -1325,19 +1276,6 @@ async def test():
     results = await p.process_batch(['test'] * 10)
     print(f'统计: {p.get_stats()}')
     print(f'失败统计: {p.get_failure_stats()}')
-
-asyncio.run(test())
-"
-
-# 测试去重锁
-uv run python -c "
-import asyncio
-from kb.task_lock import DedupLock
-
-async def test():
-    async with DedupLock():
-        print('Lock acquired')
-    print('Lock released')
 
 asyncio.run(test())
 "

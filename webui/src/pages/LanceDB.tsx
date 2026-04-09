@@ -228,7 +228,6 @@ function DocumentManagementTab({ kbId }: { kbId: string }) {
                   <div className="flex items-center gap-2 shrink-0">
                     <Badge variant="secondary" className="text-xs whitespace-nowrap">{doc.chunk_count} chunks</Badge>
                     <Badge variant="outline" className="text-xs whitespace-nowrap">{doc.total_chars.toLocaleString()} chars</Badge>
-                    <code className="text-xs text-muted-foreground font-mono whitespace-nowrap">{doc.id.slice(0, 8)}...</code>
                     <Button
                       variant="ghost"
                       size="icon"
@@ -246,11 +245,15 @@ function DocumentManagementTab({ kbId }: { kbId: string }) {
 
                 {expandedDoc === doc.id && (
                   <div className="border-t bg-muted/30 p-3 max-w-full overflow-hidden">
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3 max-w-full overflow-hidden">
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-3 max-w-full overflow-hidden">
                       <div className="min-w-0 max-w-full overflow-hidden">
                         <p className="text-xs text-muted-foreground">ID</p>
                         <p className="text-xs font-mono truncate">{doc.id}</p>
                       </div>
+                      {doc.zotero_doc_id && <div className="min-w-0 max-w-full overflow-hidden">
+                        <p className="text-xs text-muted-foreground">Zotero ID</p>
+                        <p className="text-xs font-mono truncate">{doc.zotero_doc_id}</p>
+                      </div>}
                       <div className="min-w-0 max-w-full overflow-hidden">
                         <p className="text-xs text-muted-foreground">File Hash</p>
                         <p className="text-xs font-mono truncate">{doc.file_hash}</p>

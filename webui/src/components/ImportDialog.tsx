@@ -10,6 +10,8 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import {
   Select,
   SelectContent,
@@ -74,6 +76,8 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
     ineligibleItems: 0,
     filteringRules: [] as string[],
   })
+  const [zoteroPrefix, setZoteroPrefix] = useState("[kb]")
+  const [zoteroForceOcrIds, setZoteroForceOcrIds] = useState<Set<number>>(new Set())
 
   const zoteroTreeItems = useMemo<FileTreeItem[]>(() => {
     if (!zoteroCollectionsData?.collections) return []
@@ -139,7 +143,11 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
     }
 
     try {
-      const result = await zoteroPreview.mutateAsync({ item_ids: itemIds })
+      const result = await zoteroPreview.mutateAsync({
+        kb_id: kbId,
+        item_ids: itemIds,
+        prefix: zoteroPrefix,
+      })
       setPreviewData(result.items)
       setPreviewMeta({
         totalItems: result.total_items,
@@ -153,7 +161,7 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
     }
   }
 
-  const handlePreviewConfirm = (selectedPreviewItems: ZoteroPreviewItem[]) => {
+  const handlePreviewConfirm = (selectedPreviewItems: ZoteroPreviewItem[], forceOcrIds: number[]) => {
     const selectedItemIds = new Set(selectedPreviewItems.map((item) => item.item_id))
 
     setZoteroSelectedItems((prev) => {
@@ -178,7 +186,17 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
       return next
     })
 
-    toast.success(`已添加 ${selectedPreviewItems.length} 篇文献到选择列表`)
+    setZoteroForceOcrIds((prev) => {
+      const next = new Set(prev)
+      forceOcrIds.forEach((id) => next.add(id))
+      return next
+    })
+
+    if (forceOcrIds.length > 0) {
+      toast.success(`已添加 ${selectedPreviewItems.length} 篇文献（${forceOcrIds.length} 篇强制OCR）到选择列表`)
+    } else {
+      toast.success(`已添加 ${selectedPreviewItems.length} 篇文献到选择列表`)
+    }
   }
 
   const handleObsidianSelectionChange = useCallback(
@@ -270,11 +288,20 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
           )
         }
       } else {
-        const importItems = itemsToImport.map((item) => ({
-          type: item.type,
-          id: item.item_id?.toString(),
-          path: item.path,
-        }))
+        const importItems = itemsToImport.map((item) => {
+          const base = {
+            type: item.type,
+            id: item.item_id?.toString(),
+            path: item.path,
+          }
+          if (activeSource === 'zotero' && item.type === 'item' && item.item_id !== undefined && zoteroForceOcrIds.has(item.item_id)) {
+            return {
+              ...base,
+              options: { force_ocr: true },
+            }
+          }
+          return base
+        })
 
         const result = await ingestSelective.mutateAsync({
           kbId,
@@ -373,7 +400,7 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
                   </TabsList>
 
                   <TabsContent value="zotero" className="flex-1 min-h-0 flex flex-col mt-2 overflow-hidden">
-                    <div className="flex gap-2 mb-2 shrink-0">
+                    <div className="flex items-center gap-3 mb-3 shrink-0 flex-wrap">
                       <Button
                         variant="outline"
                         size="sm"
@@ -383,8 +410,18 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
                       >
                         <RefreshCw className={`h-4 w-4 ${zoteroLoading ? 'animate-spin' : ''}`} />
                       </Button>
+                      <div className="flex items-center gap-2">
+                        <Label htmlFor="prefix" className="text-xs whitespace-nowrap text-muted-foreground">前缀</Label>
+                        <Input
+                          id="prefix"
+                          value={zoteroPrefix}
+                          onChange={(e) => setZoteroPrefix(e.target.value)}
+                          placeholder="[kb]"
+                          className="h-8 w-24 text-sm"
+                        />
+                      </div>
                       <Button
-                        variant="outline"
+                        variant="default"
                         size="sm"
                         onClick={handlePreviewZotero}
                         disabled={zoteroSelectedItems.filter(i => i.type === 'item').length === 0 || zoteroPreview.isPending}
@@ -393,8 +430,8 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
                         <Eye className={`h-4 w-4 ${zoteroPreview.isPending ? 'animate-spin' : ''}`} />
                         预览
                       </Button>
-                      <span className="text-sm text-muted-foreground flex items-center">
-                        {zoteroSelectedItems.length} 个文献已选择
+                      <span className="text-sm text-muted-foreground ml-auto">
+                        已选 {zoteroSelectedItems.length} 篇文献
                       </span>
                     </div>
                     <div className="border rounded-lg flex-1 min-h-0">

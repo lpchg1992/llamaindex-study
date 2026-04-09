@@ -122,6 +122,9 @@ export interface SelectiveImportItem {
   type: string
   id?: string
   path?: string
+  options?: {
+    force_ocr?: boolean
+  }
 }
 
 export interface SelectiveImportRequest {
@@ -242,8 +245,10 @@ export interface ZoteroPreviewResponse {
 }
 
 export interface ZoteroPreviewRequest {
+  kb_id: string
   item_ids?: number[]
   collection_id?: string
+  prefix?: string
 }
 
 
@@ -321,6 +326,7 @@ export interface DocumentInfo {
   source_file: string
   source_path: string
   file_hash: string
+  zotero_doc_id: string | null
   file_size: number
   mime_type: string
   chunk_count: number

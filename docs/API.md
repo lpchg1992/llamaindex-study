@@ -16,7 +16,7 @@
 - **失败重试机制** - 每个端点最多重试 3 次
 - **任务队列** - 异步提交，随时查询状态
 - **增量同步** - 基于文件哈希检测变更
-- **资源保护** - 去重串行访问、LanceDB 串行写入
+- **资源保护** - documents 表串行访问、LanceDB 串行写入
 - **混合搜索** - 向量检索 + BM25 关键词融合（需启用）
 - **Auto-Merging** - 检索时自动合并相关子节点（需启用）
 
@@ -607,7 +607,7 @@ curl -X POST "http://localhost:37241/kbs/HTE_history/topics/refresh" \
 
 #### GET /kbs/{kb_id}/consistency
 
-校验知识库一致性，比较 dedup 记录与 LanceDB 实际向量数据：
+校验知识库一致性，比较 documents 表与 LanceDB 实际向量数据：
 
 ```bash
 curl "http://localhost:37241/kbs/animal_nutrition_breeding/consistency"
@@ -616,8 +616,8 @@ curl "http://localhost:37241/kbs/animal_nutrition_breeding/consistency"
 ```json
 {
   "kb_id": "animal_nutrition_breeding",
-  "dedup_files": 221,
-  "dedup_chunks": 1247,
+  "doc_files": 221,
+  "doc_chunks": 1247,
   "lance_rows": 1247,
   "consistent": true,
   "missing_chunks": 0,
@@ -630,8 +630,8 @@ curl "http://localhost:37241/kbs/animal_nutrition_breeding/consistency"
 
 | 字段 | 说明 |
 |------|------|
-| `dedup_files` | dedup 记录的文件数 |
-| `dedup_chunks` | dedup 记录的 chunk 总数 |
+| `doc_files` | documents 表的文件数 |
+| `doc_chunks` | documents 表的 chunk 总数 |
 | `lance_rows` | LanceDB 实际行数 |
 | `consistent` | 是否一致 |
 | `missing_chunks` | LanceDB 缺失的 chunk 数 |
@@ -1753,7 +1753,6 @@ curl -X POST "http://localhost:37241/search" \
 ~/.llamaindex/                    # 项目数据库目录
 ├── project.db                   # SQLite 数据库
 │   ├── sync_states              # 同步状态
-│   ├── dedup_records            # 去重记录
 │   ├── progress                 # 处理进度
 │   ├── knowledge_bases          # 知识库元数据（唯一数据源）
 │   └── kb_category_rules         # 分类规则

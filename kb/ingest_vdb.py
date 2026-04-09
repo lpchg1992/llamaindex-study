@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Optional
 import sys
 
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="知识库导入任务 CLI")
     parser.add_argument("--list", action="store_true", help="列出所有知识库")
@@ -48,11 +49,12 @@ def _collect_markdown_files(kb, vault_root: Path) -> list[Path]:
 
 
 def _show_changes(kb_id: Optional[str]) -> int:
-    from kb.deduplication import DeduplicationManager
+    from kb.database import init_document_db
     from kb.registry import KnowledgeBaseRegistry, get_vault_root
 
     registry = KnowledgeBaseRegistry()
     vault_root = get_vault_root()
+    doc_db = init_document_db()
 
     targets = [registry.get(kb_id)] if kb_id else registry.list_all()
     targets = [kb for kb in targets if kb is not None]
@@ -62,13 +64,16 @@ def _show_changes(kb_id: Optional[str]) -> int:
 
     for kb in targets:
         files = _collect_markdown_files(kb, vault_root)
-        dedup_manager = DeduplicationManager(kb.id, kb.persist_dir)
-        to_add, to_update, to_delete, unchanged = dedup_manager.detect_changes(
-            files, vault_root
-        )
-        print(
-            f"{kb.id}\t新增:{len(to_add)}\t更新:{len(to_update)}\t删除:{len(to_delete)}\t未变更:{len(unchanged)}"
-        )
+        to_add = 0
+        to_update = 0
+        unchanged = 0
+        for file_path in files:
+            existing = doc_db.get_by_source_path(kb.id, str(file_path))
+            if not existing:
+                to_add += 1
+            else:
+                unchanged += 1
+        print(f"{kb.id}\t新增:{to_add}\t更新:{to_update}\t删除:0\t未变更:{unchanged}")
     return 0
 
 

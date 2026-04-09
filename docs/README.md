@@ -114,10 +114,10 @@
 | 数据库 | `database.py` | SQLite 数据库管理 |
 | 任务队列 | `task_queue.py` | SQLite 持久化 |
 | 任务执行器 | `task_executor.py` | 异步执行 |
-| 任务锁 | `task_lock.py` | 去重锁（Semaphore） |
+| 任务锁 | `task_lock.py` | 任务锁（Semaphore） |
 | 并行 Embedding | `parallel_embedding.py` | 自适应负载均衡 |
 | 写入队列 | `lancedb_write_queue.py` | LanceDB 写入队列 |
-| 去重管理 | `deduplication.py` | 增量同步 |
+| 文档管理 | `database.py` | 文档记录（documents 表） |
 | 文档处理 | `document_processor.py` | 统一文档解析 |
 | Obsidian | `obsidian_processor.py` | Obsidian 导入 |
 | Obsidian 读取 | `obsidian_reader.py` | Obsidian 笔记读取 |

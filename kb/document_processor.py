@@ -351,18 +351,10 @@ class DocumentProcessor:
 
             image_ratio = image_pages / pages_to_check
 
-            # 综合判断逻辑：
-            # - 如果文字密度极低（<30 chars/sq inch）且图片比例高（>50%），认为是扫描件
-            # - 如果文字密度极低但图片比例不高，降低阈值继续判断
-            # - 如果文字密度正常（>50 chars/sq inch），认为是文本PDF
-            # - 纯图片页面（密度<10且图片比例>70%）判定为扫描件
             if avg_density < 10 and image_ratio > 0.7:
                 return True
 
             if avg_density < 30 and image_ratio > 0.5:
-                return True
-
-            if avg_density < 50:
                 return True
 
             if avg_density < self.config.pdf_scan_threshold and image_ratio > 0.5:
@@ -1170,13 +1162,16 @@ class DocumentProcessor:
         print(f"   ❌ doc2x 转换失败")
         return None
 
-    def process_pdf(self, pdf_path: str, metadata: dict = None) -> List[LlamaDocument]:
+    def process_pdf(
+        self, pdf_path: str, metadata: dict = None, force_ocr: bool = False
+    ) -> List[LlamaDocument]:
         """
         处理 PDF 文件
 
         Args:
             pdf_path: PDF 文件路径
             metadata: 额外的元数据
+            force_ocr: 强制 OCR，忽略已缓存的 MD
 
         Returns:
             LlamaDocument 列表
@@ -1188,8 +1183,12 @@ class DocumentProcessor:
             Path("/Volumes/online/llamaindex/mddocs") / f"{Path(pdf_path).stem}.md"
         )
 
-        # 优先检查是否已有完整转换的 MD
-        if md_file_path.exists() and md_file_path.stat().st_size > 100:
+        # 优先检查是否已有完整转换的 MD（除非 force_ocr）
+        if (
+            not force_ocr
+            and md_file_path.exists()
+            and md_file_path.stat().st_size > 100
+        ):
             meta = ConversionMetadata.load(md_file_path)
             if meta and not meta.is_truncated:
                 print(f"   📄 使用已缓存的 MD: {md_file_path.name}")

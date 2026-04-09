@@ -7,7 +7,7 @@ Obsidian 文档导入处理器
 - Wiki 链接和标签处理
 - 支持 PDF 附件（含 OCR）
 - 目录结构和标签分类
-- 增量同步（基于 DeduplicationManager）
+- 增量同步（基于 documents 表）
 """
 
 import ast
@@ -24,7 +24,7 @@ from kb.document_processor import (
     DocumentProcessorConfig,
     ProcessingProgress,
 )
-from kb.deduplication import DeduplicationManager
+from kb.document_chunk_service import get_document_chunk_service
 from llamaindex_study.logger import get_logger
 
 logger = get_logger(__name__)
@@ -53,7 +53,7 @@ class ObsidianImporter:
     - 清理 wiki 链接和标签
     - 处理 PDF 附件（含 OCR）
     - 目录结构和标签分类
-    - 增量同步（基于 DeduplicationManager）
+    - 增量同步（基于 documents 表）
     """
 
     def __init__(
@@ -80,22 +80,6 @@ class ObsidianImporter:
         self.persist_dir = persist_dir
         self.vector_store = vector_store
 
-        # 初始化 DeduplicationManager（如果提供了 kb_id 和 persist_dir）
-        self._dedup_manager: Optional[DeduplicationManager] = None
-        if kb_id and persist_dir:
-            uri = str(persist_dir)
-            if vector_store and hasattr(vector_store, "_get_lance_vector_store"):
-                try:
-                    uri = vector_store._get_lance_vector_store().uri
-                except Exception:
-                    pass  # 使用默认路径
-            self._dedup_manager = DeduplicationManager(
-                kb_id=kb_id,
-                persist_dir=persist_dir,
-                uri=uri,
-                table_name=kb_id,
-            )
-
         # 默认排除模式
         self.exclude_patterns = [
             "*/image/*",
@@ -103,14 +87,6 @@ class ObsidianImporter:
             "*/.obsidian/*",
             "*/.trash/*",
         ]
-
-    def get_dedup_manager(self) -> Optional[DeduplicationManager]:
-        """获取去重管理器实例"""
-        return self._dedup_manager
-
-    def set_dedup_manager(self, manager: DeduplicationManager):
-        """设置去重管理器实例"""
-        self._dedup_manager = manager
 
     @staticmethod
     def extract_tags(content: str) -> Set[str]:
@@ -331,41 +307,11 @@ class ObsidianImporter:
         if not files:
             return {"files": 0, "nodes": 0, "failed": 0}
 
-        # ========== 增量同步：检测变更 ==========
-        dedup_manager = self._dedup_manager
-        if dedup_manager and not rebuild:
-            to_add, to_update, to_delete, unchanged = dedup_manager.detect_changes(
-                files, self.vault_root
-            )
-            logger.info(
-                f"增量同步: 新增 {len(to_add)}, 更新 {len(to_update)}, "
-                f"删除 {len(to_delete)}, 未变 {len(unchanged)}"
-            )
+        # ========== 增量同步：基于 Document 表检测变更 ==========
+        from kb.database import init_document_db
 
-            if to_delete and force_delete:
-                self._process_deletes(vector_store, to_delete, dedup_manager)
-
-            # 过滤文件列表，只处理新增和更新的
-            files_to_process = []
-            processed_rel_paths = set()
-
-            for change in to_add:
-                files_to_process.append(change.abs_path)
-                processed_rel_paths.add(change.rel_path)
-
-            for change in to_update:
-                files_to_process.append(change.abs_path)
-                processed_rel_paths.add(change.rel_path)
-
-            files = files_to_process
-        else:
-            processed_rel_paths = set()
-            if rebuild and dedup_manager:
-                logger.info(f"重建模式：清空去重状态")
-                dedup_manager.clear()
-
+        doc_db = init_document_db()
         if not files:
-            logger.info(f"没有变更需要处理")
             return {"files": 0, "nodes": 0, "failed": 0}
 
         if progress:
@@ -379,17 +325,18 @@ class ObsidianImporter:
         stats = {"files": 0, "nodes": 0, "failed": 0}
 
         for i, file_path in enumerate(files):
-            # 检查 DeduplicationManager 是否已处理
             try:
                 rel_path = str(file_path.relative_to(self.vault_root))
             except ValueError:
                 rel_path = str(file_path)
 
-            # 检查是否在待处理列表中（增量模式下）
-            if processed_rel_paths and rel_path not in processed_rel_paths:
-                continue
+            if not rebuild:
+                existing = doc_db.get_by_source_path(self.kb_id, str(file_path))
+                if existing:
+                    current_hash = self.processor.compute_file_hash(str(file_path))
+                    if existing.get("file_hash") == current_hash:
+                        continue
 
-            # 检查旧的 progress 方式
             if str(file_path) in processed_set:
                 continue
 
@@ -478,29 +425,24 @@ class ObsidianImporter:
             stats["nodes"] += saved
             stats["files"] += 1
 
-            # ========== 更新去重状态 ==========
-            if dedup_manager:
-                try:
-                    content = file_path.read_text(encoding="utf-8", errors="ignore")
-                    dedup_manager.mark_processed(
-                        file_path,
-                        content,
-                        doc_id,
-                        chunk_count=len(nodes),
-                        vault_root=self.vault_root,
-                        nodes=nodes,
-                    )
-                except Exception as e:
-                    logger.warning(f"更新去重状态失败: {e}")
+            # 写入 Document 表
+            try:
+                doc_chunk_service = get_document_chunk_service(self.kb_id)
+                file_hash = self.processor.compute_file_hash(str(file_path))
+                doc_chunk_service.create_document(
+                    source_file=file_path.name,
+                    source_path=str(file_path),
+                    file_hash=file_hash,
+                    nodes=nodes,
+                    file_size=file_path.stat().st_size,
+                    doc_id=doc_id,
+                )
+            except Exception as e:
+                logger.warning(f"写入 Document 记录失败: {e}")
 
             if progress:
                 progress.processed_items.append(str(file_path))
                 progress.save(Path.home() / ".llamaindex" / "obsidian_progress.json")
-
-        # ========== 保存去重状态 ==========
-        if dedup_manager:
-            dedup_manager._save()
-            logger.debug("去重状态已保存")
 
         # 处理 PDF 附件
         pdf_stats = self.import_pdf_attachments(
@@ -512,52 +454,6 @@ class ObsidianImporter:
         self.exclude_patterns = original_exclude
 
         return stats
-
-    def _process_deletes(
-        self,
-        vector_store,
-        to_delete: List[Any],
-        dedup_manager: "DeduplicationManager",
-    ) -> None:
-        import lancedb
-
-        doc_ids = [c.doc_id for c in to_delete if c.doc_id]
-        if not doc_ids:
-            return
-
-        try:
-            lance_store = vector_store._get_lance_vector_store()
-            db = lancedb.connect(str(lance_store.uri))
-            if db.list_table_names():
-                table = db.open_table(self.kb_id)
-                data = table.to_pandas()
-
-                if not data.empty and "_row_id" in data.columns:
-                    to_keep = ~data["_row_id"].astype(str).isin(doc_ids)
-                    remaining = data[to_keep]
-
-                    db.drop_table(self.kb_id)
-                    if not remaining.empty:
-                        db.create_table(self.kb_id, data=remaining)
-                    logger.info(f"已删除 {len(doc_ids)} 个文档")
-        except Exception as e:
-            logger.warning(f"删除处理失败: {e}")
-
-        for change in to_delete:
-            dedup_manager.remove_record(change.rel_path)
-
-        try:
-            from kb.document_chunk_service import get_document_chunk_service
-
-            doc_chunk_service = get_document_chunk_service(self.kb_id)
-            for doc_id in doc_ids:
-                doc_chunk_service.delete_document_cascade(
-                    doc_id,
-                    delete_lance=False,
-                    delete_dedup=False,
-                )
-        except Exception as e:
-            logger.warning(f"清理 documents/chunks 失败: {e}")
 
     def import_pdf_attachments(
         self,

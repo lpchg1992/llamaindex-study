@@ -34,6 +34,7 @@ class SelectiveImportItem:
     type: str
     id: Optional[str] = None
     path: Optional[str] = None
+    options: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -124,7 +125,12 @@ class ImportApplicationService:
     ) -> Dict[str, Any]:
         params = {
             "items": [
-                {"type": item.type, "id": item.id, "path": item.path}
+                {
+                    "type": item.type,
+                    "id": item.id,
+                    "path": item.path,
+                    "options": item.options or {},
+                }
                 for item in req.items
             ],
             "async_mode": req.async_mode,

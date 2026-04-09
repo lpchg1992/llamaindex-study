@@ -172,11 +172,11 @@ uv run llamaindex-study kb delete <kb_id> --yes
 uv run llamaindex-study kb initialize <kb_id>
 ```
 
-**作用**：清空知识库的所有数据（向量数据和去重记录），但保留知识库的配置（元数据）。
+**作用**：清空知识库的所有数据（向量数据和文档记录），但保留知识库的配置（元数据）。
 
 **执行后果**：
 - 删除知识库中的所有向量数据（无法通过命令恢复）
-- 清空去重状态记录
+- 清空 documents、chunks 表
 - 知识库配置（名称、描述、标签）保留
 
 **与 `ingest rebuild` 的区别**：
@@ -197,7 +197,7 @@ uv run llamaindex-study ingest obsidian tech_tools
 
 ### 知识库一致性校验
 
-校验知识库数据一致性，确保 dedup 记录与 LanceDB 实际向量数据匹配。
+校验知识库数据一致性，确保 documents 表与 LanceDB 实际向量数据匹配。
 
 ```bash
 # 校验单个知识库
@@ -299,7 +299,7 @@ uv run llamaindex-study search "<查询词>" --auto [-k <top_k>] [--exclude <kb1
 | `--vault-path` | Vault 根路径 | `OBSIDIAN_VAULT_ROOT` 环境变量，或 `~/Documents/Obsidian Vault` |
 | `--folder-path` | 子文件夹路径（相对于 Vault 根目录） | 根目录 |
 | `--recursive` | 递归处理子文件夹 | True |
-| `--rebuild` | **清空后重新导入**。启用后，会先删除知识库中的所有向量数据和去重记录，再重新导入指定的文件夹 | False |
+| `--rebuild` | **清空后重新导入**。启用后，会先删除知识库中的所有向量数据，再重新导入指定的文件夹 | False |
 | `--force-delete` | 同步时处理已删除的文件。当源文件被删除时，是否从向量库中移除对应的数据 | True |
 | `--persist-dir` | 自定义持久化目录（通常不需要指定） | 空 |
 | `--refresh-topics/--no-refresh-topics` | 导入后是否刷新 topics | True |
@@ -345,7 +345,7 @@ uv run llamaindex-study ingest zotero <kb_id> \
 |------|------|
 | `--collection-id` | Zotero 收藏夹 ID（精确） |
 | `--collection-name` | 收藏夹名称（可能模糊匹配） |
-| `--rebuild` | **清空后重新导入**。启用后，会先删除知识库中的所有向量数据和去重记录，再重新导入该收藏夹的文献 |
+| `--rebuild` | **清空后重新导入**。启用后，会先删除知识库中的所有向量数据，再重新导入该收藏夹的文献 |
 | `--refresh-topics/--no-refresh-topics` | 导入后是否刷新 topics |
 | `--chunk-strategy` | 分块策略：`hierarchical`（默认）/ `sentence` / `semantic` |
 | `--chunk-size` | 分块大小（默认: 1024） |
@@ -416,7 +416,7 @@ uv run llamaindex-study ingest rebuild <kb_id> \
 
 **执行后果**：
 - 清空知识库中的所有向量数据
-- 清空去重状态记录
+- 清空 documents 和 chunks 表
 - 重新扫描源路径并导入所有文档
 
 **与 `kb initialize` 的区别**：
@@ -477,7 +477,7 @@ uv run llamaindex-study obsidian import-all \
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
 | `--vault-path` | Vault 根路径 | `~/Documents/Obsidian Vault` |
-| `--rebuild` | **清空后重新导入**。启用后，会先删除所有相关知识库中的向量数据和去重记录，再重新导入 | False |
+| `--rebuild` | **清空后重新导入**。启用后，会先删除所有相关知识库中的向量数据，再重新导入 | False |
 
 ---
 
@@ -610,7 +610,7 @@ uv run llamaindex-study task delete <task_id> [--cleanup]
 
 **`--cleanup` 执行后果**：
 - 删除任务记录
-- 删除该任务导入的源文件对应的**去重记录**
+- 删除该任务导入的源文件对应的**文档记录**（documents 表）
 - 删除该任务导入的源文件对应的**向量数据**
 
 **注意**：
@@ -629,7 +629,7 @@ uv run llamaindex-study task delete-all [--status completed] [--cleanup]
 | 参数 | 说明 |
 |------|------|
 | `--status` | 筛选任务状态（pending/running/completed/failed/cancelled），默认 `completed` |
-| `--cleanup` | 删除任务时，同时清理关联的知识库数据（去重记录 + 向量数据） |
+| `--cleanup` | 删除任务时，同时清理关联的知识库数据（文档记录 + 向量数据） |
 
 **示例**：
 
@@ -774,11 +774,11 @@ uv run llamaindex-study admin delete-table <kb_id> --yes
 **执行后果**：
 - 删除知识库中的所有向量数据（无法通过命令恢复）
 - 不影响知识库配置（元数据保留在数据库中）
-- 不清空去重记录
+- 不清空 documents 表
 
 **与 `kb initialize` 的区别**：
-| 命令 | 向量数据 | 去重记录 | 知识库配置 |
-|------|----------|----------|------------|
+| 命令 | 向量数据 | documents 表 | 知识库配置 |
+|------|----------|------------|------------|
 | `admin delete-table` | 删除 | 保留 | 保留 |
 | `kb initialize` | 删除 | 删除 | 保留 |
 

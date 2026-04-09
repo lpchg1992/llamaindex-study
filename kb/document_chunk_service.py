@@ -20,7 +20,6 @@ class DocumentChunkService:
         self.persist_dir = persist_dir
         self._doc_db = None
         self._chunk_db = None
-        self._dedup_db = None
 
     def _get_doc_db(self):
         if self._doc_db is None:
@@ -36,13 +35,6 @@ class DocumentChunkService:
             self._chunk_db = init_chunk_db()
         return self._chunk_db
 
-    def _get_dedup_db(self):
-        if self._dedup_db is None:
-            from kb.database import init_dedup_db
-
-            self._dedup_db = init_dedup_db()
-        return self._dedup_db
-
     def create_document(
         self,
         source_file: str,
@@ -51,6 +43,7 @@ class DocumentChunkService:
         nodes: List[Any],
         file_size: int = 0,
         doc_id: Optional[str] = None,
+        zotero_doc_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         if not nodes:
             logger.warning(f"[{self.kb_id}] create_document: empty nodes, skipping")
@@ -74,15 +67,17 @@ class DocumentChunkService:
                 file_hash=file_hash,
                 file_size=file_size,
                 doc_id=doc_id,
+                zotero_doc_id=zotero_doc_id,
             )
             created_doc_id = doc["id"]
 
-            from kb.deduplication import DeduplicationManager
-
             chunks = []
             for idx, node in enumerate(nodes):
-                parent_id = DeduplicationManager._extract_parent_chunk_id(node)
-                hierarchy_level = DeduplicationManager._extract_hierarchy_level(node)
+                metadata = node.metadata if hasattr(node, "metadata") else {}
+                parent_id = metadata.get("parent_doc_id") or metadata.get("parent_id")
+                hierarchy_level = (
+                    metadata.get("hierarchy_level") or metadata.get("level") or 0
+                )
 
                 metadata = {}
                 if hasattr(node, "metadata") and node.metadata:
@@ -161,9 +156,8 @@ class DocumentChunkService:
         self,
         doc_id: str,
         delete_lance: bool = True,
-        delete_dedup: bool = True,
     ) -> Dict[str, int]:
-        result = {"chunks": 0, "lance": 0, "dedup": 0, "documents": 0}
+        result = {"chunks": 0, "lance": 0, "documents": 0}
 
         try:
             doc_db = self._get_doc_db()
@@ -204,20 +198,6 @@ class DocumentChunkService:
                 except Exception as e:
                     logger.error(f"[{self.kb_id}] Delete LanceDB failed: {e}")
 
-            if delete_dedup:
-                try:
-                    source_path = doc.get("source_path", "")
-                    if source_path:
-                        dedup_db = self._get_dedup_db()
-                        records = dedup_db.get_records(self.kb_id)
-                        for record in records:
-                            if record.get("file_path") == source_path:
-                                dedup_db.remove(self.kb_id, source_path)
-                                result["dedup"] = 1
-                                break
-                except Exception as e:
-                    logger.error(f"[{self.kb_id}] Delete Dedup failed: {e}")
-
             logger.info(f"[{self.kb_id}] delete_document_cascade completed: {result}")
             return result
 
@@ -243,7 +223,7 @@ class DocumentChunkService:
 
             for doc in matching_docs:
                 cascade_result = self.delete_document_cascade(
-                    doc["id"], delete_lance=delete_lance, delete_dedup=True
+                    doc["id"], delete_lance=delete_lance
                 )
                 result["documents"] += cascade_result.get("documents", 0)
                 result["chunks"] += cascade_result.get("chunks", 0)

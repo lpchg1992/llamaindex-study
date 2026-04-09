@@ -22,6 +22,7 @@ from kb.document_processor import (
     DocumentProcessorConfig,
     ProcessingProgress,
 )
+from kb.document_chunk_service import get_document_chunk_service
 
 
 @dataclass
@@ -68,28 +69,6 @@ class GenericImporter:
         )
         self.kb_id = kb_id
         self.persist_dir = persist_dir
-        self._dedup_manager = None
-
-    def _init_dedup_manager(self, vector_store=None):
-        if self._dedup_manager or not self.kb_id or not self.persist_dir:
-            return
-        from kb.deduplication import DeduplicationManager
-
-        uri = str(self.persist_dir)
-        if vector_store is not None:
-            try:
-                uri = vector_store._get_lance_vector_store().uri
-            except Exception:
-                pass
-        self._dedup_manager = DeduplicationManager(
-            kb_id=self.kb_id,
-            persist_dir=self.persist_dir,
-            uri=uri,
-            table_name=self.kb_id,
-        )
-
-    def set_dedup_manager(self, manager):
-        self._dedup_manager = manager
 
     def collect_files(
         self,
@@ -213,7 +192,6 @@ class GenericImporter:
             if not progress.started_at:
                 progress.started_at = time.time()
 
-        self._init_dedup_manager(vector_store)
         self.processor.set_embed_model(embed_model)
         node_parser = get_node_parser(
             chunk_size=self.processor.config.chunk_size,
@@ -229,16 +207,16 @@ class GenericImporter:
             if path_str in processed_set:
                 continue
 
-            # 增量更新：检查文件是否已修改
-            if self.processor.config.incremental and progress:
-                if not self.processor.is_file_changed(path_str, progress):
+            # 增量更新：基于 Document 表检查文件是否已修改
+            from kb.database import init_document_db
+
+            doc_db = init_document_db()
+            existing = doc_db.get_by_source_path(self.kb_id, path_str)
+            if existing:
+                current_hash = self.processor.compute_file_hash(path_str)
+                if existing.get("file_hash") == current_hash:
                     stats["skipped"] += 1
                     continue
-
-                # 更新文件哈希
-                file_hash = self.processor.compute_file_hash(path_str)
-                if progress:
-                    progress.file_hashes[path_str] = file_hash
 
             if i % 10 == 0:
                 elapsed = time.time() - (
@@ -281,22 +259,20 @@ class GenericImporter:
                         stats["files"] += 1
                         all_nodes.extend(nodes)
 
-                    # 更新去重状态并创建 document/chunk 记录
-                    if self._dedup_manager and all_nodes:
-                        try:
-                            content = file_path.read_text(
-                                encoding="utf-8", errors="ignore"
-                            )
-                            doc_id = f"doc_{doc_id_hash}"
-                            self._dedup_manager.mark_processed(
-                                file_path,
-                                content,
-                                doc_id,
-                                chunk_count=len(all_nodes),
-                                nodes=all_nodes,
-                            )
-                        except Exception as e:
-                            print(f"   ⚠️  更新去重状态失败: {e}")
+                    doc_id = f"doc_{doc_id_hash}"
+                    try:
+                        doc_chunk_service = get_document_chunk_service(self.kb_id)
+                        file_hash = self.processor.compute_file_hash(str(file_path))
+                        doc_chunk_service.create_document(
+                            source_file=file_path.name,
+                            source_path=str(file_path),
+                            file_hash=file_hash,
+                            nodes=all_nodes,
+                            file_size=file_path.stat().st_size,
+                            doc_id=doc_id,
+                        )
+                    except Exception as e:
+                        print(f"   ⚠️  写入 Document 记录失败: {e}")
 
                     if progress:
                         progress.processed_items.append(path_str)
@@ -308,10 +284,6 @@ class GenericImporter:
                 stats["failed"] += 1
                 if progress:
                     progress.failed_items.append(path_str)
-
-        # 保存去重状态
-        if self._dedup_manager:
-            self._dedup_manager._save()
 
         return stats
 

@@ -65,26 +65,6 @@ class SyncStateModel(Base):
     updated_at: Mapped[float] = mapped_column(Float, nullable=False)
 
 
-class DedupRecordModel(Base):
-    __tablename__ = "dedup_records"
-    __table_args__ = (
-        UniqueConstraint("kb_id", "file_path", name="uq_dedup_kb_file"),
-        Index("idx_dedup_kb_id", "kb_id"),
-        Index("idx_dedup_hash", "kb_id", "hash"),
-        Index("idx_dedup_doc_id", "kb_id", "doc_id"),
-    )
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    kb_id: Mapped[str] = mapped_column(String, nullable=False)
-    file_path: Mapped[str] = mapped_column(String, nullable=False)
-    hash: Mapped[str] = mapped_column(String, nullable=False)
-    doc_id: Mapped[str] = mapped_column(String, nullable=False)
-    chunk_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    mtime: Mapped[float] = mapped_column(Float, nullable=False)
-    last_processed: Mapped[float] = mapped_column(Float, nullable=False)
-    created_at: Mapped[float] = mapped_column(Float, nullable=False)
-    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
-
-
 class ProgressModel(Base):
     __tablename__ = "progress"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -185,12 +165,14 @@ class DocumentModel(Base):
     __table_args__ = (
         Index("idx_documents_kb_id", "kb_id"),
         Index("idx_documents_hash", "file_hash"),
+        Index("idx_documents_zotero_doc_id", "zotero_doc_id"),
     )
     id: Mapped[str] = mapped_column(String, primary_key=True)
     kb_id: Mapped[str] = mapped_column(String, nullable=False)
     source_file: Mapped[str] = mapped_column(String, nullable=False)
     source_path: Mapped[str] = mapped_column(String, nullable=False)
     file_hash: Mapped[str] = mapped_column(String, nullable=False)
+    zotero_doc_id: Mapped[str] = mapped_column(String, nullable=True)
     file_size: Mapped[int] = mapped_column(Integer, default=0)
     mime_type: Mapped[str] = mapped_column(String, default="")
     chunk_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -279,6 +261,47 @@ class DatabaseManager:
     def _init_database(self) -> None:
         Base.metadata.create_all(self.engine)
         self._migrate_legacy_models_table()
+        self._migrate_documents_zotero_doc_id()
+
+    def _migrate_documents_zotero_doc_id(self) -> None:
+        insp = inspect(self.engine)
+        if "documents" not in insp.get_table_names():
+            return
+        columns = {c["name"] for c in insp.get_columns("documents")}
+        if "zotero_doc_id" not in columns:
+            logger.info("迁移 documents 表：添加 zotero_doc_id 列")
+            with self.engine.begin() as conn:
+                conn.exec_driver_sql(
+                    "ALTER TABLE documents ADD COLUMN zotero_doc_id TEXT"
+                )
+                conn.exec_driver_sql(
+                    "CREATE INDEX IF NOT EXISTS idx_documents_zotero_doc_id ON documents(zotero_doc_id)"
+                )
+            self._backfill_zotero_doc_id()
+
+    def _backfill_zotero_doc_id(self) -> None:
+        import re
+
+        with self.engine.begin() as conn:
+            result = conn.exec_driver_sql(
+                "SELECT id FROM documents WHERE zotero_doc_id IS NULL AND id LIKE 'zotero_%'"
+            )
+            rows = result.fetchall()
+        if not rows:
+            return
+        updated = 0
+        for row in rows:
+            doc_id = row[0]
+            m = re.match(r"^zotero_(\d+)", doc_id)
+            if m:
+                zotero_doc_id = m.group(1)
+                with self.engine.begin() as conn:
+                    conn.exec_driver_sql(
+                        "UPDATE documents SET zotero_doc_id = ? WHERE id = ?",
+                        (zotero_doc_id, doc_id),
+                    )
+                updated += 1
+        logger.info(f"回填 zotero_doc_id 完成，共更新 {updated} 条记录")
 
     def _migrate_legacy_models_table(self) -> None:
         insp = inspect(self.engine)
@@ -774,193 +797,6 @@ class SyncStateDB:
             return {"total": int(total)}
 
 
-class DedupStateDB:
-    def __init__(self, db: DatabaseManager):
-        self.db = db
-
-    @staticmethod
-    def _to_dict(row: DedupRecordModel) -> Dict[str, Any]:
-        return {
-            "id": row.id,
-            "kb_id": row.kb_id,
-            "file_path": row.file_path,
-            "hash": row.hash,
-            "doc_id": row.doc_id,
-            "chunk_count": row.chunk_count,
-            "mtime": row.mtime,
-            "last_processed": row.last_processed,
-            "created_at": row.created_at,
-            "updated_at": row.updated_at,
-        }
-
-    def add_record(
-        self, kb_id: str, file_path: str, hash: str, doc_id: str, chunk_count: int = 0
-    ) -> bool:
-        now = time.time()
-        stmt = sqlite_insert(DedupRecordModel).values(
-            kb_id=kb_id,
-            file_path=file_path,
-            hash=hash,
-            doc_id=doc_id,
-            chunk_count=chunk_count,
-            mtime=now,
-            last_processed=now,
-            created_at=now,
-            updated_at=now,
-        )
-        stmt = stmt.on_conflict_do_update(
-            index_elements=[DedupRecordModel.kb_id, DedupRecordModel.file_path],
-            set_={
-                "hash": stmt.excluded.hash,
-                "doc_id": stmt.excluded.doc_id,
-                "chunk_count": stmt.excluded.chunk_count,
-                "mtime": stmt.excluded.mtime,
-                "last_processed": stmt.excluded.last_processed,
-                "updated_at": now,
-            },
-        )
-        try:
-            with self.db.session_scope() as session:
-                session.execute(stmt)
-            return True
-        except Exception as e:
-            logger.warning(f"add_record 错误: {e}")
-            return False
-
-    def bulk_add(self, kb_id: str, records: List[Dict[str, Any]]) -> int:
-        if not records:
-            return 0
-        now = time.time()
-        with self.db.session_scope() as session:
-            for r in records:
-                stmt = sqlite_insert(DedupRecordModel).values(
-                    kb_id=kb_id,
-                    file_path=r["file_path"],
-                    hash=r["hash"],
-                    doc_id=r["doc_id"],
-                    chunk_count=r.get("chunk_count", 0),
-                    mtime=r.get("mtime", now),
-                    last_processed=now,
-                    created_at=now,
-                    updated_at=now,
-                )
-                stmt = stmt.on_conflict_do_update(
-                    index_elements=[DedupRecordModel.kb_id, DedupRecordModel.file_path],
-                    set_={
-                        "hash": stmt.excluded.hash,
-                        "doc_id": stmt.excluded.doc_id,
-                        "chunk_count": stmt.excluded.chunk_count,
-                        "mtime": stmt.excluded.mtime,
-                        "last_processed": stmt.excluded.last_processed,
-                        "updated_at": now,
-                    },
-                )
-                session.execute(stmt)
-        return len(records)
-
-    def check_hash(self, kb_id: str, hash: str) -> bool:
-        with self.db.session_scope() as session:
-            return (
-                session.scalars(
-                    select(DedupRecordModel.id)
-                    .where(
-                        DedupRecordModel.kb_id == kb_id, DedupRecordModel.hash == hash
-                    )
-                    .limit(1)
-                ).first()
-                is not None
-            )
-
-    def get_by_hash(self, kb_id: str, hash: str) -> Optional[Dict[str, Any]]:
-        with self.db.session_scope() as session:
-            row = session.scalars(
-                select(DedupRecordModel)
-                .where(DedupRecordModel.kb_id == kb_id, DedupRecordModel.hash == hash)
-                .limit(1)
-            ).first()
-            return self._to_dict(row) if row else None
-
-    def get_by_doc_id(self, kb_id: str, doc_id: str) -> Optional[Dict[str, Any]]:
-        with self.db.session_scope() as session:
-            row = session.scalars(
-                select(DedupRecordModel)
-                .where(
-                    DedupRecordModel.kb_id == kb_id, DedupRecordModel.doc_id == doc_id
-                )
-                .limit(1)
-            ).first()
-            return self._to_dict(row) if row else None
-
-    def get_records(self, kb_id: str) -> List[Dict[str, Any]]:
-        with self.db.session_scope() as session:
-            rows = session.scalars(
-                select(DedupRecordModel)
-                .where(DedupRecordModel.kb_id == kb_id)
-                .order_by(DedupRecordModel.updated_at.desc())
-            ).all()
-            return [self._to_dict(row) for row in rows]
-
-    def get_hash_set(self, kb_id: str) -> Set[str]:
-        with self.db.session_scope() as session:
-            rows = session.execute(
-                select(DedupRecordModel.hash).where(DedupRecordModel.kb_id == kb_id)
-            ).all()
-            return {hash_value for (hash_value,) in rows}
-
-    def update_chunk_count(self, kb_id: str, doc_id: str, chunk_count: int) -> bool:
-        with self.db.session_scope() as session:
-            result = session.execute(
-                update(DedupRecordModel)
-                .where(
-                    DedupRecordModel.kb_id == kb_id, DedupRecordModel.doc_id == doc_id
-                )
-                .values(chunk_count=chunk_count, updated_at=time.time())
-            )
-            return (result.rowcount or 0) > 0
-
-    def remove(self, kb_id: str, file_path: str) -> bool:
-        with self.db.session_scope() as session:
-            result = session.execute(
-                delete(DedupRecordModel).where(
-                    DedupRecordModel.kb_id == kb_id,
-                    DedupRecordModel.file_path == file_path,
-                )
-            )
-            return (result.rowcount or 0) > 0
-
-    def remove_many(self, kb_id: str, file_paths: List[str]) -> int:
-        if not file_paths:
-            return 0
-        with self.db.session_scope() as session:
-            result = session.execute(
-                delete(DedupRecordModel).where(
-                    DedupRecordModel.kb_id == kb_id,
-                    DedupRecordModel.file_path.in_(file_paths),
-                )
-            )
-            return result.rowcount or 0
-
-    def clear(self, kb_id: str) -> int:
-        with self.db.session_scope() as session:
-            result = session.execute(
-                delete(DedupRecordModel).where(DedupRecordModel.kb_id == kb_id)
-            )
-            return result.rowcount or 0
-
-    def get_stats(self, kb_id: str) -> Dict[str, int]:
-        with self.db.session_scope() as session:
-            row = session.execute(
-                select(
-                    func.count(DedupRecordModel.id),
-                    func.sum(DedupRecordModel.chunk_count),
-                ).where(DedupRecordModel.kb_id == kb_id)
-            ).first()
-            return {
-                "total": int(row[0] or 0),
-                "total_chunks": int(row[1] or 0),
-            }
-
-
 class ProgressDB:
     def __init__(self, db: DatabaseManager):
         self.db = db
@@ -1441,6 +1277,7 @@ class DocumentDB:
             "source_file": row.source_file,
             "source_path": row.source_path,
             "file_hash": row.file_hash,
+            "zotero_doc_id": row.zotero_doc_id,
             "file_size": row.file_size,
             "mime_type": row.mime_type,
             "chunk_count": row.chunk_count,
@@ -1460,6 +1297,7 @@ class DocumentDB:
         mime_type: str = "",
         metadata: Dict[str, Any] = None,
         doc_id: Optional[str] = None,
+        zotero_doc_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         now = time.time()
         if doc_id is None:
@@ -1470,6 +1308,7 @@ class DocumentDB:
             source_file=source_file,
             source_path=source_path,
             file_hash=file_hash,
+            zotero_doc_id=zotero_doc_id,
             file_size=file_size,
             mime_type=mime_type,
             chunk_count=0,
@@ -1484,6 +1323,7 @@ class DocumentDB:
                 "source_file": stmt.excluded.source_file,
                 "source_path": stmt.excluded.source_path,
                 "file_hash": stmt.excluded.file_hash,
+                "zotero_doc_id": stmt.excluded.zotero_doc_id,
                 "file_size": stmt.excluded.file_size,
                 "mime_type": stmt.excluded.mime_type,
                 "metadata_json": stmt.excluded.metadata_json,
@@ -1497,6 +1337,30 @@ class DocumentDB:
     def get(self, doc_id: str) -> Optional[Dict[str, Any]]:
         with self.db.session_scope() as session:
             row = session.get(DocumentModel, doc_id)
+            return self._to_dict(row) if row else None
+
+    def get_by_zotero_doc_id(
+        self, kb_id: str, zotero_doc_id: str
+    ) -> Optional[Dict[str, Any]]:
+        with self.db.session_scope() as session:
+            row = session.scalars(
+                select(DocumentModel).where(
+                    DocumentModel.kb_id == kb_id,
+                    DocumentModel.zotero_doc_id == zotero_doc_id,
+                )
+            ).first()
+            return self._to_dict(row) if row else None
+
+    def get_by_source_path(
+        self, kb_id: str, source_path: str
+    ) -> Optional[Dict[str, Any]]:
+        with self.db.session_scope() as session:
+            row = session.scalars(
+                select(DocumentModel).where(
+                    DocumentModel.kb_id == kb_id,
+                    DocumentModel.source_path == source_path,
+                )
+            ).first()
             return self._to_dict(row) if row else None
 
     def get_by_kb(self, kb_id: str) -> List[Dict[str, Any]]:
@@ -1744,10 +1608,6 @@ class ChunkDB:
 
 def init_sync_db() -> SyncStateDB:
     return SyncStateDB(get_db())
-
-
-def init_dedup_db() -> DedupStateDB:
-    return DedupStateDB(get_db())
 
 
 def init_progress_db() -> ProgressDB:

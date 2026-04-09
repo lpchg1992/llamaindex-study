@@ -1331,28 +1331,28 @@ class ZoteroIngestRequest(BaseModel):
 
 
 class ZoteroPreviewRequest(BaseModel):
-    """Zotero 导入预览请求"""
-
+    kb_id: str = Field("default", description="知识库 ID（用于去重检查）")
     item_ids: Optional[List[int]] = Field(None, description="要预览的文献 ID 列表")
     collection_id: Optional[str] = Field(
         None, description="收藏夹 ID（将预览该收藏夹下所有文献）"
     )
+    prefix: str = Field("[kb]", description="附件标题前缀标记（默认 [kb]）")
+    force_ocr: bool = Field(False, description="强制 OCR 重新识别")
+    force_md_cache: bool = Field(False, description="强制使用本地 MD 缓存")
 
 
 class ZoteroPreviewItem(BaseModel):
-    """预览项详情"""
-
     item_id: int
     title: str
     creators: List[str] = []
     has_attachment: bool = False
     attachment_path: Optional[str] = None
-    attachment_type: Optional[str] = None  # pdf, document, etc.
+    attachment_type: Optional[str] = None
     is_scanned_pdf: bool = False
-    has_md_cache: bool = False  # MD exists in mddocs
-    is_eligible: bool = True  # Passes [kb] filter
+    has_md_cache: bool = False
+    is_eligible: bool = True
     ineligible_reason: Optional[str] = None
-    is_duplicate: bool = False  # Already imported to KB
+    is_duplicate: bool = False
 
 
 class ZoteroPreviewResponse(BaseModel):
@@ -1400,16 +1400,26 @@ def preview_zotero_import(req: ZoteroPreviewRequest):
     """预览 Zotero 文献导入（应用所有筛选规则）
 
     检查每个文献是否符合导入条件：
-    - [kb] 标记过滤
+    - 前缀标记过滤（可配置，默认 [kb]）
     - 是否为扫描件 PDF
     - mddocs 缓存是否存在
-    - 是否已导入（去重）
+    - 是否已导入（去重，通过 document 表查询）
     """
     from kb.zotero_processor import ZoteroImporter
+    from kb.database import init_document_db
+    from kb.services import KnowledgeBaseService
     from pathlib import Path
 
     importer = ZoteroImporter()
     mddocs_base = Path("/Volumes/online/llamaindex/mddocs")
+
+    document_db = None
+    kb_info = KnowledgeBaseService.get_info(req.kb_id)
+    if kb_info and Path(kb_info.get("persist_dir", "")).exists():
+        try:
+            document_db = init_document_db()
+        except Exception:
+            pass
 
     item_ids = list(req.item_ids) if req.item_ids else []
 
@@ -1420,9 +1430,10 @@ def preview_zotero_import(req: ZoteroPreviewRequest):
         except (ValueError, TypeError):
             pass
 
+    prefix = req.prefix or "[kb]"
     filtering_rules = [
-        "附件标题必须包含 [kb] 前缀才会被导入",
-        "已导入的文献会被跳过",
+        f"附件标题必须包含 {prefix} 前缀才会被导入",
+        "已导入的文献会被跳过（通过 document 表查询）",
     ]
 
     eligible_items = []
@@ -1434,7 +1445,7 @@ def preview_zotero_import(req: ZoteroPreviewRequest):
         if not item:
             continue
 
-        attachment_path = importer._get_attachment_path(item_id)
+        attachment_path = importer._get_attachment_path(item_id, prefix=prefix)
 
         preview_item = ZoteroPreviewItem(
             item_id=item_id,
@@ -1446,9 +1457,21 @@ def preview_zotero_import(req: ZoteroPreviewRequest):
 
         if not attachment_path:
             preview_item.is_eligible = False
-            preview_item.ineligible_reason = "附件标题不含 [kb] 标记"
+            preview_item.ineligible_reason = f"附件标题不含 {prefix} 标记"
             ineligible_items.append(preview_item)
             continue
+
+        zotero_doc_id = str(item_id)
+
+        if document_db:
+            existing_doc = document_db.get_by_zotero_doc_id(req.kb_id, zotero_doc_id)
+            if existing_doc:
+                preview_item.is_duplicate = True
+                preview_item.ineligible_reason = (
+                    f"文献已导入（zotero_doc_id: {zotero_doc_id}）"
+                )
+                duplicate_items.append(preview_item)
+                continue
 
         ext = Path(attachment_path).suffix.lower() if attachment_path else ""
         preview_item.attachment_type = ext.lstrip(".")
@@ -1459,10 +1482,10 @@ def preview_zotero_import(req: ZoteroPreviewRequest):
                 is_scanned = importer.processor.is_scanned_pdf(str(pdf_path))
                 preview_item.is_scanned_pdf = is_scanned
 
-            md_cache_path = mddocs_base / f"{pdf_path.stem}.md"
-            preview_item.has_md_cache = (
-                md_cache_path.exists() and md_cache_path.stat().st_size > 100
-            )
+                md_cache_path = mddocs_base / f"{pdf_path.stem}.md"
+                preview_item.has_md_cache = (
+                    md_cache_path.exists() and md_cache_path.stat().st_size > 100
+                )
 
         preview_item.is_eligible = True
         eligible_items.append(preview_item)
@@ -1474,7 +1497,7 @@ def preview_zotero_import(req: ZoteroPreviewRequest):
         eligible_items=len(eligible_items),
         ineligible_items=len(ineligible_items),
         duplicate_items=len(duplicate_items),
-        items=eligible_items + ineligible_items,
+        items=eligible_items + ineligible_items + duplicate_items,
         filtering_rules=filtering_rules,
     )
 
@@ -2213,6 +2236,7 @@ class DocumentResponse(BaseModel):
     source_file: str
     source_path: str
     file_hash: str
+    zotero_doc_id: Optional[str] = None
     file_size: int
     mime_type: str
     chunk_count: int
@@ -2269,9 +2293,7 @@ def delete_document(kb_id: str, doc_id: str):
     persist_dir = kb.persist_dir if kb else None
 
     service = get_document_chunk_service(kb_id=kb_id, persist_dir=persist_dir)
-    result = service.delete_document_cascade(
-        doc_id, delete_lance=True, delete_dedup=True
-    )
+    result = service.delete_document_cascade(doc_id, delete_lance=True)
 
     if result.get("documents", 0) == 0:
         raise HTTPException(status_code=404, detail=f"文档 {doc_id} 不存在")

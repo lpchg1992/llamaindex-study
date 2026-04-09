@@ -63,23 +63,14 @@ class ZoteroImporter:
         zotero_dir: Optional[Path] = None,
         db_path: Optional[Path] = None,
         config: Optional[DocumentProcessorConfig] = None,
-        dedup_manager=None,
+        kb_id: Optional[str] = None,
     ):
-        """
-        初始化 Zotero 导入器
-
-        Args:
-            zotero_dir: Zotero 数据目录（默认 ~/.Zotero）
-            db_path: Zotero 数据库路径
-            config: 文档处理器配置
-            dedup_manager: 可选的去重管理器，用于增量导入
-        """
         self.zotero_dir = zotero_dir or Path.home() / "Zotero"
         self.db_path = db_path or self.zotero_dir / "zotero.sqlite"
         self.storage_dir = self.zotero_dir / "storage"
 
         self.processor = DocumentProcessor(config=config)
-        self.dedup_manager = dedup_manager
+        self.kb_id = kb_id
 
         self._conn = None
 
@@ -116,22 +107,23 @@ class ZoteroImporter:
             self._conn.close()
             self._conn = None
 
-    def _get_attachment_path(self, item_id: int) -> Optional[str]:
+    def _get_attachment_path(self, item_id: int, prefix: str = "[kb]") -> Optional[str]:
         """获取附件文件路径
 
-        根据 Zotero UI 中修改的附件标题(fieldID=1)来判断是否包含 [kb] 标记，
+        根据 Zotero UI 中修改的附件标题(fieldID=1)来判断是否包含指定前缀标记，
         而非检查实际文件名。
 
         支持两种附件类型：
         - 独立附件：itemID 本身就是要查询的附件 ID
         - 子附件：需要通过 parentItemID 查找父 item 下的附件
 
-        重要：必须严格只处理包含 [kb] 标记的附件，没有 [kb] 标记的附件会被跳过。
+        Args:
+            item_id: Zotero 文献 ID
+            prefix: 附件标题前缀标记（默认 [kb]）
         """
         conn = self.connect()
         cursor = conn.cursor()
 
-        # 只查找包含 [kb] 标记的附件，不再回退到其他附件
         cursor.execute(
             """
             SELECT ia.itemID, ia.path, ia.storageHash, ia.contentType, v.value as attachment_title
@@ -139,10 +131,10 @@ class ZoteroImporter:
             JOIN itemData d ON d.itemID = ia.itemID AND d.fieldID = 1
             JOIN itemDataValues v ON d.valueID = v.valueID
             WHERE (ia.itemID = ? OR ia.parentItemID = ?)
-            AND v.value LIKE '%[kb]%'
+            AND v.value LIKE ?
             LIMIT 1
         """,
-            (item_id, item_id),
+            (item_id, item_id, f"%{prefix}%"),
         )
         row = cursor.fetchone()
 
@@ -150,8 +142,7 @@ class ZoteroImporter:
             return None
 
         title = row["attachment_title"] if row["attachment_title"] else ""
-        # 严格检查：必须有 [kb] 标记
-        if "[kb]" not in title:
+        if prefix not in title:
             return None
 
         storage_hash = row["storageHash"]
@@ -437,6 +428,8 @@ class ZoteroImporter:
         vector_store,
         embed_model,
         progress: ProcessingProgress = None,
+        kb_id: Optional[str] = None,
+        force_ocr: bool = False,
     ) -> Tuple[int, List[Any]]:
         """
         导入单个文献
@@ -446,17 +439,22 @@ class ZoteroImporter:
             vector_store: 向量存储
             embed_model: embedding 模型
             progress: 进度记录
+            kb_id: 知识库 ID（用于写入 document 表）
 
         Returns:
             (生成的节点数, 所有节点列表)
         """
         from kb.zotero_reader import create_zotero_reader
+        from kb.document_chunk_service import get_document_chunk_service
 
         self.processor.set_embed_model(embed_model)
         node_parser = get_node_parser(
             chunk_size=self.processor.config.chunk_size,
             chunk_overlap=self.processor.config.chunk_overlap,
         )
+
+        effective_kb_id = kb_id or self.kb_id or "default"
+        doc_chunk_service = get_document_chunk_service(effective_kb_id)
 
         total_nodes = 0
         all_nodes = []
@@ -518,6 +516,7 @@ class ZoteroImporter:
                 docs = self.processor.process_pdf(
                     str(file_path),
                     metadata={**base_metadata, "source": str(file_path)},
+                    force_ocr=force_ocr,
                 )
             elif ext in [".docx", ".doc", ".xlsx", ".xls", ".pptx", ".md", ".txt"]:
                 logger.debug(f"使用 process_document 处理: {file_path}")
@@ -533,12 +532,26 @@ class ZoteroImporter:
                 for doc in docs:
                     doc.id_ = f"zotero_{item.item_id}_{file_path.stem}"
                 logger.debug(f"文档处理完成, 文档数: {len(docs)}")
+
+                file_hash = self.processor.compute_file_hash(str(file_path))
+                file_size = file_path.stat().st_size
+
                 for doc in docs:
                     nodes = node_parser.get_nodes_from_documents([doc])
-                    total_nodes += self.processor.save_nodes(
-                        vector_store, nodes, progress
+                    doc_id = doc.id_
+                    zotero_doc_id = str(item.item_id)
+                    result = doc_chunk_service.create_document(
+                        source_file=file_path.name,
+                        source_path=str(file_path),
+                        file_hash=file_hash,
+                        nodes=nodes,
+                        file_size=file_size,
+                        doc_id=doc_id,
+                        zotero_doc_id=zotero_doc_id,
                     )
-                    all_nodes.extend(nodes)
+                    if result:
+                        total_nodes += len(nodes)
+                        all_nodes.extend(nodes)
             else:
                 logger.warning(f"文档处理返回空结果: {file_path}")
 
@@ -555,6 +568,7 @@ class ZoteroImporter:
         progress_file: Path = None,
         progress_callback: Optional[Callable[[int, int, str, str], None]] = None,
         cancel_event: Optional["threading.Event"] = None,
+        kb_id: Optional[str] = None,
     ) -> dict:
         """
         导入整个收藏夹
@@ -569,15 +583,12 @@ class ZoteroImporter:
             progress_file: 进度保存路径
             progress_callback: 进度回调 (current, total, message, level)
             cancel_event: 取消事件，用于主动终止
+            kb_id: 知识库 ID（用于写入 document 表）
 
         Returns:
             导入统计
         """
         logger.info(f"开始导入 Zotero 收藏夹: {collection_name} (ID: {collection_id})")
-
-        if rebuild and self.dedup_manager:
-            logger.info("重建模式：清空去重状态")
-            self.dedup_manager.clear()
 
         item_ids = self.get_items_in_collection(collection_id)
         logger.info(f"收藏夹包含 {len(item_ids)} 篇文献")
@@ -606,11 +617,13 @@ class ZoteroImporter:
                 logger.debug(f"跳过已处理文献: {item_id}")
                 continue
 
-            if self.dedup_manager:
-                doc_id = f"zotero_{item_id}"
-                existing = self.dedup_manager.get_record_by_doc_id(doc_id)
-                if existing and not rebuild:
-                    logger.debug(f"跳过已处理文献(dedup): {item_id}")
+            if not rebuild:
+                from kb.database import init_document_db
+
+                doc_db = init_document_db()
+                existing = doc_db.get_by_zotero_doc_id(kb_id, str(item_id))
+                if existing:
+                    logger.debug(f"跳过已处理文献(document): {item_id}")
                     continue
 
             if i % 5 == 0:
@@ -634,7 +647,7 @@ class ZoteroImporter:
 
             try:
                 total_nodes, all_nodes = self.import_item(
-                    item, vector_store, embed_model, progress
+                    item, vector_store, embed_model, progress, kb_id=kb_id
                 )
                 if total_nodes > 0:
                     stats["nodes"] += total_nodes
@@ -642,17 +655,6 @@ class ZoteroImporter:
                     if item.file_path:
                         stats["processed_sources"].append(item.file_path)
                     logger.info(f"文献导入成功: {item.title}, 节点数: {total_nodes}")
-
-                    if self.dedup_manager:
-                        self.dedup_manager.mark_processed(
-                            file_path=Path(item.file_path)
-                            if item.file_path
-                            else Path(str(item_id)),
-                            content=f"zotero_{item_id}_{item.title}",
-                            doc_id=f"zotero_{item_id}",
-                            chunk_count=total_nodes,
-                            nodes=all_nodes,
-                        )
 
                     if progress:
                         progress.processed_items.append(item_id_str)
@@ -669,10 +671,6 @@ class ZoteroImporter:
                 stats["failed"] += 1
                 if progress:
                     progress.failed_items.append(item_id_str)
-
-        if self.dedup_manager:
-            self.dedup_manager._save()
-            logger.debug("去重状态已保存")
 
         logger.info(
             f"收藏夹导入完成: {collection_name}, "

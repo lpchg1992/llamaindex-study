@@ -29,7 +29,6 @@ STALE_TASK_TIMEOUT = int(os.getenv("STALE_TASK_TIMEOUT", "300"))  # 任务超时
 if TYPE_CHECKING:
     from kb.task_queue import Task, TaskQueue, TaskStatus
     from llamaindex_study.vector_store import LanceDBVectorStore
-    from kb.deduplication import DeduplicationManager
     from kb.parallel_embedding import EmbeddingResult
 
 
@@ -197,14 +196,6 @@ class TaskExecutor:
 
         return get_vault_root()
 
-    def _get_dedup_manager(
-        self, kb_id: str, persist_dir: Path
-    ) -> "DeduplicationManager":
-        """获取去重管理器"""
-        from kb.deduplication import DeduplicationManager
-
-        return DeduplicationManager(kb_id, persist_dir)
-
     def _update_kb_topics(self, kb_id: str, has_new_docs: bool = True) -> None:
         """按需更新知识库 topics"""
         try:
@@ -226,12 +217,12 @@ class TaskExecutor:
         执行 Obsidian 导入（并行多端点版本）
 
         架构：
-        - 去重数据库：串行访问（保护共享资源）
+        - documents 表：串行访问（保护共享资源）
         - Embedding：并行处理（本地+远程同时工作）
         - LanceDB 写入：串行（通过 WriteQueue）
         """
         from kb.registry import KnowledgeBaseRegistry
-        from kb.task_lock import DedupLock
+        from kb.database import init_document_db
         from llama_index.core.schema import Document as LlamaDocument
         from kb.parallel_embedding import get_parallel_processor
         from kb.lancedb_write_queue import lance_write_queue
@@ -243,7 +234,6 @@ class TaskExecutor:
 
         self.queue.update_progress(task.task_id, message=f"开始导入: {kb_id}")
 
-        # ===== 准备阶段 =====
         registry = KnowledgeBaseRegistry()
         kb = registry.get(kb_id)
         vault_root = (
@@ -261,13 +251,16 @@ class TaskExecutor:
             else self._get_vector_store(kb_id).persist_dir
         )
 
-        # 向量存储
         vs = self._get_vector_store(kb_id)
+        doc_db = init_document_db()
 
-        # 去重管理器
-        dedup_manager = self._get_dedup_manager(kb_id, persist_dir)
+        if rebuild:
+            try:
+                vs.delete_table()
+                self.queue.update_progress(task.task_id, message="已清空旧数据")
+            except Exception as e:
+                logger.warning(f"清空旧数据失败: {e}")
 
-        # 收集文件
         all_files: List[Path] = []
         if folder_path:
             source_paths = [vault_root / folder_path]
@@ -287,48 +280,50 @@ class TaskExecutor:
             message=f"扫描到 {len(all_files)} 个文件",
         )
 
-        # ===== 去重阶段（串行访问）=====
-        async with DedupLock():
-            # 重建模式
-            if rebuild:
-                dedup_manager.clear()
-                try:
-                    vs.delete_table()
-                    self.queue.update_progress(task.task_id, message="已清空旧数据")
-                except Exception as e:
-                    logger.warning(f"清空旧数据失败: {e}")
+        files_to_process: List[Tuple[str, Path]] = []
+        hash_tool = None
+        try:
+            from kb.document_processor import DocumentProcessor
 
-            # 检测变更
-            to_add, to_update, to_delete, unchanged = dedup_manager.detect_changes(
-                all_files, vault_root
-            )
+            hash_tool = DocumentProcessor().compute_file_hash
+        except Exception:
+            pass
 
-            if not to_add and not to_update:
-                self.queue.complete_task(task.task_id, result={"message": "没有变更"})
-                return
+        for file_path in all_files:
+            try:
+                rel_path = str(file_path.relative_to(vault_root))
+            except ValueError:
+                rel_path = str(file_path)
 
-            # 处理删除
-            if to_delete and params.get("force_delete", True):
-                self._process_deletes(persist_dir, kb_id, to_delete, dedup_manager)
+            existing = doc_db.get_by_source_path(kb_id, str(file_path))
+            if not existing:
+                files_to_process.append((rel_path, file_path))
+            elif rebuild:
+                files_to_process.append((rel_path, file_path))
+            else:
+                current_hash = ""
+                if hash_tool:
+                    try:
+                        current_hash = hash_tool(str(file_path))
+                    except Exception:
+                        pass
+                if existing.get("file_hash") != current_hash:
+                    files_to_process.append((rel_path, file_path))
 
-            # 收集要处理的文档
-            all_docs: List[tuple] = [
-                (c.rel_path, c.abs_path) for c in to_add + to_update
-            ]
+        if not files_to_process:
+            self.queue.complete_task(task.task_id, result={"message": "没有变更"})
+            return
 
-            self.queue.update_progress(
-                task.task_id, message=f"新增{len(to_add)} 更新{len(to_update)}"
-            )
+        self.queue.update_progress(
+            task.task_id, message=f"待处理 {len(files_to_process)} 个文件"
+        )
 
-        # ===== 并行处理阶段（embedding + LanceDB 写入）=====
         lance_store = vs._get_lance_vector_store()
         node_parser = get_node_parser()
 
-        # 启动写入队列
         await lance_write_queue.start()
         processed_sources = []
 
-        # 获取并行处理器
         embed_processor = get_parallel_processor()
 
         processed_files = 0
@@ -336,10 +331,10 @@ class TaskExecutor:
         last_heartbeat_file_count = 0
 
         self.queue.update_progress(
-            task.task_id, message=f"开始处理 {len(all_docs)} 个文件"
+            task.task_id, message=f"开始处理 {len(files_to_process)} 个文件"
         )
 
-        for rel_path, abs_path in all_docs:
+        for rel_path, abs_path in files_to_process:
             if await self._check_cancelled(task.task_id):
                 self._save_partial_progress(
                     task.task_id,
@@ -379,14 +374,12 @@ class TaskExecutor:
                 if nodes:
                     texts = [node.get_content() for node in nodes]
 
-                    # 流式处理：embedding 完成后立即写入（不等待所有文件）
                     results: List[Optional[EmbeddingResult]] = [None] * len(texts)
                     async for idx, result in embed_processor.process_batch_streaming(
                         texts
                     ):
                         results[idx] = result
 
-                    # 赋值 embeddings 并写入
                     for j in range(len(results)):
                         result_item = results[j]
                         if result_item is None:
@@ -394,31 +387,45 @@ class TaskExecutor:
                         _, embedding, _ = result_item
                         nodes[j].embedding = embedding
 
-                    # 发送到写入队列（串行执行）
                     await lance_write_queue.enqueue(lance_store, nodes, kb_id)
                     processed_chunks += len(nodes)
 
-                async with DedupLock():
-                    dedup_manager.mark_processed(
-                        file_path=abs_path,
-                        content=content,
-                        doc_id=rel_path,
-                        chunk_count=len(nodes),
-                        vault_root=vault_root,
-                        nodes=nodes,
-                    )
+                current_hash = ""
+                if hash_tool:
+                    try:
+                        current_hash = hash_tool(str(abs_path))
+                    except Exception:
+                        pass
+
+                from kb.document_chunk_service import DocumentChunkService
+
+                svc = DocumentChunkService(kb_id)
+                doc_record = doc_db.get_by_source_path(kb_id, str(abs_path))
+                if doc_record:
+                    doc_id = doc_record.get("id")
+                    if doc_id:
+                        svc.delete_document_cascade(doc_id, delete_lance=False)
+
+                file_size = abs_path.stat().st_size if abs_path.exists() else 0
+                doc_db.create(
+                    kb_id=kb_id,
+                    source_file=rel_path,
+                    source_path=str(abs_path),
+                    file_hash=current_hash,
+                    file_size=file_size,
+                    mime_type="text/markdown",
+                    metadata={"source": "obsidian", "relative_path": rel_path},
+                )
 
                 processed_sources.append(str(abs_path))
                 processed_files += 1
 
-                # 定期更新进度
                 if processed_files % PROGRESS_UPDATE_INTERVAL == 0:
                     self.queue.update_progress(
                         task.task_id,
-                        message=f"处理 {processed_files}/{len(all_docs)} ({processed_chunks} chunks)",
+                        message=f"处理 {processed_files}/{len(files_to_process)} ({processed_chunks} chunks)",
                     )
 
-                # 定期更新心跳
                 if (
                     processed_files - last_heartbeat_file_count
                     >= PROGRESS_UPDATE_INTERVAL
@@ -429,14 +436,8 @@ class TaskExecutor:
             except Exception as e:
                 logger.warning(f"处理失败 {rel_path}: {e}")
 
-        # 等待写入队列清空（使用公共方法）
         await lance_write_queue.wait_until_empty()
 
-        # 保存去重状态（串行访问）
-        async with DedupLock():
-            dedup_manager._save()
-
-        # 统计端点使用情况
         stats = embed_processor.get_stats()
         failure_stats = embed_processor.get_failure_stats()
         logger.info(f"端点使用统计: {stats}, 失败统计: {failure_stats}")
@@ -458,51 +459,7 @@ class TaskExecutor:
         )
 
         if self._should_refresh_topics(params):
-            self._update_kb_topics(kb_id, has_new_docs=len(to_add) > 0)
-
-    def _process_deletes(
-        self,
-        persist_dir: Path,
-        kb_id: str,
-        to_delete: List[Any],
-        dedup_manager: "DeduplicationManager",
-    ) -> None:
-        """处理删除的文件"""
-        import lancedb
-
-        doc_ids = [c.doc_id for c in to_delete if c.doc_id]
-
-        try:
-            db = lancedb.connect(str(persist_dir))
-            if db.list_table_names():
-                table = db.open_table(kb_id)
-                data = table.to_pandas()
-
-                if not data.empty and "_row_id" in data.columns:
-                    to_keep = ~data["_row_id"].astype(str).isin(doc_ids)
-                    remaining = data[to_keep]
-
-                    db.drop_table(kb_id)
-                    if not remaining.empty:
-                        db.create_table(kb_id, data=remaining)
-        except Exception as e:
-            logger.error(f"删除处理失败: {e}")
-
-        for change in to_delete:
-            dedup_manager.remove_record(change.rel_path)
-
-        try:
-            from kb.document_chunk_service import get_document_chunk_service
-
-            doc_chunk_service = get_document_chunk_service(kb_id)
-            for doc_id in doc_ids:
-                doc_chunk_service.delete_document_cascade(
-                    doc_id,
-                    delete_lance=False,
-                    delete_dedup=False,
-                )
-        except Exception as e:
-            logger.error(f"清理 documents/chunks 失败: {e}")
+            self._update_kb_topics(kb_id, has_new_docs=processed_files > 0)
 
     # ==================== 选择性导入 ====================
 
@@ -573,6 +530,15 @@ class TaskExecutor:
 
                 elif item_type == "item":
                     logger.info(f"[{task_id}] 处理 Zotero 文献: {item_id}")
+                    item_options = item.get("options", {})
+                    result = ZoteroService.import_item(
+                        kb_id=kb_id,
+                        item_id=item.get("id"),
+                        options=item_options,
+                        refresh_topics=False,
+                    )
+                    stats["files"] += result.get("items", 0)
+                    stats["nodes"] += result.get("nodes", 0)
 
                 elif item_type == "folder":
                     vault_path = item.get("vault_path")
@@ -630,7 +596,6 @@ class TaskExecutor:
         from kb.document_processor import DocumentProcessorConfig, ProcessingProgress
         from kb.parallel_embedding import get_parallel_processor
         from llamaindex_study.ollama_utils import create_parallel_ollama_embedding
-        from kb.deduplication import DeduplicationManager
 
         kb_id = task.kb_id
         params = task.params
@@ -662,22 +627,13 @@ class TaskExecutor:
             embed_processor = get_parallel_processor()
             logger.debug(f"[{task_id}] 并行 Embedding 处理器初始化完成")
 
-            persist_dir = vs.persist_dir
-            dedup_manager = DeduplicationManager(
-                kb_id=kb_id,
-                persist_dir=persist_dir,
-                uri=str(persist_dir),
-                table_name=kb_id,
-            )
-            logger.debug(f"[{task_id}] DeduplicationManager 初始化完成")
-
             config = DocumentProcessorConfig(
                 chunk_size=params.get("chunk_size") or CHUNK_SIZE,
                 chunk_overlap=CHUNK_OVERLAP,
                 chunk_strategy=params.get("chunk_strategy") or "hierarchical",
                 hierarchical_chunk_sizes=params.get("hierarchical_chunk_sizes"),
             )
-            importer = ZoteroImporter(config=config, dedup_manager=dedup_manager)
+            importer = ZoteroImporter(config=config, kb_id=kb_id)
             logger.debug(f"[{task_id}] ZoteroImporter 初始化完成")
 
             if not collection_id and params.get("collection_name"):
@@ -705,7 +661,6 @@ class TaskExecutor:
             if rebuild:
                 logger.info(f"[{task_id}] 重建模式，删除现有数据")
                 vs.delete_table()
-                dedup_manager.clear()
                 progress = ProcessingProgress()
 
             item_ids = importer.get_items_in_collection(collection_id)
@@ -738,9 +693,7 @@ class TaskExecutor:
                 progress_queue.put_nowait((current, total, message))
 
             def run_import():
-                thread_importer = ZoteroImporter(
-                    config=config, dedup_manager=dedup_manager
-                )
+                thread_importer = ZoteroImporter(config=config, kb_id=kb_id)
                 try:
                     stats_result[0] = thread_importer.import_collection(
                         collection_id=collection_id,
@@ -752,6 +705,7 @@ class TaskExecutor:
                         progress_file=progress_file,
                         progress_callback=progress_callback,
                         cancel_event=cancel_event,
+                        kb_id=kb_id,
                     )
                 except Exception as e:
                     import_error[0] = e
@@ -874,12 +828,9 @@ class TaskExecutor:
         params = task.params
 
         vs = self._get_vector_store(kb_id)
-        persist_dir = (
-            Path(params.get("persist_dir")).expanduser()
-            if params.get("persist_dir")
-            else self._get_vector_store(kb_id).persist_dir
-        )
-        dedup_manager = self._get_dedup_manager(kb_id, persist_dir)
+        from kb.database import init_document_db
+
+        doc_db = init_document_db()
         embed_processor = get_parallel_processor()
         lance_store = vs._get_lance_vector_store()
         node_parser = get_node_parser()
@@ -995,17 +946,34 @@ class TaskExecutor:
                             content = file_path.read_text(
                                 encoding="utf-8", errors="ignore"
                             )
-                            doc_id = file_nodes[0].id_ if file_nodes else str(file_path)
-                            dedup_manager.mark_processed(
-                                file_path=file_path,
-                                content=content,
-                                doc_id=doc_id,
-                                chunk_count=len(file_nodes),
-                                vault_root=None,
-                                nodes=file_nodes,
+                            current_hash = ""
+                            try:
+                                from kb.document_processor import DocumentProcessor
+
+                                current_hash = DocumentProcessor().compute_file_hash(
+                                    str(file_path)
+                                )
+                            except Exception:
+                                pass
+                            file_size = (
+                                file_path.stat().st_size if file_path.exists() else 0
+                            )
+                            mime_type = (
+                                "application/pdf"
+                                if file_path.suffix.lower() == ".pdf"
+                                else "text/plain"
+                            )
+                            doc_db.create(
+                                kb_id=kb_id,
+                                source_file=str(file_path.name),
+                                source_path=str(file_path),
+                                file_hash=current_hash,
+                                file_size=file_size,
+                                mime_type=mime_type,
+                                metadata={"source": "generic"},
                             )
                         except Exception as e:
-                            logger.warning(f"更新去重状态失败 {file_path}: {e}")
+                            logger.warning(f"更新文档记录失败 {file_path}: {e}")
 
                     processed_sources.append(str(file_path))
                     stats["files"] += 1

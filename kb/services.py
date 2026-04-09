@@ -20,7 +20,6 @@ from llamaindex_study.ollama_utils import (
     configure_llamaindex_for_siliconflow,
 )
 from kb.registry import get_storage_root
-from kb.deduplication import DeduplicationManager
 from kb.document_chunk_service import get_document_chunk_service
 
 logger = get_logger(__name__)
@@ -502,22 +501,11 @@ class ZoteroService:
         )
         progress = ProcessingProgress.load(progress_file)
 
-        from kb.deduplication import DeduplicationManager
-
-        persist_dir = vs.persist_dir or Path.home() / ".llamaindex" / "storage" / kb_id
-        dedup_manager = DeduplicationManager(
-            kb_id=kb_id,
-            persist_dir=persist_dir,
-            uri=str(persist_dir),
-            table_name=kb_id,
-        )
-
         if rebuild:
             vs.delete_table()
-            dedup_manager.clear()
             progress = ProcessingProgress()
 
-        importer = ZoteroImporter(dedup_manager=dedup_manager)
+        importer = ZoteroImporter(kb_id=kb_id)
         try:
             stats = importer.import_collection(
                 collection_id=collection_id,
@@ -527,6 +515,7 @@ class ZoteroService:
                 progress=progress,
                 rebuild=rebuild,
                 progress_file=progress_file,
+                kb_id=kb_id,
             )
 
             progress_file.unlink(missing_ok=True)
@@ -542,6 +531,64 @@ class ZoteroService:
                     has_new_docs=stats.get("items", 0) > 0,
                 )
             return stats
+
+        finally:
+            importer.close()
+
+    @staticmethod
+    def import_item(
+        kb_id: str,
+        item_id: str,
+        options: Optional[Dict[str, Any]] = None,
+        refresh_topics: bool = True,
+        progress_callback: Optional[Callable[[str], None]] = None,
+    ) -> Dict[str, Any]:
+        """
+        导入单个 Zotero 文献
+
+        Args:
+            kb_id: 知识库 ID
+            item_id: 文献 ID
+            options: 个性化选项，如 force_ocr
+            progress_callback: 进度回调
+
+        Returns:
+            导入统计
+        """
+        from kb.zotero_processor import ZoteroImporter
+        from kb.document_processor import ProcessingProgress
+
+        if progress_callback:
+            progress_callback(f"开始导入 Zotero 文献: {item_id}")
+
+        vs = VectorStoreService.get_vector_store(kb_id)
+        persist_dir = vs.persist_dir or Path.home() / ".llamaindex" / "storage" / kb_id
+
+        importer = ZoteroImporter(kb_id=kb_id)
+        try:
+            item = importer.get_item(int(item_id))
+            if not item:
+                raise ValueError(f"文献不存在: {item_id}")
+
+            progress = ProcessingProgress()
+
+            force_ocr = options.get("force_ocr", False) if options else False
+            nodes, all_nodes = importer.import_item(
+                item=item,
+                vector_store=vs,
+                embed_model=create_parallel_ollama_embedding(),
+                progress=progress,
+                kb_id=kb_id,
+                force_ocr=force_ocr,
+            )
+
+            if progress_callback:
+                progress_callback(f"完成！导入 {nodes} 个节点")
+
+            if refresh_topics:
+                KnowledgeBaseService.refresh_topics(kb_id=kb_id, has_new_docs=nodes > 0)
+
+            return {"items": 1, "nodes": nodes}
 
         finally:
             importer.close()
@@ -967,10 +1014,8 @@ class KnowledgeBaseService:
         from kb.registry import registry
         from kb.database import (
             init_kb_meta_db,
-            init_dedup_db,
             init_progress_db,
         )
-        from kb.deduplication import DeduplicationManager
 
         info = KnowledgeBaseService.get_info(kb_id)
         if not info:
@@ -989,10 +1034,6 @@ class KnowledgeBaseService:
         if persist_dir.exists():
             shutil.rmtree(persist_dir)
 
-        dedup_manager = DeduplicationManager(kb_id, persist_dir)
-        dedup_manager.clear()
-
-        init_dedup_db().clear(kb_id)
         init_progress_db().reset(kb_id)
 
         init_kb_meta_db().set_active(kb_id, is_active=False)
@@ -1006,18 +1047,13 @@ class KnowledgeBaseService:
     def initialize(kb_id: str) -> bool:
         """初始化知识库（清空所有数据）
 
-        清除向量存储、去重状态、进度，但保留知识库配置。
+        清除向量存储、进度，但保留知识库配置。
         用于完全重置知识库到初始状态。
         """
         from kb.database import init_progress_db
-        from kb.deduplication import DeduplicationManager
 
         vs = VectorStoreService.get_vector_store(kb_id)
         vs.delete_table()
-
-        persist_dir = VectorStoreService.get_persist_dir(kb_id)
-        dedup_manager = DeduplicationManager(kb_id, persist_dir)
-        dedup_manager.clear()
 
         init_progress_db().reset(kb_id)
 
@@ -2190,24 +2226,17 @@ class TaskService:
                 - "full": 清空整个知识库数据（仅用于 initialize 类型）
                 - "sources": 只清理指定的 sources（推荐，用于取消/删除任务）
         """
-        from kb.deduplication import DeduplicationManager
         from kb.registry import get_storage_root
 
         cleaned = {
-            "dedup_state": False,
+            "dedup_state": True,
             "vector_store": False,
             "documents": False,
             "chunks": False,
             "deleted_nodes": 0,
         }
 
-        persist_dir = get_storage_root() / kb_id
-        dedup_manager = DeduplicationManager(kb_id, persist_dir)
-
         if task_type == "initialize" or cleanup_mode == "full":
-            dedup_manager.clear()
-            cleaned["dedup_state"] = True
-
             from kb.services import VectorStoreService
 
             vs = VectorStoreService.get_vector_store(kb_id)
@@ -2220,13 +2249,11 @@ class TaskService:
                 doc_service.delete_document_cascade(
                     doc["id"],
                     delete_lance=False,
-                    delete_dedup=False,
                 )
             cleaned["documents"] = True
             cleaned["chunks"] = True
 
         elif task_type == "zotero" and cleanup_mode == "full":
-            dedup_manager.clear()
             cleaned["dedup_state"] = True
 
             from kb.services import VectorStoreService
@@ -2241,14 +2268,11 @@ class TaskService:
                 doc_service.delete_document_cascade(
                     doc["id"],
                     delete_lance=False,
-                    delete_dedup=False,
                 )
             cleaned["documents"] = True
             cleaned["chunks"] = True
 
         elif sources:
-            for source in sources:
-                dedup_manager.remove_record(source)
             cleaned["dedup_state"] = True
 
             from kb.services import VectorStoreService
@@ -2456,38 +2480,15 @@ class ConsistencyService:
         """
         校验知识库一致性
 
-        比较 dedup_records 中记录的 chunk 总数与 LanceDB 实际行数。
-
-        Returns:
-            {
-                "kb_id": str,
-                "dedup_files": int,        # dedup 记录的文件数
-                "dedup_chunks": int,       # dedup 记录的 chunk 总数
-                "lance_rows": int,         # LanceDB 实际行数
-                "consistent": bool,        # 是否一致
-                "missing_chunks": int,     # LanceDB 缺失的 chunk 数
-                "orphan_rows": int,        # LanceDB 多余的行数
-                "status": str,             # 状态描述
-            }
+        比较 documents 表中的 chunk 总数与 LanceDB 实际行数。
         """
-        from kb.database import init_dedup_db
+        from kb.database import init_document_db
 
-        dedup_db = init_dedup_db()
+        doc_db = init_document_db()
+        docs = doc_db.get_by_kb(kb_id)
+        doc_files = len(docs)
+        doc_chunks = sum(d.get("chunk_count", 0) for d in docs)
 
-        # 1. 从 dedup_records 获取预期 chunk 总数
-        try:
-            dedup_records = dedup_db.get_records(kb_id)
-            dedup_files = len(dedup_records)
-            dedup_chunks = sum(r.get("chunk_count", 0) for r in dedup_records)
-        except Exception as e:
-            logger.error(f"读取 dedup 记录失败: {e}")
-            return {
-                "kb_id": kb_id,
-                "error": f"读取 dedup 记录失败: {e}",
-                "status": "error",
-            }
-
-        # 2. 从 LanceDB 获取实际行数
         try:
             vs = VectorStoreService.get_vector_store(kb_id)
             stats = vs.get_stats()
@@ -2496,15 +2497,12 @@ class ConsistencyService:
             logger.error(f"读取 LanceDB 失败: {e}")
             return {
                 "kb_id": kb_id,
-                "dedup_files": dedup_files,
-                "dedup_chunks": dedup_chunks,
                 "error": f"读取 LanceDB 失败: {e}",
                 "status": "error",
             }
 
-        # 3. 比较
-        missing_chunks = max(0, dedup_chunks - lance_rows)
-        orphan_rows = max(0, lance_rows - dedup_chunks)
+        missing_chunks = max(0, doc_chunks - lance_rows)
+        orphan_rows = max(0, lance_rows - doc_chunks)
         consistent = missing_chunks == 0 and orphan_rows == 0
 
         if consistent:
@@ -2518,8 +2516,8 @@ class ConsistencyService:
 
         return {
             "kb_id": kb_id,
-            "dedup_files": dedup_files,
-            "dedup_chunks": dedup_chunks,
+            "doc_files": doc_files,
+            "doc_chunks": doc_chunks,
             "lance_rows": lance_rows,
             "consistent": consistent,
             "missing_chunks": missing_chunks,
@@ -2591,9 +2589,9 @@ class ConsistencyService:
         """
         同步模式修复：删除 LanceDB 中的 orphan 向量
 
-        从 dedup 记录获取所有 doc_id，删除 LanceDB 中不在这些 doc_id 中的记录。
+        从 documents 表获取所有 doc_id，删除 LanceDB 中不在这些 doc_id 中的记录。
         """
-        from kb.database import init_dedup_db
+        from kb.database import init_document_db
 
         verify_result = ConsistencyService.verify(kb_id)
         if verify_result.get("status") == "error":
@@ -2614,13 +2612,13 @@ class ConsistencyService:
                 "details": verify_result,
             }
 
-        dedup_db = init_dedup_db()
+        doc_db = init_document_db()
 
-        # 获取 dedup 中记录的 doc_id 集合
-        dedup_records = dedup_db.get_records(kb_id)
+        # 获取 documents 表中记录的 doc_id 集合
+        docs = doc_db.get_by_kb(kb_id)
         valid_doc_ids = set()
-        for record in dedup_records:
-            doc_id = record.get("doc_id")
+        for doc in docs:
+            doc_id = doc.get("id")
             if doc_id:
                 valid_doc_ids.add(doc_id)
 
@@ -2629,7 +2627,7 @@ class ConsistencyService:
                 "kb_id": kb_id,
                 "mode": "sync",
                 "repaired": False,
-                "message": "dedup 记录为空，无法修复",
+                "message": "documents 记录为空，无法修复",
                 "details": {"valid_doc_ids": 0},
             }
 
@@ -2764,7 +2762,7 @@ class ConsistencyService:
     @staticmethod
     def safe_delete_files(kb_id: str, sources: List[str]) -> Dict[str, Any]:
         """
-        原子性删除文件（保证 dedup 和 LanceDB 一致）
+        原子性删除文件（保证 documents 和 LanceDB 一致）
 
         Args:
             kb_id: 知识库 ID
@@ -2788,19 +2786,27 @@ class ConsistencyService:
                 "message": "没有文件需要删除",
             }
 
-        from kb.database import init_dedup_db
+        from kb.database import init_document_db
         import lancedb
 
-        dedup_db = init_dedup_db()
+        doc_db = init_document_db()
 
-        # 1. 标记 dedup 记录待删除（先标记，不实际删除）
         deleted_sources = 0
         for source in sources:
             try:
-                dedup_db.remove(kb_id, source)
-                deleted_sources += 1
+                doc = doc_db.get_by_source_path(kb_id, source)
+                if doc:
+                    doc_id = doc.get("id")
+                    if doc_id:
+                        from kb.document_chunk_service import (
+                            DocumentChunkService,
+                        )
+
+                        svc = DocumentChunkService(kb_id)
+                        svc.delete_document_cascade(doc_id, delete_lance=True)
+                        deleted_sources += 1
             except Exception as e:
-                logger.warning(f"删除 dedup 记录失败 {source}: {e}")
+                logger.warning(f"删除文档记录失败 {source}: {e}")
 
         # 2. 从 LanceDB 删除向量
         deleted_vectors = 0
