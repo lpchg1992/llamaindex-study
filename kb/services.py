@@ -808,6 +808,13 @@ class KnowledgeBaseService:
             registry_topics = getattr(kb, "topics", []) or []
             all_topics = list(set(db_topics + registry_topics))
 
+            chunk_strategy = None
+            if exists:
+                try:
+                    chunk_strategy = vs.get_chunk_strategy()
+                except Exception:
+                    pass
+
             result.append(
                 {
                     "id": kb.id,
@@ -817,6 +824,7 @@ class KnowledgeBaseService:
                     "status": "indexed" if doc_count > 0 else "empty",
                     "row_count": doc_count,
                     "chunk_count": row_count,
+                    "chunk_strategy": chunk_strategy,
                     "topics": all_topics,
                 }
             )
@@ -839,6 +847,7 @@ class KnowledgeBaseService:
                 "status": "empty",
                 "row_count": doc_count,
                 "chunk_count": 0,
+                "chunk_strategy": None,
                 "topics": kb_meta.get("topics", []),
             }
             if persist_dir.exists():
@@ -848,6 +857,7 @@ class KnowledgeBaseService:
                     row_count = stats.get("row_count", 0)
                     info["status"] = "indexed" if doc_count > 0 else "empty"
                     info["chunk_count"] = row_count
+                    info["chunk_strategy"] = vs.get_chunk_strategy()
                 except Exception:
                     info["status"] = "error"
             result.append(info)

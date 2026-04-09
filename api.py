@@ -328,6 +328,7 @@ class KBInfo(BaseModel):
     source_type: str = "generic"
     status: str = "unknown"
     row_count: Optional[int] = None
+    chunk_strategy: Optional[str] = None
 
 
 class TaskResponse(BaseModel):
