@@ -32,6 +32,7 @@ export function SearchPage() {
   const [embedModelId, setEmbedModelId] = useState<string>('')
   const [useAutoMerging, setUseAutoMerging] = useState(false)
   const [kbSearch, setKbSearch] = useState('')
+  const [topK, setTopK] = useState(10)
 
   const filteredKBs = kbs?.filter(kb =>
     (kb.name || kb.id).toLowerCase().includes(kbSearch.toLowerCase())
@@ -50,7 +51,7 @@ export function SearchPage() {
       const response = await searchMutation.mutateAsync({
         query,
         kb_ids: selectedKBs.join(','),
-        top_k: 10,
+        top_k: topK,
         route_mode: 'general',
         retrieval_mode: retrievalMode,
         embed_model_id: embedModelId || undefined,
@@ -88,6 +89,25 @@ export function SearchPage() {
                 <SelectItem value="hybrid">Hybrid (Vector + BM25)</SelectItem>
               </SelectContent>
             </Select>
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label htmlFor="topK">Top K: {topK}</Label>
+            </div>
+            <Input
+              id="topK"
+              type="range"
+              min={1}
+              max={50}
+              value={topK}
+              onChange={(e) => setTopK(parseInt(e.target.value) || 10)}
+              className="w-full"
+            />
+            <div className="flex justify-between text-xs text-muted-foreground">
+              <span>1</span>
+              <span>50</span>
+            </div>
           </div>
 
           <div className="space-y-2">

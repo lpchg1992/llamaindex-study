@@ -58,6 +58,7 @@ interface QueryConfig {
   numMultiQueries: number
   useAutoMerging: boolean
   responseMode: string
+  topK: number
 }
 
 export function QueryPage() {
@@ -78,6 +79,7 @@ export function QueryPage() {
     numMultiQueries: 3,
     useAutoMerging: false,
     responseMode: 'compact',
+    topK: 5,
   })
   const [query, setQuery] = useState('')
   const [response, setResponse] = useState<QueryResponse | null>(null)
@@ -149,7 +151,7 @@ export function QueryPage() {
         num_multi_queries: config.useMultiQuery ? config.numMultiQueries : undefined,
         use_auto_merging: config.useAutoMerging || undefined,
         response_mode: config.responseMode,
-        top_k: 5,
+        top_k: config.topK,
       })
       setResponse(result)
     } catch (error) {
@@ -283,6 +285,25 @@ export function QueryPage() {
                   <SelectItem value="hybrid">Hybrid (Vector + BM25)</SelectItem>
                 </SelectContent>
               </Select>
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="topK">Top K: {config.topK}</Label>
+              </div>
+              <Input
+                id="topK"
+                type="range"
+                min={1}
+                max={20}
+                value={config.topK}
+                onChange={(e) => updateConfig('topK', parseInt(e.target.value) || 5)}
+                className="w-full"
+              />
+              <div className="flex justify-between text-xs text-muted-foreground">
+                <span>1</span>
+                <span>20</span>
+              </div>
             </div>
 
             <div className="space-y-2">
