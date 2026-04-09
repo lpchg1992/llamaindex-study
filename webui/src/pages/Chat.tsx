@@ -207,7 +207,7 @@ export function Chat() {
                             : 'bg-muted rounded-tl-sm'
                         }`}
                       >
-                        <p className="whitespace-pre-wrap break-words leading-relaxed">{msg.content}</p>
+                        <p className="whitespace-pre-wrap break-all leading-relaxed">{msg.content}</p>
                       </div>
                     </div>
                   ))

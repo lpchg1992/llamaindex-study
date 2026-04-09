@@ -430,9 +430,9 @@ export function QueryPage() {
                     Response
                   </CardTitle>
                 </CardHeader>
-                <CardContent>
-                  <div className="prose prose-sm max-w-none dark:prose-invert">
-                    <p className="whitespace-pre-wrap break-words leading-relaxed">{response.response}</p>
+                <CardContent className="overflow-hidden">
+                  <div className="prose prose-sm max-w-none dark:prose-invert overflow-wrap-anywhere">
+                    <p className="whitespace-pre-wrap break-all leading-relaxed">{response.response}</p>
                   </div>
                 </CardContent>
               </Card>
@@ -447,13 +447,13 @@ export function QueryPage() {
                   </CardHeader>
                   <CardContent className="space-y-3">
                     {response.sources.map((source, index) => (
-                      <div key={index} className="p-4 border rounded-lg hover:bg-muted/50 transition-colors">
+                      <div key={index} className="p-4 border rounded-lg hover:bg-muted/50 transition-colors overflow-hidden">
                         <div className="flex items-center justify-between mb-2">
-                          <Badge variant={source.score > 0.8 ? 'default' : 'outline'} className="font-mono">
+                          <Badge variant={source.score > 0.8 ? 'default' : 'outline'} className="font-mono shrink-0">
                             {(source.score * 100).toFixed(0)}%
                           </Badge>
                         </div>
-                        <p className="text-sm text-muted-foreground line-clamp-3 break-words leading-relaxed">
+                        <p className="text-sm text-muted-foreground line-clamp-3 break-all leading-relaxed">
                           {source.text}
                         </p>
                       </div>

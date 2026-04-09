@@ -216,7 +216,7 @@ export function SearchPage() {
                     </div>
                   </CardHeader>
                   <CardContent>
-                    <p className="text-sm text-muted-foreground line-clamp-3 break-words">
+                    <p className="text-sm text-muted-foreground line-clamp-3 break-all">
                       {result.text}
                     </p>
                     {result.kb_id && (
