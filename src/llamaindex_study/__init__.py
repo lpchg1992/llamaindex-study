@@ -35,7 +35,6 @@ from llamaindex_study.reader import (
     SmartDocumentProcessor,
     load_and_split,
 )
-from llamaindex_study.index_builder import IndexBuilder
 from llamaindex_study.query_engine import QueryEngineWrapper, create_query_engine
 from llamaindex_study.vector_store import (
     VectorStoreType,
@@ -88,7 +87,6 @@ __all__ = [
     "DocumentReader",
     "SmartDocumentProcessor",
     "load_and_split",
-    "IndexBuilder",
     "QueryEngineWrapper",
     "create_query_engine",
     "VectorStoreType",

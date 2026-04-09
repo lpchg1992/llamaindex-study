@@ -24,7 +24,6 @@ from kb.services import (
     ZoteroService,
 )
 from llamaindex_study.config import get_settings
-from llamaindex_study.index_builder import IndexBuilder
 from llamaindex_study.query_engine import QueryEngineWrapper
 from llamaindex_study.rag_evaluator import RAGEvaluator, RAGMetrics
 from llamaindex_study.reader import DocumentReader
