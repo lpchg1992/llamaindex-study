@@ -169,6 +169,9 @@ app.add_middleware(
         "http://localhost:5173",
         "http://127.0.0.1:37241",
         "http://localhost:37241",
+        # 远程 LAN 访问
+        "http://100.66.1.2:5173",
+        "http://100.66.1.2:37241",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -1327,6 +1330,42 @@ class ZoteroIngestRequest(BaseModel):
     )
 
 
+class ZoteroPreviewRequest(BaseModel):
+    """Zotero 导入预览请求"""
+
+    item_ids: Optional[List[int]] = Field(None, description="要预览的文献 ID 列表")
+    collection_id: Optional[str] = Field(
+        None, description="收藏夹 ID（将预览该收藏夹下所有文献）"
+    )
+
+
+class ZoteroPreviewItem(BaseModel):
+    """预览项详情"""
+
+    item_id: int
+    title: str
+    creators: List[str] = []
+    has_attachment: bool = False
+    attachment_path: Optional[str] = None
+    attachment_type: Optional[str] = None  # pdf, document, etc.
+    is_scanned_pdf: bool = False
+    has_md_cache: bool = False  # MD exists in mddocs
+    is_eligible: bool = True  # Passes [kb] filter
+    ineligible_reason: Optional[str] = None
+    is_duplicate: bool = False  # Already imported to KB
+
+
+class ZoteroPreviewResponse(BaseModel):
+    """Zotero 导入预览响应"""
+
+    total_items: int
+    eligible_items: int
+    ineligible_items: int
+    duplicate_items: int
+    items: List[ZoteroPreviewItem]
+    filtering_rules: List[str] = []
+
+
 @app.get("/zotero/collections")
 def list_zotero_collections():
     """列出 Zotero 收藏夹"""
@@ -1354,6 +1393,90 @@ def get_zotero_collection_structure(collection_id: str):
 def get_all_collections_with_items():
     """获取所有收藏夹及其直接文献（用于树形展示）"""
     return {"collections": ZoteroService.get_all_collections_with_items()}
+
+
+@app.post("/zotero/preview", response_model=ZoteroPreviewResponse)
+def preview_zotero_import(req: ZoteroPreviewRequest):
+    """预览 Zotero 文献导入（应用所有筛选规则）
+
+    检查每个文献是否符合导入条件：
+    - [kb] 标记过滤
+    - 是否为扫描件 PDF
+    - mddocs 缓存是否存在
+    - 是否已导入（去重）
+    """
+    from kb.zotero_processor import ZoteroImporter
+    from pathlib import Path
+
+    importer = ZoteroImporter()
+    mddocs_base = Path("/Volumes/online/llamaindex/mddocs")
+
+    item_ids = list(req.item_ids) if req.item_ids else []
+
+    if req.collection_id and not item_ids:
+        try:
+            col_id = int(req.collection_id)
+            item_ids = importer.get_items_in_collection(col_id, recursive=True)
+        except (ValueError, TypeError):
+            pass
+
+    filtering_rules = [
+        "附件标题必须包含 [kb] 前缀才会被导入",
+        "已导入的文献会被跳过",
+    ]
+
+    eligible_items = []
+    ineligible_items = []
+    duplicate_items = []
+
+    for item_id in item_ids:
+        item = importer.get_item(item_id)
+        if not item:
+            continue
+
+        attachment_path = importer._get_attachment_path(item_id)
+
+        preview_item = ZoteroPreviewItem(
+            item_id=item_id,
+            title=item.title,
+            creators=item.creators[:3],
+            has_attachment=bool(attachment_path),
+            attachment_path=attachment_path,
+        )
+
+        if not attachment_path:
+            preview_item.is_eligible = False
+            preview_item.ineligible_reason = "附件标题不含 [kb] 标记"
+            ineligible_items.append(preview_item)
+            continue
+
+        ext = Path(attachment_path).suffix.lower() if attachment_path else ""
+        preview_item.attachment_type = ext.lstrip(".")
+
+        if ext == ".pdf" and attachment_path:
+            pdf_path = Path(attachment_path)
+            if pdf_path.exists():
+                is_scanned = importer.processor.is_scanned_pdf(str(pdf_path))
+                preview_item.is_scanned_pdf = is_scanned
+
+            md_cache_path = mddocs_base / f"{pdf_path.stem}.md"
+            preview_item.has_md_cache = (
+                md_cache_path.exists() and md_cache_path.stat().st_size > 100
+            )
+
+        preview_item.is_eligible = True
+        eligible_items.append(preview_item)
+
+    importer.close()
+
+    return ZoteroPreviewResponse(
+        total_items=len(item_ids),
+        eligible_items=len(eligible_items),
+        ineligible_items=len(ineligible_items),
+        duplicate_items=len(duplicate_items),
+        items=eligible_items + ineligible_items,
+        filtering_rules=filtering_rules,
+    )
 
 
 @app.post("/kbs/{kb_id}/ingest/zotero", response_model=IngestResponse)

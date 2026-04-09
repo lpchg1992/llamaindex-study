@@ -217,6 +217,36 @@ export interface ZoteroCollectionWithItems {
   item_count: number
 }
 
+// Zotero Preview
+export interface ZoteroPreviewItem {
+  item_id: number
+  title: string
+  creators: string[]
+  has_attachment: boolean
+  attachment_path: string | null
+  attachment_type: string | null
+  is_scanned_pdf: boolean
+  has_md_cache: boolean
+  is_eligible: boolean
+  ineligible_reason: string | null
+  is_duplicate: boolean
+}
+
+export interface ZoteroPreviewResponse {
+  total_items: number
+  eligible_items: number
+  ineligible_items: number
+  duplicate_items: number
+  items: ZoteroPreviewItem[]
+  filtering_rules: string[]
+}
+
+export interface ZoteroPreviewRequest {
+  item_ids?: number[]
+  collection_id?: string
+}
+
+
 // Obsidian
 export interface ObsidianVault {
   name: string

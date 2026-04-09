@@ -5,6 +5,7 @@ import {
   useAllZoteroCollectionsWithItems,
   useObsidianVaults,
   useObsidianVaultTree,
+  useZoteroPreview,
 } from '@/api/hooks'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -21,15 +22,16 @@ import type { FileTreeItem } from '@/components/FileTree'
 import { SelectedFilesPanel } from '@/components/SelectedFilesPanel'
 import { ImportProgressPanel } from '@/components/ImportProgressPanel'
 import type { DocumentProgress } from '@/components/ImportProgressPanel'
+import { ImportPreviewModal } from '@/components/ImportPreviewModal'
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { Upload, FolderOpen, Book, FileText, Loader2, RefreshCw } from 'lucide-react'
+import { Upload, FolderOpen, Book, FileText, Loader2, RefreshCw, Eye } from 'lucide-react'
 import { toast } from 'sonner'
-import type { ObsidianVaultTree } from '@/types/api'
+import type { ObsidianVaultTree, ZoteroPreviewItem } from '@/types/api'
 
 interface ImportDialogProps {
   open: boolean
@@ -62,6 +64,16 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
     useObsidianVaults()
   const [selectedVault, setSelectedVault] = useState<string>('')
   const { data: obsidianTree, isLoading: treeLoading } = useObsidianVaultTree(selectedVault)
+
+  const zoteroPreview = useZoteroPreview()
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [previewData, setPreviewData] = useState<ZoteroPreviewItem[]>([])
+  const [previewMeta, setPreviewMeta] = useState({
+    totalItems: 0,
+    eligibleItems: 0,
+    ineligibleItems: 0,
+    filteringRules: [] as string[],
+  })
 
   const zoteroTreeItems = useMemo<FileTreeItem[]>(() => {
     if (!zoteroCollectionsData?.collections) return []
@@ -114,6 +126,59 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
     },
     []
   )
+
+  const handlePreviewZotero = async () => {
+    const itemIds = zoteroSelectedItems
+      .filter((item) => item.type === 'item')
+      .map((item) => item.item_id)
+      .filter((id): id is number => id !== undefined)
+
+    if (itemIds.length === 0) {
+      toast.error('请先选择要预览的文献')
+      return
+    }
+
+    try {
+      const result = await zoteroPreview.mutateAsync({ item_ids: itemIds })
+      setPreviewData(result.items)
+      setPreviewMeta({
+        totalItems: result.total_items,
+        eligibleItems: result.eligible_items,
+        ineligibleItems: result.ineligible_items,
+        filteringRules: result.filtering_rules,
+      })
+      setPreviewOpen(true)
+    } catch (error: any) {
+      toast.error(error.response?.data?.detail || '预览失败')
+    }
+  }
+
+  const handlePreviewConfirm = (selectedPreviewItems: ZoteroPreviewItem[]) => {
+    const selectedItemIds = new Set(selectedPreviewItems.map((item) => item.item_id))
+
+    setZoteroSelectedItems((prev) => {
+      const otherItems = prev.filter(
+        (item) => item.type !== 'item' || !selectedItemIds.has(item.item_id)
+      )
+      const newZoteroItems = zoteroSelectedItems
+        .filter(
+          (item) =>
+            item.type === 'item' &&
+            selectedItemIds.has(item.item_id)
+        )
+      return [...otherItems, ...newZoteroItems]
+    })
+
+    setZoteroSelectedIds((prev) => {
+      const next = new Set(prev)
+      zoteroSelectedItems
+        .filter((item) => item.type === 'item' && selectedItemIds.has(item.item_id))
+        .forEach((item) => next.add(item.id))
+      return next
+    })
+
+    toast.success(`已添加 ${selectedPreviewItems.length} 篇文献到选择列表`)
+  }
 
   const handleObsidianSelectionChange = useCallback(
     (ids: Set<string>, items: FileTreeItem[]) => {
@@ -270,7 +335,8 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
   }
 
   return (
-    <Dialog open={open} onOpenChange={handleClose}>
+    <>
+      <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent className="max-w-[95vw] w-[98vw] h-[92vh] flex flex-col overflow-hidden">
         <DialogHeader className="shrink-0">
           <DialogTitle className="flex items-center gap-2">
@@ -305,7 +371,7 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
                     </TabsTrigger>
                   </TabsList>
 
-                  <TabsContent value="zotero" className="flex-1 min-h-0 flex flex-col mt-2">
+                  <TabsContent value="zotero" className="flex-1 min-h-0 flex flex-col mt-2 overflow-hidden">
                     <div className="flex gap-2 mb-2 shrink-0">
                       <Button
                         variant="outline"
@@ -316,11 +382,21 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
                       >
                         <RefreshCw className={`h-4 w-4 ${zoteroLoading ? 'animate-spin' : ''}`} />
                       </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handlePreviewZotero}
+                        disabled={zoteroSelectedItems.filter(i => i.type === 'item').length === 0 || zoteroPreview.isPending}
+                        title="预览导入效果（应用筛选规则）"
+                      >
+                        <Eye className={`h-4 w-4 ${zoteroPreview.isPending ? 'animate-spin' : ''}`} />
+                        预览
+                      </Button>
                       <span className="text-sm text-muted-foreground flex items-center">
                         {zoteroSelectedItems.length} 个文献已选择
                       </span>
                     </div>
-                    <div className="border rounded-lg h-[calc(100vh-380px)] lg:h-[calc(100vh-400px)] flex-1 min-h-0">
+                    <div className="border rounded-lg flex-1 min-h-0">
                       <FileTree
                         items={zoteroTreeItems}
                         selectedIds={zoteroSelectedIds}
@@ -331,7 +407,7 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
                     </div>
                   </TabsContent>
 
-                  <TabsContent value="obsidian" className="flex-1 min-h-0 flex flex-col mt-2">
+                  <TabsContent value="obsidian" className="flex-1 min-h-0 flex flex-col mt-2 overflow-hidden">
                     <div className="space-y-2 mb-2 shrink-0">
                       <Select value={selectedVault} onValueChange={setSelectedVault}>
                         <SelectTrigger>
@@ -370,7 +446,7 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
                         </Button>
                       </div>
                     </div>
-                    <div className="border rounded-lg h-[calc(100vh-380px)] lg:h-[calc(100vh-400px)] flex-1 min-h-0">
+                    <div className="border rounded-lg flex-1 min-h-0">
                       {selectedVault ? (
                         <FileTree
                           items={obsidianTreeItems}
@@ -387,8 +463,8 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
                     </div>
                   </TabsContent>
 
-                  <TabsContent value="files" className="flex-1 min-h-0 flex flex-col mt-2">
-                    <div className="space-y-2">
+                  <TabsContent value="files" className="flex-1 min-h-0 flex flex-col mt-2 overflow-hidden">
+                    <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-4">
                       <input
                         ref={fileInputRef}
                         type="file"
@@ -396,11 +472,11 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
                         className="hidden"
                         onChange={handleFileChange}
                       />
-                      <Button onClick={handleFilePicker} variant="outline" className="w-full" title="选择要上传的文件">
+                      <Button onClick={handleFilePicker} variant="outline" className="w-full max-w-sm" title="选择要上传的文件">
                         <Upload className="h-4 w-4 mr-2" />
                         选择文件
                       </Button>
-                      <p className="text-xs text-muted-foreground">
+                      <p className="text-xs text-muted-foreground text-center">
                         支持 PDF, DOCX, XLSX, PPTX, MD, TXT 等格式
                       </p>
                     </div>
@@ -492,5 +568,18 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
         </div>
       </DialogContent>
     </Dialog>
+
+    <ImportPreviewModal
+      open={previewOpen}
+      onOpenChange={setPreviewOpen}
+      previewData={previewData}
+      filteringRules={previewMeta.filteringRules}
+      totalItems={previewMeta.totalItems}
+      eligibleItems={previewMeta.eligibleItems}
+      ineligibleItems={previewMeta.ineligibleItems}
+      onConfirm={handlePreviewConfirm}
+      isLoading={zoteroPreview.isPending}
+    />
+    </>
   )
 }

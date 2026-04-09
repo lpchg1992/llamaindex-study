@@ -20,6 +20,7 @@ import type {
   ZoteroCollectionsResponse,
   ZoteroCollectionStructure,
   ZoteroCollectionWithItems,
+  ZoteroPreviewRequest,
   ObsidianVaultsResponse,
   ObsidianVault,
   ObsidianVaultStructure,
@@ -443,6 +444,18 @@ export function useZoteroCollections() {
     queryKey: ['zotero-collections'],
     queryFn: async () => {
       const { data } = await apiClient.get(`${API_BASE}/zotero/collections`)
+      return data
+    },
+  })
+}
+
+export function useZoteroPreview() {
+  return useMutation<ZoteroPreviewResponse, Error, ZoteroPreviewRequest>({
+    mutationFn: async (req) => {
+      const { data } = await apiClient.post<ZoteroPreviewResponse>(
+        `${API_BASE}/zotero/preview`,
+        req
+      )
       return data
     },
   })
