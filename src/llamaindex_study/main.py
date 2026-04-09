@@ -1945,6 +1945,20 @@ def _start_frontend() -> None:
     print(f"前端服务已启动 (PID: {proc.pid}, Port: 5173)")
 
 
+def _is_port_in_use(port: int) -> bool:
+    """检查端口是否被占用"""
+    import socket
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(1)
+    try:
+        result = sock.connect_ex(("localhost", port))
+        sock.close()
+        return result == 0
+    except OSError:
+        return False
+
+
 def _get_service_status() -> dict:
     """获取所有服务状态"""
     from kb.task_executor import get_scheduler_pid_file
@@ -1959,11 +1973,14 @@ def _get_service_status() -> dict:
         "frontend": {"running": False, "pid": None, "port": 5173},
     }
 
-    # API
+    # API - 检查 PID 文件 + 端口
     api_pid = _get_pid_from_file(api_pid_file)
     if api_pid and _is_process_running(api_pid):
         status["api"]["running"] = True
         status["api"]["pid"] = api_pid
+    elif _is_port_in_use(37241):
+        status["api"]["running"] = True
+        status["api"]["pid"] = "unknown (port in use)"
 
     # Scheduler
     scheduler_pid = _get_pid_from_file(scheduler_pid_file)
@@ -1971,11 +1988,14 @@ def _get_service_status() -> dict:
         status["scheduler"]["running"] = True
         status["scheduler"]["pid"] = scheduler_pid
 
-    # Frontend
+    # Frontend - 检查 PID 文件 + 端口
     frontend_pid = _get_pid_from_file(frontend_pid_file)
     if frontend_pid and _is_process_running(frontend_pid):
         status["frontend"]["running"] = True
         status["frontend"]["pid"] = frontend_pid
+    elif _is_port_in_use(5173):
+        status["frontend"]["running"] = True
+        status["frontend"]["pid"] = "unknown (port in use)"
 
     return status
 
