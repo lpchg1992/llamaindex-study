@@ -793,6 +793,7 @@ class KnowledgeBaseService:
 
             row_count = 0
             doc_count = 0
+            chunk_strategy = None
             if exists:
                 try:
                     vs = VectorStoreService.get_vector_store(kb.id)
@@ -800,6 +801,7 @@ class KnowledgeBaseService:
                     row_count = stats.get("row_count", 0)
                     doc_stats = document_db.get_stats(kb.id)
                     doc_count = doc_stats.get("document_count", 0)
+                    chunk_strategy = vs.get_chunk_strategy()
                 except Exception:
                     pass
 
@@ -807,13 +809,6 @@ class KnowledgeBaseService:
             db_topics = db_row.get("topics", []) or []
             registry_topics = getattr(kb, "topics", []) or []
             all_topics = list(set(db_topics + registry_topics))
-
-            chunk_strategy = None
-            if exists:
-                try:
-                    chunk_strategy = vs.get_chunk_strategy()
-                except Exception:
-                    pass
 
             result.append(
                 {
