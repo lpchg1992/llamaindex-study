@@ -3,6 +3,8 @@ import argparse
 import asyncio
 import json
 import os
+import signal
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -1788,6 +1790,283 @@ def handle_admin_restart_api(args: argparse.Namespace) -> int:
     return 0
 
 
+# ============== Service Management ==============
+
+
+def _get_pid_from_file(path: Path) -> Optional[int]:
+    """从 PID 文件读取进程 ID"""
+    if path.exists():
+        with open(path, "r") as f:
+            return int(f.read().strip())
+    return None
+
+
+def _kill_pid(pid: int, sig: signal.Signals, name: str) -> bool:
+    """尝试终止进程"""
+    try:
+        os.kill(pid, sig)
+        return True
+    except (ProcessLookupError, OSError):
+        return False
+
+
+def _is_process_running(pid: int) -> bool:
+    """检查进程是否在运行"""
+    try:
+        os.kill(pid, 0)
+        return True
+    except (ProcessLookupError, OSError):
+        return False
+
+
+def _stop_scheduler() -> bool:
+    """停止调度器"""
+    from kb.task_executor import get_scheduler_pid_file
+
+    pid_file = get_scheduler_pid_file()
+    pid = _get_pid_from_file(pid_file)
+
+    if pid and _kill_pid(pid, signal.SIGTERM, "scheduler"):
+        print(f"停止调度器 (PID: {pid})...")
+        time.sleep(1)
+        _kill_pid(pid, signal.SIGKILL, "scheduler")
+        return True
+    return False
+
+
+def _start_scheduler() -> None:
+    """启动调度器"""
+    import subprocess
+
+    print("启动调度器...")
+    subprocess.Popen(
+        ["uv", "run", "python", "-m", "kb.scheduler"],
+        cwd=str(PROJECT_ROOT),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    time.sleep(2)
+
+
+def _stop_api() -> bool:
+    """停止 API 服务"""
+    from llamaindex_study.config import get_settings
+
+    settings = get_settings()
+    api_port = getattr(settings, "api_port", 37241)
+    pid_file = PROJECT_ROOT / ".api.pid"
+    watchdog_pid_file = PROJECT_ROOT / ".api_watchdog.pid"
+
+    watchdog_pid = _get_pid_from_file(watchdog_pid_file)
+    api_pid = _get_pid_from_file(pid_file)
+
+    if watchdog_pid:
+        _kill_pid(watchdog_pid, signal.SIGTERM, "watchdog")
+        time.sleep(1)
+        _kill_pid(watchdog_pid, signal.SIGKILL, "watchdog")
+
+    if api_pid and _kill_pid(api_pid, signal.SIGTERM, "api"):
+        print(f"停止 API (PID: {api_pid})...")
+        time.sleep(1)
+        _kill_pid(api_pid, signal.SIGKILL, "api")
+
+    # 检查端口是否释放
+    try:
+        import socket
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(1)
+        result = sock.connect_ex(("localhost", api_port))
+        sock.close()
+        if result == 0:
+            print(f"警告: 端口 {api_port} 仍被占用，尝试强制清理...")
+            subprocess.run(
+                f"lsof -ti:{api_port} | xargs kill -9 2>/dev/null || true",
+                shell=True,
+            )
+            time.sleep(2)
+    except Exception:
+        pass
+
+    if pid_file.exists():
+        pid_file.unlink()
+    if watchdog_pid_file.exists():
+        watchdog_pid_file.unlink()
+
+    return True
+
+
+def _start_api() -> None:
+    """启动 API 服务"""
+    import subprocess
+
+    print("启动 API 服务...")
+    subprocess.Popen(
+        ["uv", "run", "python", "api.py"],
+        cwd=str(PROJECT_ROOT),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    time.sleep(3)
+
+
+def _stop_frontend() -> bool:
+    """停止前端服务"""
+    pid_file = PROJECT_ROOT / ".frontend.pid"
+    pid = _get_pid_from_file(pid_file)
+
+    if pid and _kill_pid(pid, signal.SIGTERM, "frontend"):
+        print(f"停止前端 (PID: {pid})...")
+        time.sleep(1)
+        _kill_pid(pid, signal.SIGKILL, "frontend")
+        return True
+    return False
+
+
+def _start_frontend() -> None:
+    """启动前端服务"""
+    import subprocess
+
+    pid_file = PROJECT_ROOT / ".frontend.pid"
+    frontend_dir = PROJECT_ROOT / "webui"
+
+    print("启动前端服务...")
+    proc = subprocess.Popen(
+        ["npm", "run", "dev"],
+        cwd=str(frontend_dir),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    # 写入 PID
+    pid_file.write_text(str(proc.pid))
+    print(f"前端服务已启动 (PID: {proc.pid}, Port: 5173)")
+
+
+def _get_service_status() -> dict:
+    """获取所有服务状态"""
+    from kb.task_executor import get_scheduler_pid_file
+
+    scheduler_pid_file = get_scheduler_pid_file()
+    api_pid_file = PROJECT_ROOT / ".api.pid"
+    frontend_pid_file = PROJECT_ROOT / ".frontend.pid"
+
+    status = {
+        "api": {"running": False, "pid": None, "port": 37241},
+        "scheduler": {"running": False, "pid": None},
+        "frontend": {"running": False, "pid": None, "port": 5173},
+    }
+
+    # API
+    api_pid = _get_pid_from_file(api_pid_file)
+    if api_pid and _is_process_running(api_pid):
+        status["api"]["running"] = True
+        status["api"]["pid"] = api_pid
+
+    # Scheduler
+    scheduler_pid = _get_pid_from_file(scheduler_pid_file)
+    if scheduler_pid and _is_process_running(scheduler_pid):
+        status["scheduler"]["running"] = True
+        status["scheduler"]["pid"] = scheduler_pid
+
+    # Frontend
+    frontend_pid = _get_pid_from_file(frontend_pid_file)
+    if frontend_pid and _is_process_running(frontend_pid):
+        status["frontend"]["running"] = True
+        status["frontend"]["pid"] = frontend_pid
+
+    return status
+
+
+def handle_service_start(args: argparse.Namespace) -> int:
+    """启动所有服务"""
+    status = _get_service_status()
+
+    # 前端
+    if status["frontend"]["running"]:
+        print(f"前端服务已在运行 (PID: {status['frontend']['pid']})")
+    else:
+        _start_frontend()
+
+    # API
+    if status["api"]["running"]:
+        print(f"API 服务已在运行 (PID: {status['api']['pid']})")
+    else:
+        _start_api()
+
+    # Scheduler
+    if status["scheduler"]["running"]:
+        print(f"调度器已在运行 (PID: {status['scheduler']['pid']})")
+    else:
+        _start_scheduler()
+
+    print("\n所有服务启动完成")
+    return 0
+
+
+def handle_service_stop(args: argparse.Namespace) -> int:
+    """停止所有服务"""
+    print("停止所有服务...")
+
+    _stop_frontend()
+    _stop_api()
+    _stop_scheduler()
+
+    print("\n所有服务已停止")
+    return 0
+
+
+def handle_service_restart(args: argparse.Namespace) -> int:
+    """重启所有服务"""
+    print("重启所有服务...")
+
+    _stop_frontend()
+    _stop_api()
+    _stop_scheduler()
+
+    time.sleep(2)
+
+    _start_scheduler()
+    _start_api()
+    _start_frontend()
+
+    print("\n所有服务重启完成")
+    return 0
+
+
+def handle_service_status(args: argparse.Namespace) -> int:
+    """查看服务状态"""
+    status = _get_service_status()
+
+    print("\n=== 服务状态 ===\n")
+
+    # API
+    api = status["api"]
+    if api["running"]:
+        print(f"✅ API      运行中 (PID: {api['pid']}, Port: {api['port']})")
+    else:
+        print(f"❌ API      已停止")
+
+    # Scheduler
+    scheduler = status["scheduler"]
+    if scheduler["running"]:
+        print(f"✅ Scheduler 运行中 (PID: {scheduler['pid']})")
+    else:
+        print(f"❌ Scheduler 已停止")
+
+    # Frontend
+    frontend = status["frontend"]
+    if frontend["running"]:
+        print(f"✅ Frontend 运行中 (PID: {frontend['pid']}, Port: {frontend['port']})")
+    else:
+        print(f"❌ Frontend 已停止")
+
+    print()
+    return 0
+
+
 CONFIG_OPTION_DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "SILICONFLOW_API_KEY": ("LLM", "硅基流动 API 密钥"),
     "SILICONFLOW_BASE_URL": ("LLM", "硅基流动 API 地址"),
@@ -2655,6 +2934,39 @@ def build_parser() -> argparse.ArgumentParser:
     config_set.add_argument("key", help="配置项名称（如 OLLAMA_EMBED_MODEL）")
     config_set.add_argument("value", help="配置值")
     config_set.set_defaults(handler=handle_config_set)
+
+    service_parser = subparsers.add_parser(
+        "service", help="服务管理：启动、停止、重启、查看服务状态"
+    )
+    service_sub = service_parser.add_subparsers(dest="service_command", required=True)
+
+    service_start = service_sub.add_parser(
+        "start",
+        help="启动所有服务（API、调度器、前端）",
+        description="启动 API 服务、任务调度器和前端开发服务器",
+    )
+    service_start.set_defaults(handler=handle_service_start)
+
+    service_stop = service_sub.add_parser(
+        "stop",
+        help="停止所有服务",
+        description="停止 API 服务、任务调度器和前端开发服务器",
+    )
+    service_stop.set_defaults(handler=handle_service_stop)
+
+    service_restart = service_sub.add_parser(
+        "restart",
+        help="重启所有服务",
+        description="重启 API 服务、任务调度器和前端开发服务器",
+    )
+    service_restart.set_defaults(handler=handle_service_restart)
+
+    service_status = service_sub.add_parser(
+        "status",
+        help="查看服务状态",
+        description="查看 API 服务、任务调度器和前端开发服务器的状态",
+    )
+    service_status.set_defaults(handler=handle_service_status)
 
     return parser
 

@@ -84,6 +84,7 @@ llamaindex-study <command> [subcommand] [options]
   task                          任务管理
   category                      分类规则
   admin                         管理命令
+  service                       服务管理
   config                        配置管理
   model                         模型管理
 ```
@@ -791,6 +792,58 @@ uv run llamaindex-study admin delete-table <kb_id> --yes
 # 删除向量表（需要确认）
 uv run llamaindex-study admin delete-table tech_tools --yes
 ```
+
+---
+
+## 服务管理 (service)
+
+服务管理命令用于管理 API 服务、任务调度器和前端开发服务器。
+
+### 启动所有服务
+
+```bash
+uv run llamaindex-study service start
+```
+
+启动 API 服务、任务调度器和前端开发服务器。
+
+### 停止所有服务
+
+```bash
+uv run llamaindex-study service stop
+```
+
+停止所有运行中的服务。
+
+### 重启所有服务
+
+```bash
+uv run llamaindex-study service restart
+```
+
+重启所有服务（先停止再启动）。
+
+### 查看服务状态
+
+```bash
+uv run llamaindex-study service status
+```
+
+输出示例：
+
+```
+=== 服务状态 ===
+
+✅ API      运行中 (PID: 12345, Port: 37241)
+✅ Scheduler 运行中 (PID: 67890)
+✅ Frontend 运行中 (PID: 11111, Port: 5173)
+```
+
+| 服务 | PID 文件 | 端口 | 说明 |
+|------|----------|------|------|
+| API | `.api.pid` | 37241 | FastAPI 服务 |
+| Scheduler | `llamaindex_scheduler.pid` | - | 任务调度器 |
+| Frontend | `.frontend.pid` | 5173 | Vite 开发服务器 |
 
 ---
 
