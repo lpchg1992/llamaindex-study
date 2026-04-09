@@ -1796,8 +1796,13 @@ def handle_admin_restart_api(args: argparse.Namespace) -> int:
 def _get_pid_from_file(path: Path) -> Optional[int]:
     """从 PID 文件读取进程 ID"""
     if path.exists():
-        with open(path, "r") as f:
-            return int(f.read().strip())
+        try:
+            with open(path, "r") as f:
+                content = f.read().strip()
+                if content:
+                    return int(content)
+        except (ValueError, OSError):
+            pass
     return None
 
 
@@ -1851,12 +1856,26 @@ def _start_scheduler() -> None:
 
 def _stop_api() -> bool:
     """停止 API 服务"""
+    import subprocess
+
     from llamaindex_study.config import get_settings
 
     settings = get_settings()
     api_port = getattr(settings, "api_port", 37241)
     pid_file = PROJECT_ROOT / ".api.pid"
     watchdog_pid_file = PROJECT_ROOT / ".api_watchdog.pid"
+
+    # 先杀掉 watchdog 进程（监控循环会立即重启 API）
+    subprocess.run(
+        "ps aux | grep -E 'run_api\\.sh.*start' | grep -v grep | awk '{print $2}' | xargs kill -9 2>/dev/null || true",
+        shell=True,
+    )
+
+    # 停止 launchd 服务（KeepAlive 会自动重启 API）
+    subprocess.run(
+        "launchctl unload ~/Library/LaunchAgents/com.llamaindex.ragapi.plist 2>/dev/null || true",
+        shell=True,
+    )
 
     watchdog_pid = _get_pid_from_file(watchdog_pid_file)
     api_pid = _get_pid_from_file(pid_file)
@@ -1866,33 +1885,30 @@ def _stop_api() -> bool:
         time.sleep(1)
         _kill_pid(watchdog_pid, signal.SIGKILL, "watchdog")
 
-    if api_pid and _kill_pid(api_pid, signal.SIGTERM, "api"):
-        print(f"停止 API (PID: {api_pid})...")
-        time.sleep(1)
-        _kill_pid(api_pid, signal.SIGKILL, "api")
+    if api_pid:
+        try:
+            pgid = os.getpgid(api_pid)
+            print(f"停止 API 进程组 (PGID: {pgid})...")
+            os.killpg(pgid, signal.SIGTERM)
+            time.sleep(1)
+            os.killpg(pgid, signal.SIGKILL)
+        except (ProcessLookupError, OSError):
+            _kill_pid(api_pid, signal.SIGTERM, "api")
+            time.sleep(1)
+            _kill_pid(api_pid, signal.SIGKILL, "api")
 
-    # 检查端口是否释放
-    try:
-        import socket
+    # 检查端口是否释放，强制清理
+    if _is_port_in_use(api_port):
+        print(f"警告: 端口 {api_port} 仍被占用，尝试强制清理...")
+        subprocess.run(
+            f"lsof -ti:{api_port} 2>/dev/null | xargs kill -9 2>/dev/null || true",
+            shell=True,
+        )
+        time.sleep(2)
 
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(1)
-        result = sock.connect_ex(("localhost", api_port))
-        sock.close()
-        if result == 0:
-            print(f"警告: 端口 {api_port} 仍被占用，尝试强制清理...")
-            subprocess.run(
-                f"lsof -ti:{api_port} | xargs kill -9 2>/dev/null || true",
-                shell=True,
-            )
-            time.sleep(2)
-    except Exception:
-        pass
-
-    if pid_file.exists():
-        pid_file.unlink()
-    if watchdog_pid_file.exists():
-        watchdog_pid_file.unlink()
+    # 清理 PID 文件
+    pid_file.unlink(missing_ok=True)
+    watchdog_pid_file.unlink(missing_ok=True)
 
     return True
 
@@ -1901,6 +1917,12 @@ def _start_api() -> None:
     """启动 API 服务"""
     import subprocess
 
+    # 先检查端口是否可用
+    if _is_port_in_use(37241):
+        print("API 服务已在运行，跳过启动")
+        return
+
+    pid_file = PROJECT_ROOT / ".api.pid"
     print("启动 API 服务...")
     subprocess.Popen(
         ["uv", "run", "python", "api.py"],
@@ -1909,11 +1931,30 @@ def _start_api() -> None:
         stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
-    time.sleep(3)
+    # 等待 API 进程启动
+    time.sleep(5)
+    # 检查实际 API 进程 PID（uvicorn）
+    try:
+        result = subprocess.run(
+            f"lsof -ti:37241 2>/dev/null | head -1",
+            shell=True,
+            capture_output=True,
+            text=True,
+        )
+        actual_pid = result.stdout.strip()
+        if actual_pid:
+            pid_file.write_text(actual_pid)
+            print(f"API 服务已启动 (PID: {actual_pid}, Port: 37241)")
+        else:
+            print("API 服务已启动 (PID unknown)")
+    except Exception:
+        print("API 服务已启动")
 
 
 def _stop_frontend() -> bool:
     """停止前端服务"""
+    import subprocess
+
     pid_file = PROJECT_ROOT / ".frontend.pid"
     pid = _get_pid_from_file(pid_file)
 
@@ -1921,7 +1962,19 @@ def _stop_frontend() -> bool:
         print(f"停止前端 (PID: {pid})...")
         time.sleep(1)
         _kill_pid(pid, signal.SIGKILL, "frontend")
+        pid_file.unlink(missing_ok=True)
         return True
+
+    if _is_port_in_use(5173):
+        print("停止前端 (通过端口 5173)...")
+        subprocess.run(
+            f"lsof -ti:5173 | xargs kill -9 2>/dev/null || true",
+            shell=True,
+        )
+        time.sleep(1)
+        pid_file.unlink(missing_ok=True)
+        return True
+
     return False
 
 
