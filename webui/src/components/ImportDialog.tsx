@@ -158,12 +158,13 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
 
     setZoteroSelectedItems((prev) => {
       const otherItems = prev.filter(
-        (item) => item.type !== 'item' || !selectedItemIds.has(item.item_id)
+        (item) => item.type !== 'item' || !item.item_id || !selectedItemIds.has(item.item_id)
       )
       const newZoteroItems = zoteroSelectedItems
         .filter(
           (item) =>
             item.type === 'item' &&
+            item.item_id !== undefined &&
             selectedItemIds.has(item.item_id)
         )
       return [...otherItems, ...newZoteroItems]
@@ -172,7 +173,7 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
     setZoteroSelectedIds((prev) => {
       const next = new Set(prev)
       zoteroSelectedItems
-        .filter((item) => item.type === 'item' && selectedItemIds.has(item.item_id))
+        .filter((item) => item.type === 'item' && item.item_id !== undefined && selectedItemIds.has(item.item_id))
         .forEach((item) => next.add(item.id))
       return next
     })

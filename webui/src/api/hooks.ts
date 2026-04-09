@@ -21,6 +21,7 @@ import type {
   ZoteroCollectionStructure,
   ZoteroCollectionWithItems,
   ZoteroPreviewRequest,
+  ZoteroPreviewResponse,
   ObsidianVaultsResponse,
   ObsidianVault,
   ObsidianVaultStructure,

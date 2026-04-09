@@ -88,7 +88,6 @@ export function ImportPreviewModal({
   }
 
   const scannedCount = previewData.filter((item) => item.is_scanned_pdf && item.is_eligible).length
-  const hasMdCacheCount = previewData.filter((item) => item.has_md_cache && item.is_eligible).length
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
