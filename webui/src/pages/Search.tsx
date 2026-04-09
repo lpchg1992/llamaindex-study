@@ -86,7 +86,7 @@ export function SearchPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="vector">Vector Search</SelectItem>
-                <SelectItem value="hybrid">Hybrid (Vector + BM25)</SelectItem>
+                <SelectItem value="hybrid">Hybrid (Vector + Keyword)</SelectItem>
               </SelectContent>
             </Select>
           </div>
