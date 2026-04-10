@@ -56,9 +56,9 @@ def get_response_synthesizer(
         Refine,
         TreeSummarize,
         SimpleSummarize,
-        NoText,
         Accumulate,
     )
+    from llama_index.core.response_synthesizers.no_text import NoText
 
     mode = mode.lower()
 
@@ -85,7 +85,9 @@ def get_response_synthesizer(
             callback_manager=callback_manager,
         )
     elif mode == ResponseMode.NO_TEXT or mode == "no_text":
-        return NoText()
+        from llama_index.core.llms import MockLLM
+
+        return NoText(llm=MockLLM())
     elif mode == ResponseMode.ACCUMULATE or mode == "accumulate":
         return Accumulate(
             verbose=verbose,
