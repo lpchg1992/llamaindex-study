@@ -636,37 +636,122 @@ export function SettingsPage() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="hierarchical">Hierarchical (Parent-Child)</SelectItem>
-                    <SelectItem value="sentence">Sentence</SelectItem>
-                    <SelectItem value="semantic">Semantic</SelectItem>
+                    <SelectItem value="sentence">Sentence (Fixed Size)</SelectItem>
+                    <SelectItem value="semantic">Semantic (Embedding-based)</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="chunk-size">Chunk Size</Label>
-                  <Input
-                    id="chunk-size"
-                    type="number"
-                    min={100}
-                    max={4096}
-                    value={localSettings.chunk_size}
-                    onChange={(e) => updateField('chunk_size', parseInt(e.target.value) || 1024)}
-                  />
-                </div>
+              {localSettings.chunk_strategy === 'hierarchical' ? (
+                <>
+                  <div className="bg-muted/50 rounded-lg p-4 space-y-3">
+                    <p className="text-sm font-medium">Hierarchical Chunk Sizes</p>
+                    <p className="text-xs text-muted-foreground">
+                      Creates 3 levels of chunks for Auto-Merging Retriever.
+                      Parent chunks are the largest, leaf chunks are the smallest.
+                    </p>
+                    <div className="grid grid-cols-3 gap-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="parent-size" className="text-xs">Parent (Largest)</Label>
+                        <Input
+                          id="parent-size"
+                          type="number"
+                          min={512}
+                          max={8192}
+                          value={localSettings.hierarchical_chunk_sizes?.[0] || 2048}
+                          onChange={(e) => {
+                            const sizes = [...(localSettings.hierarchical_chunk_sizes || [2048, 1024, 512])]
+                            sizes[0] = parseInt(e.target.value) || 2048
+                            updateField('hierarchical_chunk_sizes', sizes)
+                          }}
+                        />
+                        <p className="text-xs text-muted-foreground">Coarse retrieval</p>
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="child-size" className="text-xs">Child</Label>
+                        <Input
+                          id="child-size"
+                          type="number"
+                          min={256}
+                          max={4096}
+                          value={localSettings.hierarchical_chunk_sizes?.[1] || 1024}
+                          onChange={(e) => {
+                            const sizes = [...(localSettings.hierarchical_chunk_sizes || [2048, 1024, 512])]
+                            sizes[1] = parseInt(e.target.value) || 1024
+                            updateField('hierarchical_chunk_sizes', sizes)
+                          }}
+                        />
+                        <p className="text-xs text-muted-foreground">Medium chunks</p>
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="leaf-size" className="text-xs">Leaf (Smallest)</Label>
+                        <Input
+                          id="leaf-size"
+                          type="number"
+                          min={128}
+                          max={2048}
+                          value={localSettings.hierarchical_chunk_sizes?.[2] || 512}
+                          onChange={(e) => {
+                            const sizes = [...(localSettings.hierarchical_chunk_sizes || [2048, 1024, 512])]
+                            sizes[2] = parseInt(e.target.value) || 512
+                            updateField('hierarchical_chunk_sizes', sizes)
+                          }}
+                        />
+                        <p className="text-xs text-muted-foreground">Fine-grained</p>
+                      </div>
+                    </div>
+                  </div>
 
-                <div className="space-y-2">
-                  <Label htmlFor="chunk-overlap">Chunk Overlap</Label>
-                  <Input
-                    id="chunk-overlap"
-                    type="number"
-                    min={0}
-                    max={500}
-                    value={localSettings.chunk_overlap}
-                    onChange={(e) => updateField('chunk_overlap', parseInt(e.target.value) || 100)}
-                  />
+                  <div className="space-y-2">
+                    <Label htmlFor="chunk-overlap">Chunk Overlap</Label>
+                    <Input
+                      id="chunk-overlap"
+                      type="number"
+                      min={0}
+                      max={500}
+                      value={localSettings.chunk_overlap}
+                      onChange={(e) => updateField('chunk_overlap', parseInt(e.target.value) || 100)}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Overlap between chunks at each level
+                    </p>
+                  </div>
+                </>
+              ) : (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="chunk-size">Chunk Size</Label>
+                      <Input
+                        id="chunk-size"
+                        type="number"
+                        min={100}
+                        max={4096}
+                        value={localSettings.chunk_size}
+                        onChange={(e) => updateField('chunk_size', parseInt(e.target.value) || 1024)}
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="chunk-overlap">Chunk Overlap</Label>
+                      <Input
+                        id="chunk-overlap"
+                        type="number"
+                        min={0}
+                        max={500}
+                        value={localSettings.chunk_overlap}
+                        onChange={(e) => updateField('chunk_overlap', parseInt(e.target.value) || 100)}
+                      />
+                    </div>
+                  </div>
+                  {localSettings.chunk_strategy === 'semantic' && (
+                    <p className="text-xs text-muted-foreground">
+                      Semantic chunking uses embeddings to find natural breaking points.
+                      Chunk size is a target, not a hard limit.
+                    </p>
+                  )}
                 </div>
-              </div>
+              )}
 
               <Button onClick={() => handleSave('Chunk')} disabled={updateSettings.isPending}>
                 {updateSettings.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
@@ -675,7 +760,7 @@ export function SettingsPage() {
 
               <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-3 mt-4">
                 <p className="text-sm text-amber-600 dark:text-amber-400">
-                  <strong>Note:</strong> These settings only affect new document imports. 
+                  <strong>Note:</strong> These settings only affect new document imports.
                   Existing knowledge bases will continue using their original chunking configuration.
                 </p>
               </div>

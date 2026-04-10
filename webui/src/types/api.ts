@@ -548,6 +548,7 @@ export interface SystemSettings {
   chunk_strategy: string
   chunk_size: number
   chunk_overlap: number
+  hierarchical_chunk_sizes: number[]
   use_reranker: boolean
   rerank_model: string
   response_mode: string
@@ -568,6 +569,7 @@ export interface SettingsUpdateRequest {
   chunk_strategy?: string
   chunk_size?: number
   chunk_overlap?: number
+  hierarchical_chunk_sizes?: number[]
   use_reranker?: boolean
   rerank_model?: string
   response_mode?: string

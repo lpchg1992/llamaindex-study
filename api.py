@@ -2897,6 +2897,9 @@ class SystemSettings(BaseModel):
     )
     chunk_size: int = Field(1024, ge=100, le=4096, description="分块大小")
     chunk_overlap: int = Field(100, ge=0, le=500, description="分块重叠")
+    hierarchical_chunk_sizes: List[int] = Field(
+        [2048, 1024, 512], description="分层分块大小 [parent, child, leaf]"
+    )
 
     # Reranker
     use_reranker: bool = Field(True, description="启用Reranker")
@@ -2936,6 +2939,9 @@ class SettingsUpdateRequest(BaseModel):
     )
     chunk_size: Optional[int] = Field(None, ge=100, le=4096, description="分块大小")
     chunk_overlap: Optional[int] = Field(None, ge=0, le=500, description="分块重叠")
+    hierarchical_chunk_sizes: Optional[List[int]] = Field(
+        None, description="分层分块大小 [parent, child, leaf]"
+    )
 
     # Reranker
     use_reranker: Optional[bool] = Field(None, description="启用Reranker")
@@ -3012,6 +3018,7 @@ def update_settings(req: SettingsUpdateRequest):
             chunk_strategy=s.chunk_strategy,
             chunk_size=s.chunk_size,
             chunk_overlap=s.chunk_overlap,
+            hierarchical_chunk_sizes=s.hierarchical_chunk_sizes,
             use_reranker=s.use_reranker,
             rerank_model=s.rerank_model,
             response_mode=s.response_mode,
@@ -3034,9 +3041,19 @@ def update_settings(req: SettingsUpdateRequest):
             "chunk_strategy",
             "chunk_size",
             "chunk_overlap",
+            "hierarchical_chunk_sizes",
             "use_reranker",
             "response_mode",
         ):
+            if key == "hierarchical_chunk_sizes" and isinstance(value, list):
+                if len(value) != 3:
+                    skipped.append(f"{key} (must have exactly 3 values)")
+                    continue
+                if not all(isinstance(x, int) and 128 <= x <= 8192 for x in value):
+                    skipped.append(
+                        f"{key} (values must be integers between 128 and 8192)"
+                    )
+                    continue
             if hasattr(s, key):
                 setattr(s, key, value)
                 runtime_settings[key] = value
