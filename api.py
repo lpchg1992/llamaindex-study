@@ -879,7 +879,7 @@ def get_kb_info(kb_id: str):
 
 
 @app.delete("/kbs/{kb_id}")
-def delete_kb(kb_id: str, req: DangerousOperationRequest):
+def delete_kb(kb_id: str, req: DangerousOperationRequest = Body(...)):
     """删除知识库"""
     info = KnowledgeBaseService.get_info(kb_id)
     if not info:
@@ -2102,7 +2102,9 @@ def add_category_rule(
 
 
 @app.post("/kbs/{kb_id}/initialize")
-def initialize_kb(kb_id: str, req: DangerousOperationRequest, async_mode: bool = True):
+def initialize_kb(
+    kb_id: str, req: DangerousOperationRequest = Body(...), async_mode: bool = True
+):
     """初始化知识库（清空所有数据）"""
     from kb.task_queue import task_queue
     from kb.task_executor import task_executor
