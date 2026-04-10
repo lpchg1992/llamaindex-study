@@ -1163,19 +1163,12 @@ class DocumentProcessor:
         return None
 
     def process_pdf(
-        self, pdf_path: str, metadata: dict = None, force_ocr: bool = False
+        self,
+        pdf_path: str,
+        metadata: dict = None,
+        force_ocr: bool = False,
+        is_scanned: Optional[bool] = None,
     ) -> List[LlamaDocument]:
-        """
-        处理 PDF 文件
-
-        Args:
-            pdf_path: PDF 文件路径
-            metadata: 额外的元数据
-            force_ocr: 强制 OCR，忽略已缓存的 MD
-
-        Returns:
-            LlamaDocument 列表
-        """
         docs = []
         ext = Path(pdf_path).suffix.lower()
 
@@ -1183,7 +1176,14 @@ class DocumentProcessor:
             Path("/Volumes/online/llamaindex/mddocs") / f"{Path(pdf_path).stem}.md"
         )
 
-        # 优先检查是否已有完整转换的 MD（除非 force_ocr）
+        if force_ocr and md_file_path.exists():
+            try:
+                md_file_path.unlink()
+                meta_path = md_file_path.with_suffix(".meta.json")
+                meta_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+
         if (
             not force_ocr
             and md_file_path.exists()
@@ -1209,11 +1209,13 @@ class DocumentProcessor:
                 except Exception:
                     pass
 
-        # 无缓存 MD，进行扫描检测
-        is_scanned = self.is_scanned_pdf(pdf_path)
+        if is_scanned is None:
+            is_scanned = self.is_scanned_pdf(pdf_path)
 
         if is_scanned:
-            print(f"   🔍 检测为扫描件，尝试 OCR 转换...")
+            print(
+                f"   🔍 {'用户强制' if force_ocr else '检测为'}扫描件，尝试 OCR 转换..."
+            )
             md_content = self.convert_pdf_to_markdown(pdf_path)
             if md_content:
                 doc = LlamaDocument(

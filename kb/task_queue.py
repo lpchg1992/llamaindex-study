@@ -17,7 +17,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import (
     Float,
@@ -64,6 +64,60 @@ class TaskType(str, Enum):
     INITIALIZE = "initialize"  # 初始化知识库（清空数据）
 
 
+class FileStatus(str, Enum):
+    """文件处理状态"""
+
+    PENDING = "pending"  # 等待处理
+    PROCESSING = "processing"  # 处理中（解析）
+    EMBEDDING = "embedding"  # 嵌入生成中
+    WRITING = "writing"  # 写入数据库中
+    COMPLETED = "completed"  # 已完成
+    FAILED = "failed"  # 失败
+    CANCELLED = "cancelled"  # 已取消（用户单独取消）
+
+
+@dataclass
+class FileProgressItem:
+    """单个文件的进度跟踪"""
+
+    file_id: str  # 唯一标识
+    file_name: str  # 显示名称
+    status: str = FileStatus.PENDING.value  # 处理状态
+    total_chunks: int = 0  # 总 chunk 数
+    processed_chunks: int = 0  # 已处理 chunk 数
+    db_written: bool = False  # 是否已写入数据库
+    error: Optional[str] = None  # 错误信息
+    started_at: Optional[float] = None  # 开始时间
+    completed_at: Optional[float] = None  # 完成时间
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "file_id": self.file_id,
+            "file_name": self.file_name,
+            "status": self.status,
+            "total_chunks": self.total_chunks,
+            "processed_chunks": self.processed_chunks,
+            "db_written": self.db_written,
+            "error": self.error,
+            "started_at": self.started_at,
+            "completed_at": self.completed_at,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "FileProgressItem":
+        return cls(
+            file_id=d["file_id"],
+            file_name=d["file_name"],
+            status=d.get("status", FileStatus.PENDING.value),
+            total_chunks=d.get("total_chunks", 0),
+            processed_chunks=d.get("processed_chunks", 0),
+            db_written=d.get("db_written", False),
+            error=d.get("error"),
+            started_at=d.get("started_at"),
+            completed_at=d.get("completed_at"),
+        )
+
+
 @dataclass
 class Task:
     """任务对象"""
@@ -93,6 +147,9 @@ class Task:
     # 来源
     source: str = ""  # 来源描述
 
+    # 文件级进度
+    file_progress: Optional[List[Dict[str, Any]]] = None  # List[FileProgressItem]
+
     def to_dict(self) -> Dict:
         """转换为字典"""
         return {
@@ -112,6 +169,7 @@ class Task:
             "completed_at": self.completed_at,
             "last_heartbeat": self.last_heartbeat,
             "source": self.source,
+            "file_progress": self.file_progress,
         }
 
 
@@ -143,6 +201,7 @@ class TaskRecord(TaskBase):
         Float, nullable=True
     )  # 心跳时间
     source: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    file_progress: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
 
 class TaskQueue:
@@ -207,6 +266,7 @@ class TaskQueue:
     def _init_db(self):
         TaskBase.metadata.create_all(self.engine)
         self._migrate_add_last_heartbeat()
+        self._migrate_add_file_progress()
 
     def _migrate_add_last_heartbeat(self):
         """迁移：添加 last_heartbeat 列（如果不存在）"""
@@ -217,6 +277,16 @@ class TaskQueue:
         if "last_heartbeat" not in columns:
             with self.engine.begin() as conn:
                 conn.exec_driver_sql("ALTER TABLE tasks ADD COLUMN last_heartbeat REAL")
+
+    def _migrate_add_file_progress(self):
+        """迁移：添加 file_progress 列（如果不存在）"""
+        from sqlalchemy import inspect
+
+        inspector = inspect(self.engine)
+        columns = [c["name"] for c in inspector.get_columns("tasks")]
+        if "file_progress" not in columns:
+            with self.engine.begin() as conn:
+                conn.exec_driver_sql("ALTER TABLE tasks ADD COLUMN file_progress TEXT")
 
     @contextmanager
     def _session_scope(self) -> Session:
@@ -231,6 +301,13 @@ class TaskQueue:
             session.close()
 
     def _row_to_task(self, row: TaskRecord) -> Task:
+        file_progress = None
+        if row.file_progress:
+            try:
+                file_progress = json.loads(row.file_progress)
+            except json.JSONDecodeError:
+                file_progress = None
+
         return Task(
             task_id=row.task_id,
             task_type=row.task_type,
@@ -248,6 +325,7 @@ class TaskQueue:
             completed_at=row.completed_at,
             last_heartbeat=row.last_heartbeat,
             source=row.source or "",
+            file_progress=file_progress,
         )
 
     def submit_task(
@@ -494,6 +572,120 @@ class TaskQueue:
                 .order_by(TaskRecord.started_at.asc())
             ).all()
             return [self._row_to_task(row) for row in rows]
+
+    def set_file_progress(self, task_id: str, files: List[Dict[str, Any]]):
+        """初始化文件列表（在任务开始时调用）"""
+        with self._session_scope() as session:
+            row = session.get(TaskRecord, task_id)
+            if not row:
+                return
+            row.file_progress = json.dumps(files, ensure_ascii=False)
+
+    def get_file_progress(self, task_id: str) -> List[Dict[str, Any]]:
+        """获取任务的文件进度列表"""
+        with self._session_scope() as session:
+            row = session.get(TaskRecord, task_id)
+            if not row or not row.file_progress:
+                return []
+            try:
+                return json.loads(row.file_progress)
+            except json.JSONDecodeError:
+                return []
+
+    def update_file_progress(
+        self,
+        task_id: str,
+        file_id: str,
+        status: str = None,
+        processed_chunks: int = None,
+        total_chunks: int = None,
+        db_written: bool = None,
+        error: str = None,
+    ):
+        """更新单个文件的进度"""
+        with self._session_scope() as session:
+            row = session.get(TaskRecord, task_id)
+            if not row:
+                return
+
+            files = []
+            if row.file_progress:
+                try:
+                    files = json.loads(row.file_progress)
+                except json.JSONDecodeError:
+                    files = []
+
+            for f in files:
+                if f.get("file_id") == file_id:
+                    if status is not None:
+                        f["status"] = status
+                    if processed_chunks is not None:
+                        f["processed_chunks"] = processed_chunks
+                    if total_chunks is not None:
+                        f["total_chunks"] = total_chunks
+                    if db_written is not None:
+                        f["db_written"] = db_written
+                    if error is not None:
+                        f["error"] = error
+                    if (
+                        status == FileStatus.PROCESSING.value
+                        and f.get("started_at") is None
+                    ):
+                        f["started_at"] = time.time()
+                    if status in (
+                        FileStatus.COMPLETED.value,
+                        FileStatus.FAILED.value,
+                        FileStatus.CANCELLED.value,
+                    ):
+                        f["completed_at"] = time.time()
+                    break
+
+            row.file_progress = json.dumps(files, ensure_ascii=False)
+
+    def cancel_file(self, task_id: str, file_id: str) -> bool:
+        """取消单个文件（标记为 cancelled，后续跳过）"""
+        with self._session_scope() as session:
+            row = session.get(TaskRecord, task_id)
+            if not row:
+                return False
+
+            files = []
+            if row.file_progress:
+                try:
+                    files = json.loads(row.file_progress)
+                except json.JSONDecodeError:
+                    return False
+
+            for f in files:
+                if f.get("file_id") == file_id:
+                    current_status = f.get("status")
+                    if current_status in (
+                        FileStatus.COMPLETED.value,
+                        FileStatus.FAILED.value,
+                        FileStatus.CANCELLED.value,
+                    ):
+                        return False
+                    f["status"] = FileStatus.CANCELLED.value
+                    f["completed_at"] = time.time()
+                    row.file_progress = json.dumps(files, ensure_ascii=False)
+                    return True
+
+            return False
+
+    def get_file_status(self, task_id: str, file_id: str) -> Optional[str]:
+        """获取单个文件的状态"""
+        files = self.get_file_progress(task_id)
+        for f in files:
+            if f.get("file_id") == file_id:
+                return f.get("status")
+        return None
+
+    def compute_chunk_progress(self, task_id: str) -> Tuple[int, int]:
+        """计算 chunk 进度，返回 (已处理, 总数)"""
+        files = self.get_file_progress(task_id)
+        total_chunks = sum(f.get("total_chunks", 0) for f in files)
+        processed_chunks = sum(f.get("processed_chunks", 0) for f in files)
+        return processed_chunks, total_chunks
 
 
 # 全局实例

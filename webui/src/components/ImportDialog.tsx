@@ -1,4 +1,5 @@
 import { useState, useCallback, useMemo, useRef } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   useIngestSelective,
   useIngestFiles,
@@ -22,8 +23,6 @@ import {
 import { FileTree } from '@/components/FileTree'
 import type { FileTreeItem } from '@/components/FileTree'
 import { SelectedFilesPanel } from '@/components/SelectedFilesPanel'
-import { ImportProgressPanel } from '@/components/ImportProgressPanel'
-import type { DocumentProgress } from '@/components/ImportProgressPanel'
 import { ImportPreviewModal } from '@/components/ImportPreviewModal'
 import {
   Dialog,
@@ -31,7 +30,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { Upload, FolderOpen, Book, FileText, Loader2, RefreshCw, Eye } from 'lucide-react'
+import { Upload, FolderOpen, Book, FileText, RefreshCw, Eye, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import type { ObsidianVaultTree, ZoteroPreviewItem } from '@/types/api'
 
@@ -48,8 +47,6 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const [activeSource, setActiveSource] = useState<string>('zotero')
-  const [asyncMode, setAsyncMode] = useState(true)
-  const [isImporting, setIsImporting] = useState(false)
 
   const [zoteroSelectedIds, setZoteroSelectedIds] = useState<Set<string>>(new Set())
   const [zoteroSelectedItems, setZoteroSelectedItems] = useState<FileTreeItem[]>([])
@@ -61,9 +58,7 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
   const [obsidianSelectedItems, setObsidianSelectedItems] = useState<FileTreeItem[]>([])
   const [fileSelectedItems, setFileSelectedItems] = useState<FileTreeItem[]>([])
 
-  const [importProgress, setImportProgress] = useState<DocumentProgress[]>([])
-  const [importCompleted, setImportCompleted] = useState(0)
-  const [currentTaskId, setCurrentTaskId] = useState<string | null>(null)
+  const navigate = useNavigate()
 
   const { data: zoteroCollectionsData, isLoading: zoteroLoading, refetch: refetchZotero } =
     useAllZoteroCollectionsWithItems()
@@ -83,6 +78,7 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
   })
   const [zoteroPrefix, setZoteroPrefix] = useState("[kb]")
   const [zoteroForceOcrIds, setZoteroForceOcrIds] = useState<Set<number>>(new Set())
+  const [zoteroManualScannedIds, setZoteroManualScannedIds] = useState<Set<number>>(new Set())
 
   // 预览缓存
   const [previewCache, setPreviewCache] = useState<{
@@ -196,10 +192,9 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
     }
   }
 
-  const handlePreviewConfirm = (selectedPreviewItems: ZoteroPreviewItem[], forceOcrIds: number[]) => {
+  const handlePreviewConfirm = (selectedPreviewItems: ZoteroPreviewItem[], forceOcrIds: number[], manualScannedIds: number[]) => {
     const selectedItemIds = new Set(selectedPreviewItems.map((item) => item.item_id))
 
-    // 只将用户在预览窗口中确认的项目添加到确认列表
     const confirmedItems = zoteroSelectedItems
       .filter(
         (item) =>
@@ -215,6 +210,8 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
       forceOcrIds.forEach((id) => next.add(id))
       return next
     })
+
+    setZoteroManualScannedIds(new Set(manualScannedIds))
 
     if (forceOcrIds.length > 0) {
       toast.success(`已确认 ${selectedPreviewItems.length} 篇文献（${forceOcrIds.length} 篇强制OCR）`)
@@ -302,7 +299,7 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
     let sourceType = ''
 
     if (activeSource === 'zotero') {
-      itemsToImport = zoteroSelectedItems
+      itemsToImport = allSelectedItems
       sourceType = 'zotero'
     } else if (activeSource === 'obsidian') {
       itemsToImport = obsidianSelectedItems
@@ -317,17 +314,6 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
       return
     }
 
-    setIsImporting(true)
-
-    const progressItems: DocumentProgress[] = itemsToImport.map((item) => ({
-      id: item.id,
-      name: item.name,
-      status: 'pending' as const,
-      chunksTotal: 0,
-      chunksProcessed: 0,
-    }))
-    setImportProgress(progressItems)
-
     try {
       if (activeSource === 'files') {
         const paths = itemsToImport.map((item) => item.path || item.name)
@@ -335,15 +321,15 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
           kbId,
           req: {
             paths,
-            async_mode: asyncMode,
+            async_mode: true,
             refresh_topics: true,
           },
         })
 
         if (result.task_id) {
           toast.success(`导入任务已提交: ${result.task_id}`)
-          setCurrentTaskId(result.task_id)
-          setImportCompleted(0)
+          onOpenChange(false)
+          navigate('/tasks')
         }
       } else {
         const importItems = itemsToImport.map((item) => {
@@ -352,10 +338,16 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
             id: item.item_id?.toString(),
             path: item.path,
           }
-          if (activeSource === 'zotero' && item.type === 'item' && item.item_id !== undefined && zoteroForceOcrIds.has(item.item_id)) {
-            return {
-              ...base,
-              options: { force_ocr: true },
+          if (activeSource === 'zotero' && item.type === 'item' && item.item_id !== undefined) {
+            const options: Record<string, boolean> = {}
+            if (zoteroForceOcrIds.has(item.item_id)) {
+              options.force_ocr = true
+            }
+            if (zoteroManualScannedIds.has(item.item_id)) {
+              options.is_scanned = true
+            }
+            if (Object.keys(options).length > 0) {
+              return { ...base, options }
             }
           }
           return base
@@ -366,29 +358,20 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
           req: {
             source_type: sourceType,
             items: importItems,
-            async_mode: asyncMode,
+            async_mode: true,
             refresh_topics: true,
+            ...(activeSource === 'zotero' && { prefix: zoteroPrefix }),
           },
         })
 
         if (result.task_id) {
           toast.success(`导入任务已提交: ${result.task_id}`)
-          setCurrentTaskId(result.task_id)
-          setImportCompleted(0)
+          onOpenChange(false)
+          navigate('/tasks')
         }
       }
     } catch (error: any) {
       toast.error(error.response?.data?.detail || '导入失败')
-      setImportProgress((prev) =>
-        prev.map((p) => ({
-          ...p,
-          status: 'failed' as const,
-          error: '导入失败',
-        }))
-      )
-      setCurrentTaskId(null)
-    } finally {
-      setIsImporting(false)
     }
   }
 
@@ -412,12 +395,9 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
     setObsidianSelectedIds(new Set())
     setObsidianSelectedItems([])
     setFileSelectedItems([])
-    setImportProgress([])
-    setImportCompleted(0)
-    setCurrentTaskId(null)
     setPreviewCache(null)
-    setIsImporting(false)
-    setAsyncMode(true)
+    setZoteroForceOcrIds(new Set())
+    setZoteroManualScannedIds(new Set())
   }
 
   const handleClose = (open: boolean) => {
@@ -566,29 +546,17 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
                       : () => { setObsidianSelectedItems([]); setObsidianSelectedIds(new Set()) }
                 }
               />
-              <ImportProgressPanel
-                documents={importProgress}
-                documentsTotal={allSelectedItems.length}
-                documentsCompleted={importCompleted}
-                taskId={currentTaskId || undefined}
-              />
             </div>
           </div>
 
-          <div className="flex items-center justify-between shrink-0 border-t pt-4">
-            <div className="flex items-center gap-3">
-              <span className="text-sm text-muted-foreground">导入模式：</span>
-              <Button variant={asyncMode ? 'default' : 'outline'} size="sm" onClick={() => setAsyncMode(true)}>异步</Button>
-              <Button variant={!asyncMode ? 'default' : 'outline'} size="sm" onClick={() => setAsyncMode(false)}>同步</Button>
-            </div>
+          <div className="flex items-center justify-end shrink-0 border-t pt-4">
             <Button
               onClick={handleImport}
-              disabled={allSelectedItems.length === 0 || isImporting || !canImportZotero}
+              disabled={allSelectedItems.length === 0 || !canImportZotero}
               size="lg"
               title={!canImportZotero ? '请先预览并确认要导入的文献' : ''}
             >
-              {isImporting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              {isImporting ? '导入中...' : `开始导入 (${allSelectedItems.length})`}
+              开始导入 ({allSelectedItems.length})
             </Button>
           </div>
         </div>

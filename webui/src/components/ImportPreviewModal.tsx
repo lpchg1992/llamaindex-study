@@ -10,6 +10,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Badge } from '@/components/ui/badge'
+import { Switch } from '@/components/ui/switch'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import {
   Table,
@@ -30,12 +31,16 @@ interface ImportPreviewModalProps {
   totalItems: number
   eligibleItems: number
   ineligibleItems: number
-  onConfirm: (selectedItems: ZoteroPreviewItem[], forceOcrIds: number[]) => void
+  onConfirm: (selectedItems: ZoteroPreviewItem[], forceOcrIds: number[], manualScannedIds: number[]) => void
   onRefresh?: () => void
   isLoading?: boolean
 }
 
-function StatusBadges({ item }: { item: ZoteroPreviewItem }) {
+function StatusBadges({ item, isManualScanned, onToggleScanned }: { 
+  item: ZoteroPreviewItem
+  isManualScanned: boolean
+  onToggleScanned?: (itemId: number, checked: boolean) => void
+}) {
   if (item.is_duplicate) {
     return (
       <Badge variant="outline" className="text-xs bg-amber-50">
@@ -60,11 +65,15 @@ function StatusBadges({ item }: { item: ZoteroPreviewItem }) {
         <CheckCircle2 className="h-3 w-3 mr-1" />
         符合
       </Badge>
-      {item.is_scanned_pdf && (
-        <Badge variant="secondary" className="text-xs">
-          <Image className="h-3 w-3 mr-1" />
-          扫描
-        </Badge>
+      {item.is_eligible && !item.is_duplicate && onToggleScanned && (
+        <div className="flex items-center gap-1">
+          <Switch
+            checked={isManualScanned}
+            onCheckedChange={(checked) => onToggleScanned(item.item_id, checked)}
+            aria-label={`扫描 ${item.title}`}
+          />
+          <span className="text-xs text-muted-foreground">扫描</span>
+        </div>
       )}
       {item.has_md_cache && (
         <Badge variant="secondary" className="text-xs">
@@ -92,6 +101,7 @@ export function ImportPreviewModal({
     return new Set(previewData.filter((item) => item.is_eligible && !item.is_duplicate).map((item) => item.item_id))
   })
   const [forceOcrIds, setForceOcrIds] = useState<Set<number>>(new Set())
+  const [manualScannedOverride, setManualScannedOverride] = useState<Set<number>>(new Set())
 
   useMemo(() => {
     setSelectedIds(new Set(previewData.filter((item) => item.is_eligible && !item.is_duplicate).map((item) => item.item_id)))
@@ -121,6 +131,18 @@ export function ImportPreviewModal({
     })
   }
 
+  const toggleManualScanned = (itemId: number, checked: boolean) => {
+    setManualScannedOverride((prev) => {
+      const next = new Set(prev)
+      if (checked) {
+        next.add(itemId)
+      } else {
+        next.delete(itemId)
+      }
+      return next
+    })
+  }
+
   const toggleAll = (checked: boolean) => {
     if (checked) {
       setSelectedIds(new Set(previewData.filter((item) => item.is_eligible && !item.is_duplicate).map((item) => item.item_id)))
@@ -139,7 +161,7 @@ export function ImportPreviewModal({
   }, [previewData, selectedIds])
 
   const handleConfirm = () => {
-    onConfirm(selectedItems, Array.from(forceOcrIds))
+    onConfirm(selectedItems, Array.from(forceOcrIds), Array.from(manualScannedOverride))
     onOpenChange(false)
   }
 
@@ -274,20 +296,30 @@ export function ImportPreviewModal({
                         </Badge>
                       </TableCell>
                       <TableCell>
-                        <StatusBadges item={item} />
+                        <StatusBadges 
+                          item={item} 
+                          isManualScanned={manualScannedOverride.has(item.item_id) ? true : item.is_scanned_pdf}
+                          onToggleScanned={toggleManualScanned}
+                        />
                       </TableCell>
                       <TableCell className="w-24">
-                        {item.is_eligible && !item.is_duplicate && item.is_scanned_pdf ? (
-                          <Checkbox
-                            checked={forceOcrIds.has(item.item_id)}
-                            onCheckedChange={(checked) => toggleForceOcr(item.item_id, !!checked)}
-                            aria-label={`强制 OCR ${item.title}`}
-                          />
-                        ) : item.is_eligible && !item.is_duplicate ? (
-                          <span className="text-xs text-muted-foreground">-</span>
-                        ) : (
-                          <span className="text-xs text-muted-foreground">-</span>
-                        )}
+                        {(() => {
+                          const isScanned = manualScannedOverride.has(item.item_id) ? true : item.is_scanned_pdf
+                          if (item.is_eligible && !item.is_duplicate && isScanned) {
+                            return (
+                              <Checkbox
+                                checked={forceOcrIds.has(item.item_id)}
+                                onCheckedChange={(checked) => toggleForceOcr(item.item_id, checked)}
+                                aria-label={`强制 OCR ${item.title}`}
+                              />
+                            )
+                          }
+                          return item.is_eligible && !item.is_duplicate ? (
+                            <span className="text-xs text-muted-foreground">-</span>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">-</span>
+                          )
+                        })()}
                       </TableCell>
                       <TableCell>
                         <span className="text-xs text-muted-foreground truncate block max-w-[150px]" title={item.ineligible_reason || ''}>

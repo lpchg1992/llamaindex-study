@@ -337,8 +337,11 @@ class TaskResponse(BaseModel):
     kb_id: str
     message: str = ""
     progress: Optional[int] = 0
+    current: Optional[int] = None
+    total: Optional[int] = None
     result: Optional[Dict] = None
     error: Optional[str] = None
+    file_progress: Optional[List[Dict[str, Any]]] = None
 
 
 def _parse_kb_ids_or_raise(kb_ids: Optional[str], route_mode: str) -> List[str]:
@@ -737,8 +740,11 @@ def get_task(task_id: str):
         kb_id=task.kb_id,
         message=task.message,
         progress=task.progress,
+        current=task.current,
+        total=task.total,
         result=task.result,
         error=task.error,
+        file_progress=task.file_progress,
     )
 
 
@@ -776,6 +782,19 @@ def resume_task(task_id: str):
         return result
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.delete("/tasks/{task_id}/files/{file_id}")
+def cancel_file_in_task(task_id: str, file_id: str):
+    """取消任务中的单个文件"""
+    from kb.task_queue import task_queue
+
+    success = task_queue.cancel_file(task_id, file_id)
+    if not success:
+        raise HTTPException(
+            status_code=400, detail="无法取消文件（可能已完成或不存在）"
+        )
+    return {"message": "文件已取消", "task_id": task_id, "file_id": file_id}
 
 
 @app.delete("/tasks/{task_id}/delete")
@@ -1598,6 +1617,7 @@ class SelectiveImportRequest(BaseModel):
     items: List[Dict[str, Any]] = Field(..., description="要导入的项目列表")
     async_mode: bool = Field(True, description="是否异步处理")
     refresh_topics: bool = Field(True, description="任务完成后是否刷新 topics")
+    prefix: str = Field("[kb]", description="Zotero 附件标题前缀标记")
 
 
 class FilesImportRequest(BaseModel):
@@ -1711,6 +1731,7 @@ def ingest_selective(kb_id: str, req: SelectiveImportRequest):
             type=item.get("type", ""),
             id=item.get("id"),
             path=item.get("path"),
+            options=item.get("options", {}),
         )
         for item in req.items
     ]
@@ -1722,6 +1743,7 @@ def ingest_selective(kb_id: str, req: SelectiveImportRequest):
         items=items,
         async_mode=req.async_mode,
         refresh_topics=req.refresh_topics,
+        prefix=req.prefix,
     )
 
     task = ImportApplicationService.submit_selective_import(kb_id, service_req)

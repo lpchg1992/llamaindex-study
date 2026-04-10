@@ -313,12 +313,13 @@ class ZoteroImporter:
 
         return [row[0] for row in cursor.fetchall()]
 
-    def get_item(self, item_id: int) -> Optional[ZoteroItem]:
+    def get_item(self, item_id: int, prefix: str = "[kb]") -> Optional[ZoteroItem]:
         """
         获取文献详情
 
         Args:
             item_id: 文献 ID
+            prefix: 附件标题前缀标记
 
         Returns:
             ZoteroItem 或 None
@@ -386,7 +387,7 @@ class ZoteroImporter:
         item.tags = [row[0] for row in cursor.fetchall()]
 
         # 获取附件路径
-        item.file_path = self._get_attachment_path(item_id)
+        item.file_path = self._get_attachment_path(item_id, prefix=prefix)
 
         # 获取标注
         cursor.execute(
@@ -430,6 +431,7 @@ class ZoteroImporter:
         progress: ProcessingProgress = None,
         kb_id: Optional[str] = None,
         force_ocr: bool = False,
+        is_scanned: Optional[bool] = None,
     ) -> Tuple[int, List[Any], List[str]]:
         """
         导入单个文献
@@ -440,6 +442,8 @@ class ZoteroImporter:
             embed_model: embedding 模型
             progress: 进度记录
             kb_id: 知识库 ID（用于写入 document 表）
+            force_ocr: 强制 OCR 处理
+            is_scanned: 预计算的扫描件判断（用户可覆盖）
 
         Returns:
             (生成的节点数, 所有节点列表, 处理过的源文件路径列表)
@@ -542,6 +546,7 @@ class ZoteroImporter:
                     str(file_path),
                     metadata={**base_metadata, "source": str(file_path)},
                     force_ocr=force_ocr,
+                    is_scanned=is_scanned,
                 )
             elif ext in [".docx", ".doc", ".xlsx", ".xls", ".pptx", ".md", ".txt"]:
                 logger.debug(f"使用 process_document 处理: {file_path}")

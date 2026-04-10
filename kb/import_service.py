@@ -43,6 +43,7 @@ class SelectiveImportRequest:
     items: List[SelectiveImportItem]
     async_mode: bool = True
     refresh_topics: bool = True
+    prefix: str = "[kb]"
 
 
 class ImportApplicationService:
@@ -135,6 +136,7 @@ class ImportApplicationService:
             ],
             "async_mode": req.async_mode,
             "refresh_topics": req.refresh_topics,
+            "prefix": req.prefix,
         }
         source = f"selective:{req.source_type}:{len(req.items)}items"
         return TaskService.submit(

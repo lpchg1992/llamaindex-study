@@ -476,12 +476,13 @@ class TaskExecutor:
             GenericService,
             KnowledgeBaseService,
         )
+        from kb.task_queue import FileStatus
 
         kb_id = task.kb_id
         params = task.params
         task_id = task.task_id
         items = params.get("items", [])
-        async_mode = params.get("async_mode", True)
+        prefix = params.get("prefix", "[kb]")
 
         logger.info(f"[{task_id}] 开始选择性导入: kb_id={kb_id}, items={len(items)}")
 
@@ -491,8 +492,32 @@ class TaskExecutor:
             )
             return
 
+        import hashlib
+
+        file_list = []
+        for idx, item in enumerate(items):
+            item_type = item.get("type", "")
+            item_id = str(item.get("id") or item.get("path") or f"item_{idx}")
+            file_name = f"{item_type}: {item_id}"
+            file_id = hashlib.md5(
+                f"{task_id}:{item_type}:{item_id}".encode()
+            ).hexdigest()[:12]
+            file_list.append(
+                {
+                    "file_id": file_id,
+                    "file_name": file_name,
+                    "status": FileStatus.PENDING.value,
+                    "total_chunks": 0,
+                    "processed_chunks": 0,
+                    "db_written": False,
+                    "error": None,
+                }
+            )
+
+        self.queue.set_file_progress(task_id, file_list)
+        total_items = len(items)
         self.queue.update_progress(
-            task_id, total=len(items), message=f"准备导入 {len(items)} 个项目"
+            task_id, total=total_items, message=f"准备导入 {total_items} 个项目"
         )
 
         stats = {"files": 0, "nodes": 0, "failed": 0, "processed_sources": []}
@@ -501,26 +526,43 @@ class TaskExecutor:
             if await self._check_cancelled(task_id):
                 self.queue.complete_task(
                     task_id,
-                    result={**stats, "partial": True},
+                    result={
+                        **stats,
+                        "partial": True,
+                        "file_progress": self.queue.get_file_progress(task_id),
+                    },
                     error="任务已取消",
                 )
                 return
             if await self._check_paused(task_id):
                 self.queue.complete_task(
                     task_id,
-                    result={**stats, "partial": True},
+                    result={
+                        **stats,
+                        "partial": True,
+                        "file_progress": self.queue.get_file_progress(task_id),
+                    },
                     error="任务已暂停",
                 )
                 return
 
             item_type = item.get("type", "")
             item_id = item.get("id") or item.get("path", "")
+            file_id = file_list[i]["file_id"]
+
+            self.queue.update_file_progress(
+                task_id, file_id, status=FileStatus.PROCESSING.value
+            )
             self.queue.update_progress(
                 task_id,
                 current=i + 1,
-                total=len(items),
-                message=f"[{i + 1}/{len(items)}] 处理: {item_type} - {item_id}",
+                total=total_items,
+                message=f"[{i + 1}/{total_items}] 处理: {item_type} - {item_id}",
             )
+
+            nodes_count = 0
+            db_written = False
+            error_msg = None
 
             try:
                 if item_type == "collection":
@@ -532,8 +574,18 @@ class TaskExecutor:
                     )
                     stats["files"] += result.get("items", 0)
                     stats["nodes"] += result.get("nodes", 0)
+                    nodes_count = result.get("nodes", 0)
+                    db_written = result.get("nodes", 0) > 0
                     stats["processed_sources"].extend(
                         result.get("processed_sources", [])
+                    )
+                    self.queue.update_file_progress(
+                        task_id,
+                        file_id,
+                        status=FileStatus.COMPLETED.value,
+                        total_chunks=nodes_count,
+                        processed_chunks=nodes_count,
+                        db_written=db_written,
                     )
 
                 elif item_type == "item":
@@ -544,11 +596,22 @@ class TaskExecutor:
                         item_id=item.get("id"),
                         options=item_options,
                         refresh_topics=False,
+                        prefix=prefix,
                     )
                     stats["files"] += result.get("items", 0)
                     stats["nodes"] += result.get("nodes", 0)
+                    nodes_count = result.get("nodes", 0)
+                    db_written = nodes_count > 0
                     stats["processed_sources"].extend(
                         result.get("processed_sources", [])
+                    )
+                    self.queue.update_file_progress(
+                        task_id,
+                        file_id,
+                        status=FileStatus.COMPLETED.value,
+                        total_chunks=nodes_count,
+                        processed_chunks=nodes_count,
+                        db_written=db_written,
                     )
 
                 elif item_type == "folder":
@@ -563,8 +626,18 @@ class TaskExecutor:
                         )
                         stats["files"] += result.get("files", 0)
                         stats["nodes"] += result.get("nodes", 0)
+                        nodes_count = result.get("nodes", 0)
+                        db_written = nodes_count > 0
                         stats["processed_sources"].extend(
                             result.get("processed_sources", [])
+                        )
+                        self.queue.update_file_progress(
+                            task_id,
+                            file_id,
+                            status=FileStatus.COMPLETED.value,
+                            total_chunks=nodes_count,
+                            processed_chunks=nodes_count,
+                            db_written=db_written,
                         )
 
                 elif item_type == "file":
@@ -577,17 +650,52 @@ class TaskExecutor:
                         )
                         stats["files"] += result.get("files", 0)
                         stats["nodes"] += result.get("nodes", 0)
+                        nodes_count = result.get("nodes", 0)
+                        db_written = nodes_count > 0
                         stats["processed_sources"].append(path)
+                        self.queue.update_file_progress(
+                            task_id,
+                            file_id,
+                            status=FileStatus.COMPLETED.value,
+                            total_chunks=nodes_count,
+                            processed_chunks=nodes_count,
+                            db_written=db_written,
+                        )
 
             except Exception as e:
                 logger.warning(f"[{task_id}] 处理项目失败 {item_type}/{item_id}: {e}")
                 stats["failed"] += 1
+                error_msg = f"{type(e).__name__}: {str(e)}"
+                self.queue.update_file_progress(
+                    task_id,
+                    file_id,
+                    status=FileStatus.FAILED.value,
+                    error=error_msg,
+                )
+
+            processed_chunks, total_chunks = self.queue.compute_chunk_progress(task_id)
+            progress_pct = (
+                int(processed_chunks / total_chunks * 100) if total_chunks > 0 else 0
+            )
+            self.queue.update_progress(
+                task_id,
+                progress=progress_pct,
+                current=i + 1,
+                total=total_items,
+                message=f"[{i + 1}/{total_items}] 处理: {item_type} - {item_id} ({processed_chunks}/{total_chunks} chunks)",
+            )
 
             if (i + 1) % 5 == 0:
                 await self._update_heartbeat(task_id)
 
         if params.get("refresh_topics", True):
             self._update_kb_topics(kb_id, has_new_docs=stats["files"] > 0)
+
+        all_failed = stats["failed"] > 0 and stats["files"] == 0
+        error_msg = f"所有项目都失败了 ({stats['failed']} 个)" if all_failed else None
+
+        processed_chunks, total_chunks = self.queue.compute_chunk_progress(task_id)
+        file_progress = self.queue.get_file_progress(task_id)
 
         self.queue.complete_task(
             task_id,
@@ -597,7 +705,11 @@ class TaskExecutor:
                 "nodes": stats["nodes"],
                 "failed": stats["failed"],
                 "sources": stats["processed_sources"],
+                "processed_chunks": processed_chunks,
+                "total_chunks": total_chunks,
+                "file_progress": file_progress,
             },
+            error=error_msg,
         )
 
     # ==================== 其他任务类型 ====================

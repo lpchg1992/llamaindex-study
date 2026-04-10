@@ -23,6 +23,18 @@ export interface DangerousOperationRequest {
   confirmation_name: string
 }
 
+export interface FileProgressItem {
+  file_id: string
+  file_name: string
+  status: 'pending' | 'processing' | 'embedding' | 'writing' | 'completed' | 'failed' | 'cancelled'
+  total_chunks: number
+  processed_chunks: number
+  db_written: boolean
+  error?: string
+  started_at?: number
+  completed_at?: number
+}
+
 export interface TaskResponse {
   task_id: string
   status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused'
@@ -38,8 +50,13 @@ export interface TaskResponse {
     sources?: string[]
     endpoint_stats?: Record<string, number>
     chunk_strategy?: string
+    failed?: number
+    processed_chunks?: number
+    total_chunks?: number
+    file_progress?: FileProgressItem[]
   }
   error?: string
+  file_progress?: FileProgressItem[]
 }
 
 export interface SearchResult {
@@ -134,6 +151,7 @@ export interface SelectiveImportRequest {
   items: SelectiveImportItem[]
   async_mode?: boolean
   refresh_topics?: boolean
+  prefix?: string
 }
 
 export interface FilesImportRequest {

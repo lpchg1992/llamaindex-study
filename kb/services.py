@@ -542,6 +542,7 @@ class ZoteroService:
         options: Optional[Dict[str, Any]] = None,
         refresh_topics: bool = True,
         progress_callback: Optional[Callable[[str], None]] = None,
+        prefix: str = "[kb]",
     ) -> Dict[str, Any]:
         """
         导入单个 Zotero 文献
@@ -551,6 +552,7 @@ class ZoteroService:
             item_id: 文献 ID
             options: 个性化选项，如 force_ocr
             progress_callback: 进度回调
+            prefix: 附件标题前缀标记
 
         Returns:
             导入统计
@@ -566,20 +568,22 @@ class ZoteroService:
 
         importer = ZoteroImporter(kb_id=kb_id)
         try:
-            item = importer.get_item(int(item_id))
+            item = importer.get_item(int(item_id), prefix=prefix)
             if not item:
                 raise ValueError(f"文献不存在: {item_id}")
 
             progress = ProcessingProgress()
 
             force_ocr = options.get("force_ocr", False) if options else False
-            nodes, all_nodes = importer.import_item(
+            is_scanned_override = options.get("is_scanned") if options else None
+            nodes, all_nodes, processed_sources = importer.import_item(
                 item=item,
                 vector_store=vs,
                 embed_model=create_parallel_ollama_embedding(),
                 progress=progress,
                 kb_id=kb_id,
                 force_ocr=force_ocr,
+                is_scanned=is_scanned_override,
             )
 
             if progress_callback:
@@ -588,7 +592,7 @@ class ZoteroService:
             if refresh_topics:
                 KnowledgeBaseService.refresh_topics(kb_id=kb_id, has_new_docs=nodes > 0)
 
-            return {"items": 1, "nodes": nodes}
+            return {"items": 1, "nodes": nodes, "processed_sources": processed_sources}
 
         finally:
             importer.close()
