@@ -1771,7 +1771,7 @@ def handle_admin_restart_api(args: argparse.Namespace) -> int:
 
     print("启动新的 API 服务...")
     subprocess.Popen(
-        ["uv", "run", "python", "api.py"],
+        [str(PROJECT_ROOT / "scripts/run_api.sh"), "start"],
         cwd=str(PROJECT_ROOT),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -1924,7 +1924,7 @@ def _start_api() -> None:
     pid_file = PROJECT_ROOT / ".api.pid"
     print("启动 API 服务...")
     subprocess.Popen(
-        ["uv", "run", "python", "api.py"],
+        [str(PROJECT_ROOT / "scripts/run_api.sh"), "start"],
         cwd=str(PROJECT_ROOT),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
