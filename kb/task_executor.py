@@ -118,6 +118,10 @@ class TaskExecutor:
         except Exception as e:
             logger.debug(f"进度通知失败: {e}")
 
+    async def _update_and_notify(self, task_id: str, **kwargs) -> None:
+        self.queue.update_progress(task_id, **kwargs)
+        await self._notify_progress(task_id)
+
     async def _update_heartbeat(self, task_id: str) -> None:
         """更新任务心跳"""
         try:
@@ -246,7 +250,7 @@ class TaskExecutor:
         params = task.params
         rebuild = params.get("rebuild", False)
 
-        self.queue.update_progress(task.task_id, message=f"开始导入: {kb_id}")
+        await self._update_and_notify(task.task_id, message=f"开始导入: {kb_id}")
 
         registry = KnowledgeBaseRegistry()
         kb = registry.get(kb_id)
@@ -271,7 +275,7 @@ class TaskExecutor:
         if rebuild:
             try:
                 vs.delete_table()
-                self.queue.update_progress(task.task_id, message="已清空旧数据")
+                await self._update_and_notify(task.task_id, message="已清空旧数据")
             except Exception as e:
                 logger.warning(f"清空旧数据失败: {e}")
 
@@ -288,7 +292,7 @@ class TaskExecutor:
                 )
                 all_files.extend(pattern)
 
-        self.queue.update_progress(
+        await self._update_and_notify(
             task.task_id,
             total=len(all_files),
             message=f"扫描到 {len(all_files)} 个文件",
@@ -328,7 +332,7 @@ class TaskExecutor:
             self.queue.complete_task(task.task_id, result={"message": "没有变更"})
             return
 
-        self.queue.update_progress(
+        await self._update_and_notify(
             task.task_id, message=f"待处理 {len(files_to_process)} 个文件"
         )
 
@@ -343,7 +347,7 @@ class TaskExecutor:
         processed_chunks = 0
         last_heartbeat_file_count = 0
 
-        self.queue.update_progress(
+        await self._update_and_notify(
             task.task_id, message=f"开始处理 {len(files_to_process)} 个文件"
         )
 
@@ -458,7 +462,7 @@ class TaskExecutor:
                 processed_files += 1
 
                 if processed_files % PROGRESS_UPDATE_INTERVAL == 0:
-                    self.queue.update_progress(
+                    await self._update_and_notify(
                         task.task_id,
                         message=f"处理 {processed_files}/{len(files_to_process)} ({processed_chunks} chunks)",
                     )
@@ -574,7 +578,7 @@ class TaskExecutor:
 
         self.queue.set_file_progress(task_id, file_list)
         total_items = len(items)
-        self.queue.update_progress(
+        await self._update_and_notify(
             task_id, total=total_items, message=f"准备导入 {total_items} 个项目"
         )
 
@@ -611,7 +615,7 @@ class TaskExecutor:
             self.queue.update_file_progress(
                 task_id, file_id, status=FileStatus.PROCESSING.value
             )
-            self.queue.update_progress(
+            await self._update_and_notify(
                 task_id,
                 current=i + 1,
                 total=total_items,
@@ -763,7 +767,7 @@ class TaskExecutor:
             progress_pct = (
                 int(processed_chunks / total_chunks * 100) if total_chunks > 0 else 0
             )
-            self.queue.update_progress(
+            await self._update_and_notify(
                 task_id,
                 progress=progress_pct,
                 current=i + 1,
@@ -821,7 +825,7 @@ class TaskExecutor:
             f"[{task_id}] 开始 Zotero 导入任务: kb_id={kb_id}, collection={collection_name}"
         )
 
-        self.queue.update_progress(
+        await self._update_and_notify(
             task_id, message=f"准备导入 Zotero: {collection_name}"
         )
 
@@ -879,7 +883,7 @@ class TaskExecutor:
             total_items = len(item_ids)
             logger.info(f"[{task_id}] 收藏夹包含 {total_items} 篇文献")
 
-            self.queue.update_progress(
+            await self._update_and_notify(
                 task_id,
                 total=total_items,
                 message=f"开始导入 {collection_name} ({total_items} 篇文献)",
@@ -887,7 +891,9 @@ class TaskExecutor:
             await self._update_heartbeat(task_id)
 
             if total_items == 0:
-                self.queue.update_progress(task_id, progress=100, message="收藏夹为空")
+                await self._update_and_notify(
+                    task_id, progress=100, message="收藏夹为空"
+                )
                 self.queue.complete_task(
                     task_id, result={"items": 0, "nodes": 0, "failed": 0}
                 )
@@ -934,7 +940,7 @@ class TaskExecutor:
                 while not progress_queue.empty():
                     try:
                         current, total, message = progress_queue.get_nowait()
-                        self.queue.update_progress(
+                        await self._update_and_notify(
                             task_id,
                             current=current,
                             total=total,
@@ -953,7 +959,7 @@ class TaskExecutor:
                         if stats_result[0]
                         else []
                     )
-                    self.queue.update_progress(
+                    await self._update_and_notify(
                         task_id,
                         message=f"导入已取消 (已处理 {processed} 篇)",
                     )
@@ -978,7 +984,7 @@ class TaskExecutor:
             while not progress_queue.empty():
                 try:
                     current, total, message = progress_queue.get_nowait()
-                    self.queue.update_progress(
+                    await self._update_and_notify(
                         task_id,
                         current=current,
                         total=total,
@@ -1001,7 +1007,7 @@ class TaskExecutor:
                 f"failed={stats.get('failed', 0)}"
             )
 
-            self.queue.update_progress(
+            await self._update_and_notify(
                 task_id,
                 progress=100,
                 message=f"完成! {stats.get('items', 0)} 文献, {stats.get('nodes', 0)} 节点",
@@ -1023,7 +1029,7 @@ class TaskExecutor:
 
         except Exception as e:
             logger.error(f"[{task_id}] Zotero 导入任务执行失败: {e}", exc_info=True)
-            self.queue.update_progress(task_id, message=f"导入失败: {str(e)}")
+            await self._update_and_notify(task_id, message=f"导入失败: {str(e)}")
             raise
         finally:
             if importer is not None:
@@ -1069,7 +1075,7 @@ class TaskExecutor:
 
         total_files = len(all_files)
 
-        self.queue.update_progress(
+        await self._update_and_notify(
             task.task_id, total=total_files, message=f"找到 {total_files} 个文件"
         )
 
@@ -1213,7 +1219,7 @@ class TaskExecutor:
                     stats["files"] += 1
 
                 progress = int((i + 1) / total_files * 100) if total_files > 0 else 0
-                self.queue.update_progress(
+                await self._update_and_notify(
                     task.task_id, progress=progress, message=f"处理: {file_path.name}"
                 )
 
@@ -1248,13 +1254,11 @@ class TaskExecutor:
     async def _execute_initialize(self, task: "Task") -> None:
         kb_id = task.kb_id
 
-        self.queue.update_progress(task.task_id, message="初始化知识库...")
-        await self._notify_progress(task.task_id)
+        await self._update_and_notify(task.task_id, message="初始化知识库...")
 
         from kb.services import KnowledgeBaseService
 
-        self.queue.update_progress(task.task_id, message="正在清空数据...")
-        await self._notify_progress(task.task_id)
+        await self._update_and_notify(task.task_id, message="正在清空数据...")
 
         KnowledgeBaseService.initialize(kb_id)
 
