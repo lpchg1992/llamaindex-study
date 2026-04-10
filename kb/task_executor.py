@@ -69,6 +69,15 @@ class TaskExecutor:
                 and self._cancel_events[task_id].is_set()
             ):
                 raise asyncio.CancelledError("取消已请求")
+            if (
+                self._pause_events.get(task_id)
+                and not self._pause_events[task_id].is_set()
+            ):
+                while (
+                    self._pause_events.get(task_id)
+                    and not self._pause_events[task_id].is_set()
+                ):
+                    await asyncio.sleep(0.5)
             await self._update_heartbeat(task_id)
             await self._notify_progress(task_id)
 
