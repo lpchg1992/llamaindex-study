@@ -54,8 +54,9 @@ export function useTaskWebSocket(enabled: boolean = true) {
       wsUrl = `${protocol}//${host}/ws/tasks`
     } else {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      const hostname = window.location.hostname
       const port = import.meta.env.VITE_API_PORT || '37241'
-      wsUrl = `${protocol}//localhost:${port}/ws/tasks`
+      wsUrl = `${protocol}//${hostname}:${port}/ws/tasks`
     }
 
     try {
