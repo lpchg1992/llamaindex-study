@@ -528,6 +528,33 @@ class TaskExecutor:
 
         import hashlib
 
+        total_items = len(items)
+        await self._update_and_notify(
+            task_id, total=total_items, message=f"准备导入 {total_items} 个项目"
+        )
+
+        file_list = []
+        for idx, item in enumerate(items):
+            item_type = item.get("type", "")
+            item_id = str(item.get("id") or item.get("path") or f"item_{idx}")
+            file_name = f"{item_type}: {item_id}"
+            file_id = hashlib.md5(
+                f"{task_id}:{item_type}:{item_id}".encode()
+            ).hexdigest()[:12]
+            file_list.append(
+                {
+                    "file_id": file_id,
+                    "file_name": file_name,
+                    "status": FileStatus.PENDING.value,
+                    "total_chunks": 0,
+                    "processed_chunks": 0,
+                    "db_written": False,
+                    "error": None,
+                }
+            )
+
+        self.queue.set_file_progress(task_id, file_list)
+
         item_titles = {}
         try:
             from kb.zotero_processor import ZoteroImporter
@@ -548,39 +575,6 @@ class TaskExecutor:
                             )
         except Exception as e:
             logger.debug(f"Failed to pre-fetch Zotero titles: {e}")
-
-        file_list = []
-        for idx, item in enumerate(items):
-            item_type = item.get("type", "")
-            item_id = str(item.get("id") or item.get("path") or f"item_{idx}")
-            if (
-                item_type == "item"
-                and item.get("id")
-                and str(item.get("id")) in item_titles
-            ):
-                file_name = item_titles[str(item.get("id"))]
-            else:
-                file_name = f"{item_type}: {item_id}"
-            file_id = hashlib.md5(
-                f"{task_id}:{item_type}:{item_id}".encode()
-            ).hexdigest()[:12]
-            file_list.append(
-                {
-                    "file_id": file_id,
-                    "file_name": file_name,
-                    "status": FileStatus.PENDING.value,
-                    "total_chunks": 0,
-                    "processed_chunks": 0,
-                    "db_written": False,
-                    "error": None,
-                }
-            )
-
-        self.queue.set_file_progress(task_id, file_list)
-        total_items = len(items)
-        await self._update_and_notify(
-            task_id, total=total_items, message=f"准备导入 {total_items} 个项目"
-        )
 
         stats = {"files": 0, "nodes": 0, "failed": 0, "processed_sources": []}
 
