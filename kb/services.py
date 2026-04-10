@@ -936,6 +936,24 @@ class KnowledgeBaseService:
         return analyze_and_update_topics(kb_id, has_new_docs=has_new_docs)
 
     @staticmethod
+    def update_info(
+        kb_id: str,
+        name: Optional[str] = None,
+        description: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        from kb.registry import registry
+        from kb.database import init_kb_meta_db
+
+        kb_meta_db = init_kb_meta_db()
+        success = kb_meta_db.update_info(kb_id, name, description)
+        if not success:
+            raise ValueError(f"知识库 {kb_id} 不存在或更新失败")
+
+        registry._loaded = False
+
+        return KnowledgeBaseService.get_info(kb_id)
+
+    @staticmethod
     def sync_from_registry(kb_id: str, source_type: str = "obsidian") -> bool:
         from kb.registry import registry
         from kb.database import init_kb_meta_db

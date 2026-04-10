@@ -30,7 +30,6 @@ export function KBEditDialog({ open, onOpenChange, kb, topics }: KBEditDialogPro
 
   const [name, setName] = useState(kb.name)
   const [description, setDescription] = useState(kb.description)
-  const [chunkStrategy, setChunkStrategy] = useState(kb.chunk_strategy || '')
   const [localTopics, setLocalTopics] = useState<string[]>(topics?.topics || [])
   const [newTopic, setNewTopic] = useState('')
   const [activeTab, setActiveTab] = useState('basic')
@@ -39,7 +38,6 @@ export function KBEditDialog({ open, onOpenChange, kb, topics }: KBEditDialogPro
     if (open) {
       setName(kb.name)
       setDescription(kb.description)
-      setChunkStrategy(kb.chunk_strategy || '')
       setLocalTopics(topics?.topics || [])
       setNewTopic('')
     }
@@ -52,7 +50,6 @@ export function KBEditDialog({ open, onOpenChange, kb, topics }: KBEditDialogPro
         data: {
           name,
           description,
-          chunk_strategy: chunkStrategy || undefined,
         },
       })
       toast.success('Knowledge base updated')
@@ -137,16 +134,6 @@ export function KBEditDialog({ open, onOpenChange, kb, topics }: KBEditDialogPro
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder="Optional description"
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="edit-kb-chunk">Chunk Strategy</Label>
-              <Input
-                id="edit-kb-chunk"
-                value={chunkStrategy}
-                onChange={(e) => setChunkStrategy(e.target.value)}
-                placeholder="e.g., sentence, paragraph, page"
               />
             </div>
 
