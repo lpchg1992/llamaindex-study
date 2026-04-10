@@ -71,6 +71,20 @@ export function useTaskWebSocket(enabled: boolean = true) {
           const message: TaskWebSocketMessage = JSON.parse(event.data)
           
           if (message.type === 'task_update') {
+            queryClient.setQueryData<TaskResponse>(['task', message.task_id], (oldData) => {
+              if (!oldData) return oldData
+              return {
+                ...oldData,
+                status: message.data.status,
+                progress: message.data.progress,
+                current: message.data.current,
+                total: message.data.total,
+                message: message.data.message,
+                result: message.data.result,
+                error: message.data.error,
+              }
+            })
+
             queryClient.setQueryData<TaskResponse[]>(['tasks'], (oldData) => {
               if (!oldData) return oldData
               
