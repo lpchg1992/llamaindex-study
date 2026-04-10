@@ -2051,7 +2051,7 @@ class TaskService:
             }
 
         queue.update_status(task_id, TaskStatus.CANCELLED.value, "已取消")
-        task_executor.cancel_task(task_id)
+        task_executor.cancel_and_wait(task_id, timeout=5.0)
 
         result = {
             "status": "cancelled",
@@ -2283,6 +2283,11 @@ class TaskService:
 
         if task.status == "running":
             raise ValueError(f"任务正在运行，无法删除: {task_id}")
+
+        if task.status == "cancelled":
+            from kb.task_executor import task_executor
+
+            task_executor.cancel_and_wait(task_id, timeout=5.0)
 
         success = queue.delete_task(task_id)
         if not success:

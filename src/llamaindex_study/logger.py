@@ -24,8 +24,23 @@ FILE_FORMAT = (
 )
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
-# 日志级别
-LOG_LEVEL = logging.INFO
+
+# 日志级别（支持环境变量覆盖）
+def _get_log_level() -> int:
+    import os
+
+    level_str = os.getenv("LOG_LEVEL", "INFO").upper()
+    level_map = {
+        "DEBUG": logging.DEBUG,
+        "INFO": logging.INFO,
+        "WARNING": logging.WARNING,
+        "ERROR": logging.ERROR,
+        "CRITICAL": logging.CRITICAL,
+    }
+    return level_map.get(level_str, logging.INFO)
+
+
+LOG_LEVEL = _get_log_level()
 
 # 全局日志目录
 _log_dir: Optional[Path] = None

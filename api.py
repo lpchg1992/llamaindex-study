@@ -202,7 +202,12 @@ async def http_exception_handler(request, exc):
 
 @app.exception_handler(Exception)
 async def general_exception_handler(request, exc):
-    logger.error(f"Unhandled exception: {type(exc).__name__}: {exc}", exc_info=True)
+    logger.error(
+        f"Unhandled exception on {request.method} {request.url.path}: "
+        f"{type(exc).__name__}: {exc}",
+        exc_info=True,
+        extra={"method": request.method, "path": request.url.path},
+    )
     response = JSONResponse(
         status_code=500,
         content={"detail": f"{type(exc).__name__}: {str(exc)}"},
@@ -995,7 +1000,12 @@ def create_vendor(req: VendorCreateRequest):
         api_key=req.api_key,
         is_active=req.is_active,
     )
-    get_parallel_processor().refresh_endpoints()
+    try:
+        get_parallel_processor().refresh_endpoints()
+    except Exception as e:
+        logger.error(
+            f"refresh_endpoints() failed after vendor create: {e}", exc_info=True
+        )
     return VendorInfo(**db.get(req.id))
 
 
@@ -1021,7 +1031,12 @@ def delete_vendor(vendor_id: str):
     if not db.get(vendor_id):
         raise HTTPException(status_code=404, detail=f"供应商 {vendor_id} 不存在")
     db.delete(vendor_id)
-    get_parallel_processor().refresh_endpoints()
+    try:
+        get_parallel_processor().refresh_endpoints()
+    except Exception as e:
+        logger.error(
+            f"refresh_endpoints() failed after vendor delete: {e}", exc_info=True
+        )
     return {"status": "deleted", "vendor_id": vendor_id}
 
 
@@ -1041,7 +1056,12 @@ def update_vendor(vendor_id: str, req: VendorCreateRequest):
         api_key=req.api_key,
         is_active=req.is_active,
     )
-    get_parallel_processor().refresh_endpoints()
+    try:
+        get_parallel_processor().refresh_endpoints()
+    except Exception as e:
+        logger.error(
+            f"refresh_endpoints() failed after vendor update: {e}", exc_info=True
+        )
     return VendorInfo(**db.get(vendor_id))
 
 
@@ -3454,5 +3474,7 @@ if __name__ == "__main__":
     import uvicorn
     import os
 
+    from llamaindex_study.logger import LOG_LEVEL
+
     port = int(os.getenv("API_PORT", "37241"))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host="0.0.0.0", port=port, log_config=None, log_level="info")

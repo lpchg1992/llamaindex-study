@@ -63,6 +63,12 @@ class TaskExecutor:
 
         try:
             self.queue.start_task(task_id)
+            await asyncio.sleep(0)
+            if (
+                self._cancel_events.get(task_id)
+                and self._cancel_events[task_id].is_set()
+            ):
+                raise asyncio.CancelledError("取消已请求")
             await self._update_heartbeat(task_id)
             await self._notify_progress(task_id)
 
@@ -1266,6 +1272,34 @@ class TaskExecutor:
             return True
 
         return False
+
+    def cancel_and_wait(self, task_id: str, timeout: float = 5.0) -> bool:
+        import concurrent.futures
+        import threading
+
+        if task_id not in self._running_tasks:
+            return True
+        asyncio_task = self._running_tasks.get(task_id)
+        if not asyncio_task or not isinstance(asyncio_task, asyncio.Task):
+            return True
+        if asyncio_task.done():
+            return True
+        self.cancel_task(task_id)
+
+        def _wait():
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(
+                    asyncio.wait_for(asyncio.shield(asyncio_task), timeout=timeout)
+                )
+            finally:
+                loop.close()
+
+        thread = threading.Thread(target=_wait)
+        thread.start()
+        thread.join(timeout=timeout)
+        return asyncio_task.done()
 
     def pause_task(self, task_id: str) -> bool:
         """暂停任务"""

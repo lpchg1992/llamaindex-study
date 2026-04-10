@@ -315,12 +315,21 @@ class LanceDBVectorStore(BaseVectorStore):
 
     def delete_table(self) -> None:
         """删除表"""
+        import shutil
+
         if self.exists():
             import lancedb
 
             db = lancedb.connect(self._get_uri())
-            db.drop_table(self.table_name)
-            print(f"✅ 表已删除: {self.table_name}")
+            try:
+                db.drop_table(self.table_name)
+                print(f"✅ 表已删除: {self.table_name}")
+            except Exception as e:
+                logger.warning(f"drop_table 失败，使用 rmtree 清理: {e}")
+                persist_path = Path(self._get_uri())
+                if persist_path.exists():
+                    shutil.rmtree(persist_path, ignore_errors=True)
+                    print(f"✅ 目录已清理: {persist_path}")
 
     def delete_by_source(self, sources: List[str]) -> int:
         """按源文件路径删除节点
