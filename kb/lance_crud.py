@@ -130,7 +130,19 @@ class LanceCRUDService:
         table_names = list(result.tables) if hasattr(result, "tables") else []
 
         if table_name not in table_names:
-            raise ValueError(f"表 {table_name} 不存在于知识库 {kb_id}")
+            # 表不存在，返回空统计而不是报错（KB 可能刚创建还未导入数据）
+            uri = str(LanceCRUDService.DEFAULT_LANCE_ROOT / kb_id)
+            return LanceTableStats(
+                kb_id=kb_id,
+                table_name=table_name,
+                uri=uri,
+                row_count=0,
+                size_bytes=0,
+                size_mb=0.0,
+                size_gb=0.0,
+                columns=[],
+                schema_fields=[],
+            )
 
         table = db.open_table(table_name)
         count = table.count_rows()
@@ -266,7 +278,7 @@ class LanceCRUDService:
         table_names = list(result.tables) if hasattr(result, "tables") else []
 
         if table_name not in table_names:
-            raise ValueError(f"表 {table_name} 不存在")
+            return []
 
         table = db.open_table(table_name)
 
@@ -287,6 +299,9 @@ class LanceCRUDService:
 
             arrow_tbl = arrow_tbl.slice(offset, limit)
             df = arrow_tbl.to_pandas()
+
+        if df.empty:
+            return []
 
         results = []
         for _, row in df.iterrows():
@@ -418,10 +433,13 @@ class LanceCRUDService:
         table_names = list(result.tables) if hasattr(result, "tables") else []
 
         if table_name not in table_names:
-            raise ValueError(f"表 {table_name} 不存在")
+            return []
 
         table = db.open_table(table_name)
         df = table.to_pandas()
+
+        if df.empty:
+            return []
 
         # 按 doc_id 分组
         grouped = df.groupby("doc_id")
