@@ -1460,11 +1460,11 @@ def preview_zotero_import(req: ZoteroPreviewRequest):
     duplicate_items = []
 
     for item_id in item_ids:
-        item = importer.get_item(item_id)
+        item = importer.get_item(item_id, prefix=prefix)
         if not item:
             continue
 
-        attachment_path = importer._get_attachment_path(item_id, prefix=prefix)
+        attachment_path = item.file_path
 
         preview_item = ZoteroPreviewItem(
             item_id=item_id,
