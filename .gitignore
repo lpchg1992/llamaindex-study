@@ -70,3 +70,4 @@ logs/
 .api.pid/
 .sysphus/
 .test_llamaindex/
+.frontend.pid
