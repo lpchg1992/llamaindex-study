@@ -495,9 +495,12 @@ class ParallelEmbeddingProcessor:
                         score = 1.0 / throughput if throughput > 0 else float("inf")
                         score += ep.inflight * 0.5
                     else:
-                        score = ep.inflight
+                        score = ep.inflight + ep.chunks_completed * 0.0001
 
-                    if score < best_score:
+                    if score < best_score or (
+                        score == best_score
+                        and healthy_eps.index(ep) < healthy_eps.index(best_ep)
+                    ):
                         best_score = score
                         best_ep = ep
 
