@@ -23,9 +23,10 @@ import type { SystemSettings, VendorStats } from '@/types/api'
 function VendorPanel({ vendor }: { vendor: VendorStats }) {
   const [expanded, setExpanded] = useState(true)
 
-  const llmModels = vendor.models.filter((m: any) => m.model_type === 'llm')
-  const embedModels = vendor.models.filter((m: any) => m.model_type === 'embedding')
-  const rerankerModels = vendor.models.filter((m: any) => m.model_type === 'reranker')
+  const models = vendor.models || []
+  const llmModels = models.filter((m: any) => m.model_type === 'llm')
+  const embedModels = models.filter((m: any) => m.model_type === 'embedding')
+  const rerankerModels = models.filter((m: any) => m.model_type === 'reranker')
 
   return (
     <div className="border rounded-lg mb-4 overflow-hidden">
@@ -38,7 +39,7 @@ function VendorPanel({ vendor }: { vendor: VendorStats }) {
           <div>
             <h3 className="font-semibold text-lg">{vendor.vendor_id}</h3>
             <p className="text-sm text-muted-foreground">
-              {vendor.models.length} model{vendor.models.length !== 1 ? 's' : ''}
+              {models.length} model{models.length !== 1 ? 's' : ''}
             </p>
           </div>
         </div>
