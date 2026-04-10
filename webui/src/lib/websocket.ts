@@ -46,10 +46,18 @@ export function useTaskWebSocket(enabled: boolean = true) {
   const connect = useCallback(() => {
     if (!enabled) return
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const hostname = window.location.hostname
-    const port = import.meta.env.VITE_API_PORT || '37241'
-    const wsUrl = `${protocol}//${hostname}:${port}/ws/tasks`
+    let wsUrl: string
+    if (import.meta.env.VITE_API_BASE) {
+      const base = import.meta.env.VITE_API_BASE
+      const protocol = base.startsWith('https') ? 'wss:' : 'ws:'
+      const host = base.replace(/^https?:\/\//, '')
+      wsUrl = `${protocol}//${host}/ws/tasks`
+    } else {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      const hostname = window.location.hostname
+      const port = import.meta.env.VITE_API_PORT || '37241'
+      wsUrl = `${protocol}//${hostname}:${port}/ws/tasks`
+    }
 
     try {
       wsRef.current = new WebSocket(wsUrl)
