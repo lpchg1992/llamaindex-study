@@ -137,6 +137,98 @@ class TokenStatsDB:
     def _today(self) -> str:
         return datetime.now().strftime("%Y-%m-%d")
 
+    def get_last_persisted_stats(
+        self,
+        vendor_id: str,
+        model_type: str,
+        model_id: str,
+        record_date: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        if record_date is None:
+            record_date = self._today()
+
+        session = self.session
+        try:
+            existing = (
+                session.query(DailyTokenStatsModel)
+                .filter(
+                    DailyTokenStatsModel.date == record_date,
+                    DailyTokenStatsModel.vendor_id == vendor_id,
+                    DailyTokenStatsModel.model_type == model_type,
+                    DailyTokenStatsModel.model_id == model_id,
+                )
+                .first()
+            )
+            if existing:
+                return {
+                    "call_count": existing.call_count,
+                    "prompt_tokens": existing.prompt_tokens,
+                    "completion_tokens": existing.completion_tokens,
+                    "total_tokens": existing.total_tokens,
+                    "error_count": existing.error_count,
+                }
+            return None
+        finally:
+            session.close()
+
+    def increment_daily_stats(
+        self,
+        vendor_id: str,
+        model_type: str,
+        model_id: str,
+        delta_call_count: int,
+        delta_prompt_tokens: int,
+        delta_completion_tokens: int,
+        delta_total_tokens: int,
+        delta_error_count: int,
+        record_date: Optional[str] = None,
+    ) -> None:
+        if record_date is None:
+            record_date = self._today()
+
+        session = self.session
+        try:
+            existing = (
+                session.query(DailyTokenStatsModel)
+                .filter(
+                    DailyTokenStatsModel.date == record_date,
+                    DailyTokenStatsModel.vendor_id == vendor_id,
+                    DailyTokenStatsModel.model_type == model_type,
+                    DailyTokenStatsModel.model_id == model_id,
+                )
+                .first()
+            )
+
+            if existing:
+                existing.call_count += delta_call_count
+                existing.prompt_tokens += delta_prompt_tokens
+                existing.completion_tokens += delta_completion_tokens
+                existing.total_tokens += delta_total_tokens
+                existing.error_count += delta_error_count
+                existing.updated_at = time.time()
+            else:
+                new_record = DailyTokenStatsModel(
+                    date=record_date,
+                    vendor_id=vendor_id,
+                    model_type=model_type,
+                    model_id=model_id,
+                    call_count=delta_call_count,
+                    prompt_tokens=delta_prompt_tokens,
+                    completion_tokens=delta_completion_tokens,
+                    total_tokens=delta_total_tokens,
+                    error_count=delta_error_count,
+                    created_at=time.time(),
+                    updated_at=time.time(),
+                )
+                session.add(new_record)
+
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
     def upsert_daily_stats(
         self,
         vendor_id: str,

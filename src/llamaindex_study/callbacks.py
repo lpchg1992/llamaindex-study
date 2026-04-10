@@ -129,22 +129,51 @@ class ModelCallStatsCollection:
         model_type: str,
         model_id: str,
     ) -> None:
-        """将当前统计持久化到数据库"""
+        """将当前统计增量持久化到数据库"""
         try:
             from llamaindex_study.token_stats_db import get_token_stats_db
 
             stats = self.get_or_create(vendor_id, model_type, model_id)
             db = get_token_stats_db()
-            db.upsert_daily_stats(
-                vendor_id=stats.vendor_id,
-                model_type=stats.model_type,
-                model_id=stats.model_id,
-                call_count=stats.call_count,
-                prompt_tokens=stats.prompt_tokens,
-                completion_tokens=stats.completion_tokens,
-                total_tokens=stats.total_tokens,
-                error_count=stats.error_count,
+
+            # Get last persisted values to compute delta
+            last_persisted = db.get_last_persisted_stats(
+                vendor_id, model_type, model_id
             )
+
+            # Compute delta (current - last persisted)
+            delta_call_count = stats.call_count - (
+                last_persisted.get("call_count") if last_persisted else 0
+            )
+            delta_prompt_tokens = stats.prompt_tokens - (
+                last_persisted.get("prompt_tokens") if last_persisted else 0
+            )
+            delta_completion_tokens = stats.completion_tokens - (
+                last_persisted.get("completion_tokens") if last_persisted else 0
+            )
+            delta_total_tokens = stats.total_tokens - (
+                last_persisted.get("total_tokens") if last_persisted else 0
+            )
+            delta_error_count = stats.error_count - (
+                last_persisted.get("error_count") if last_persisted else 0
+            )
+
+            # Only persist if there's an actual change
+            if (
+                delta_call_count > 0
+                or delta_prompt_tokens > 0
+                or delta_completion_tokens > 0
+            ):
+                db.increment_daily_stats(
+                    vendor_id=stats.vendor_id,
+                    model_type=stats.model_type,
+                    model_id=stats.model_id,
+                    delta_call_count=delta_call_count,
+                    delta_prompt_tokens=delta_prompt_tokens,
+                    delta_completion_tokens=delta_completion_tokens,
+                    delta_total_tokens=delta_total_tokens,
+                    delta_error_count=delta_error_count,
+                )
         except Exception:
             pass
 
