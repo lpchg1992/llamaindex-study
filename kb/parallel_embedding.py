@@ -368,7 +368,12 @@ class ParallelEmbeddingProcessor:
         try:
             from llamaindex_study.ollama_utils import _record_embedding_call
 
-            vendor_id = "siliconflow" if ep.url == "siliconflow://" else "ollama"
+            if ep.url == "siliconflow://":
+                vendor_id = "siliconflow"
+            elif ep.model_id and "/" in ep.model_id:
+                vendor_id = ep.model_id.split("/")[0]
+            else:
+                vendor_id = "ollama"
             _record_embedding_call(vendor_id, ep.model_id, token_count, error)
         except Exception:
             pass
