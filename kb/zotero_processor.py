@@ -531,6 +531,10 @@ class ZoteroImporter:
                 f"文献包含标注/笔记: {item.title}, 标注数: {len(item.annotations)}, 笔记数: {len(item.notes)}"
             )
 
+        logger.info(
+            f"[ZoteroImporter.import_item] item_id={item.item_id}, title={item.title}, file_path={item.file_path}, is_scanned={is_scanned}, force_ocr={force_ocr}"
+        )
+
         if item.file_path and Path(item.file_path).exists():
             file_path = Path(item.file_path)
             ext = file_path.suffix.lower()

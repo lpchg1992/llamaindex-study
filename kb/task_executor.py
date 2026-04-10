@@ -589,7 +589,9 @@ class TaskExecutor:
                     )
 
                 elif item_type == "item":
-                    logger.info(f"[{task_id}] 处理 Zotero 文献: {item_id}")
+                    logger.info(
+                        f"[{task_id}] 处理 Zotero 文献: item_id={item_id}, prefix={prefix}, options={item.get('options', {})}"
+                    )
                     item_options = item.get("options", {})
                     result = ZoteroService.import_item(
                         kb_id=kb_id,
@@ -597,6 +599,9 @@ class TaskExecutor:
                         options=item_options,
                         refresh_topics=False,
                         prefix=prefix,
+                    )
+                    logger.info(
+                        f"[{task_id}] Zotero 文献导入结果: nodes={result.get('nodes', 0)}, items={result.get('items', 0)}"
                     )
                     stats["files"] += result.get("items", 0)
                     stats["nodes"] += result.get("nodes", 0)
