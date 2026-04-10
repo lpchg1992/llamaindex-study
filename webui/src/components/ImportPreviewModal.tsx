@@ -264,9 +264,9 @@ export function ImportPreviewModal({
             <ScrollArea className="flex-1">
               <Table>
                 <TableBody>
-                  {previewData.map((item) => (
+                  {previewData.map((item, idx) => (
                     <TableRow
-                      key={item.item_id}
+                      key={`${item.item_id}-${idx}`}
                       className={!item.is_eligible && !item.is_duplicate ? 'opacity-50' : ''}
                     >
                       <TableCell className="w-10">

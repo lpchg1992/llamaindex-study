@@ -281,11 +281,11 @@ class ZoteroImporter:
             )
             collection_ids.extend([row[0] for row in cursor.fetchall()])
 
-        # 获取收藏夹中的文献
+        # 获取收藏夹中的文献（使用 DISTINCT 去重）
         placeholders = ",".join(["?"] * len(collection_ids))
         cursor.execute(
             f"""
-            SELECT itemID FROM collectionItems
+            SELECT DISTINCT itemID FROM collectionItems
             WHERE collectionID IN ({placeholders})
         """,
             collection_ids,
