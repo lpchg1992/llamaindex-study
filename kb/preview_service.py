@@ -80,6 +80,10 @@ class PreviewService:
         eligible_items = []
         ineligible_items = []
 
+        from kb.document_processor import DocumentProcessor
+
+        processor = DocumentProcessor()
+
         for item_id in all_items:
             item = importer.get_item(item_id)
             if not item:
@@ -88,12 +92,27 @@ class PreviewService:
 
             attachment_path = importer._get_attachment_path(item_id)
             if attachment_path:
+                is_pdf = attachment_path.lower().endswith(".pdf")
+                is_scanned = False
+                if is_pdf:
+                    try:
+                        is_scanned = processor.is_scanned_pdf(attachment_path)
+                    except Exception as e:
+                        warnings.append(f"扫描检测失败 item={item_id}: {e}")
+
                 eligible_items.append(
                     {
                         "item_id": item_id,
                         "title": item.title[:80],
                         "creators": item.creators[:3],
                         "has_attachment": True,
+                        "attachment_path": attachment_path,
+                        "is_pdf": is_pdf,
+                        "is_scanned": is_scanned,
+                        "options": {
+                            "is_scanned": is_scanned,
+                            "force_ocr": False,
+                        },
                     }
                 )
             else:

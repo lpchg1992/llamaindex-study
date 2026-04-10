@@ -16,9 +16,26 @@ export interface TaskWebSocketMessage {
       nodes: number
       endpoint_stats?: Record<string, number>
       chunk_strategy?: string
+      failed?: number
+      processed_chunks?: number
+      total_chunks?: number
+      file_progress?: FileProgressItem[]
     }
     error?: string
+    file_progress?: FileProgressItem[]
   }
+}
+
+interface FileProgressItem {
+  file_id: string
+  file_name: string
+  status: 'pending' | 'processing' | 'embedding' | 'writing' | 'completed' | 'failed' | 'cancelled'
+  total_chunks: number
+  processed_chunks: number
+  db_written: boolean
+  error?: string
+  started_at?: number
+  completed_at?: number
 }
 
 export function useTaskWebSocket(enabled: boolean = true) {

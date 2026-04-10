@@ -37,9 +37,24 @@ function TaskDetailDialog({ taskId, open, onOpenChange }: TaskDetailDialogProps)
 
   if (!open) return null
 
+  const fileProgress = task?.file_progress || task?.result?.file_progress || []
+
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'completed': return 'bg-green-500'
+      case 'failed': return 'bg-red-500'
+      case 'processing':
+      case 'embedding':
+      case 'writing': return 'bg-blue-500'
+      case 'cancelled': return 'bg-gray-500'
+      case 'pending': return 'bg-yellow-500'
+      default: return 'bg-gray-400'
+    }
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[80vh]">
+      <DialogContent className="max-w-3xl max-h-[85vh]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Eye className="h-5 w-5" />
@@ -54,56 +69,98 @@ function TaskDetailDialog({ taskId, open, onOpenChange }: TaskDetailDialogProps)
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
           </div>
         ) : task ? (
-          <ScrollArea className="h-[60vh]">
+          <ScrollArea className="h-[70vh]">
             <div className="space-y-4 p-1">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <div>
-                  <Label className="text-muted-foreground">Task ID</Label>
-                  <p className="font-mono text-sm break-all">{task.task_id}</p>
-                </div>
-                <div>
-                  <Label className="text-muted-foreground">Status</Label>
+                  <Label className="text-muted-foreground text-xs">Status</Label>
                   <div className="mt-1">
-                    <Badge className={
-                      task.status === 'completed' ? 'bg-green-500' :
-                      task.status === 'failed' ? 'bg-red-500' :
-                      task.status === 'running' ? 'bg-blue-500' :
-                      task.status === 'paused' ? 'bg-orange-500' :
-                      task.status === 'cancelled' ? 'bg-gray-500' : 'bg-yellow-500'
-                    }>
+                    <Badge className={getStatusColor(task.status)}>
                       {task.status}
                     </Badge>
                   </div>
                 </div>
                 <div>
-                  <Label className="text-muted-foreground">Knowledge Base</Label>
-                  <p className="font-mono text-sm">{task.kb_id || 'N/A'}</p>
+                  <Label className="text-muted-foreground text-xs">Progress</Label>
+                  <p className="font-medium">{task.progress}%</p>
                 </div>
                 <div>
-                  <Label className="text-muted-foreground">Progress</Label>
-                  <p className="font-medium">{task.progress}%</p>
+                  <Label className="text-muted-foreground text-xs">Files</Label>
+                  <p className="font-medium">{task.result?.files ?? 0}</p>
+                </div>
+                <div>
+                  <Label className="text-muted-foreground text-xs">Failed</Label>
+                  <p className="font-medium text-red-500">{task.result?.failed ?? 0}</p>
                 </div>
               </div>
 
-              {task.result && (
+              {task.message && (
                 <div>
-                  <Label className="text-muted-foreground">Result</Label>
-                  <div className="mt-1 p-3 bg-muted rounded-lg">
-                    <pre className="text-xs whitespace-pre-wrap break-all">
-                      {JSON.stringify(task.result, null, 2)}
-                    </pre>
+                  <Label className="text-muted-foreground text-xs">Current Status</Label>
+                  <p className="text-sm mt-1">{task.message}</p>
+                </div>
+              )}
+
+              {fileProgress.length > 0 && (
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <Label className="text-muted-foreground text-xs">File Progress ({fileProgress.length} files)</Label>
+                    {task.result?.processed_chunks !== undefined && task.result?.total_chunks !== undefined && (
+                      <span className="text-xs text-muted-foreground">
+                        {task.result.processed_chunks} / {task.result.total_chunks} chunks
+                      </span>
+                    )}
+                  </div>
+                  <div className="space-y-2 max-h-80 overflow-y-auto">
+                    {fileProgress.map((file: any, idx: number) => (
+                      <div key={file.file_id || idx} className="border rounded-lg p-3 text-sm">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <Badge className={getStatusColor(file.status)} variant="outline">
+                              {file.status}
+                            </Badge>
+                            <span className="truncate font-medium" title={file.file_name}>
+                              {file.file_name}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            {file.db_written && (
+                              <span className="text-xs text-green-600" title="Written to database">DB</span>
+                            )}
+                            {file.error && (
+                              <span className="text-xs text-red-500" title={file.error}>Error</span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="flex-1 h-1.5 bg-secondary rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-primary transition-all"
+                              style={{
+                                width: file.total_chunks > 0
+                                  ? `${(file.processed_chunks / file.total_chunks) * 100}%`
+                                  : '0%'
+                              }}
+                            />
+                          </div>
+                          <span className="text-xs text-muted-foreground w-24 text-right">
+                            {file.processed_chunks} / {file.total_chunks} chunks
+                          </span>
+                        </div>
+                        {file.error && (
+                          <p className="text-xs text-red-500 mt-1 truncate" title={file.error}>
+                            {file.error}
+                          </p>
+                        )}
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}
 
-              <div>
-                <Label className="text-muted-foreground">Message</Label>
-                <p className="text-sm mt-1">{task.message || 'No message'}</p>
-              </div>
-
               {task.error && (
                 <div>
-                  <Label className="text-destructive">Error</Label>
+                  <Label className="text-destructive text-xs">Error</Label>
                   <p className="text-sm text-destructive mt-1 p-3 bg-destructive/10 rounded-lg">
                     {task.error}
                   </p>
