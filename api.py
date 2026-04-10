@@ -351,6 +351,7 @@ class KBInfo(BaseModel):
 
 class TaskResponse(BaseModel):
     task_id: str
+    task_type: Optional[str] = None
     status: str
     kb_id: str
     message: str = ""
@@ -754,6 +755,7 @@ def get_task(task_id: str):
 
     return TaskResponse(
         task_id=task.task_id,
+        task_type=task.task_type,
         status=task.status,
         kb_id=task.kb_id,
         message=task.message,
