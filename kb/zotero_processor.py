@@ -535,6 +535,15 @@ class ZoteroImporter:
             f"[ZoteroImporter.import_item] item_id={item.item_id}, title={item.title}, file_path={item.file_path}, is_scanned={is_scanned}, force_ocr={force_ocr}"
         )
 
+        if not item.file_path:
+            logger.warning(
+                f"[ZoteroImporter.import_item] file_path is None, skipping attachment processing"
+            )
+        elif not Path(item.file_path).exists():
+            logger.warning(
+                f"[ZoteroImporter.import_item] file_path does not exist: {item.file_path}"
+            )
+
         if item.file_path and Path(item.file_path).exists():
             file_path = Path(item.file_path)
             ext = file_path.suffix.lower()
