@@ -572,14 +572,14 @@ class ZoteroService:
             if not item:
                 raise ValueError(f"文献不存在: {item_id}")
 
-            logger.info(
-                f"[ZoteroService.import_item] item_id={item_id}, prefix={prefix}, file_path={item.file_path}, force_ocr={force_ocr}, is_scanned_override={is_scanned_override}"
-            )
-
             progress = ProcessingProgress()
 
             force_ocr = options.get("force_ocr", False) if options else False
             is_scanned_override = options.get("is_scanned") if options else None
+
+            logger.info(
+                f"[ZoteroService.import_item] item_id={item_id}, prefix={prefix}, file_path={item.file_path}, force_ocr={force_ocr}, is_scanned_override={is_scanned_override}"
+            )
             nodes, all_nodes, processed_sources = importer.import_item(
                 item=item,
                 vector_store=vs,
