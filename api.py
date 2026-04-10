@@ -60,6 +60,8 @@ API 端点:
     POST /lance/{kb_id}/export      - 导出到 JSONL
 """
 
+from __future__ import annotations
+
 import asyncio
 import threading
 from dataclasses import asdict
@@ -67,7 +69,7 @@ from pathlib import Path
 from typing import List, Optional, Dict, Literal, Any
 import markdown
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
@@ -319,6 +321,14 @@ class IngestResponse(BaseModel):
     nodes_created: Optional[int] = None
     failed: Optional[int] = None
     source: Optional[str] = None
+
+
+class DangerousOperationRequest(BaseModel):
+    """需要输入知识库名称确认的危险操作请求"""
+
+    confirmation_name: str = Field(
+        ..., description="输入知识库名称以确认操作（区分大小写）"
+    )
 
 
 class KBInfo(BaseModel):
@@ -1356,6 +1366,9 @@ class ZoteroPreviewRequest(BaseModel):
         None, description="收藏夹 ID（将预览该收藏夹下所有文献）"
     )
     prefix: str = Field("[kb]", description="附件标题前缀标记（默认 [kb]）")
+    include_exts: Optional[List[str]] = Field(
+        None, description='只包含指定的文件扩展名，如 ["pdf", "docx"]'
+    )
     force_ocr: bool = Field(False, description="强制 OCR 重新识别")
     force_md_cache: bool = Field(False, description="强制使用本地 MD 缓存")
 
@@ -1383,6 +1396,46 @@ class ZoteroPreviewResponse(BaseModel):
     duplicate_items: int
     items: List[ZoteroPreviewItem]
     filtering_rules: List[str] = []
+
+
+class ObsidianPreviewRequest(BaseModel):
+    vault_path: str = Field(..., description="Vault 路径")
+    folder_path: Optional[str] = Field(None, description="子文件夹路径")
+    prefix: Optional[str] = Field(None, description="文件名前缀筛选")
+
+
+class ObsidianPreviewItem(BaseModel):
+    path: str
+    size: int
+    relative_path: str
+
+
+class ObsidianPreviewResponse(BaseModel):
+    total_items: int
+    eligible_items: int
+    filtering_rules: List[str] = []
+    items: List[ObsidianPreviewItem]
+    warnings: List[str] = []
+
+
+class FilePreviewRequest(BaseModel):
+    paths: List[str] = Field(..., description="文件或目录路径列表")
+    include_exts: Optional[List[str]] = Field(None, description="只包含指定的扩展名")
+    exclude_exts: Optional[List[str]] = Field(None, description="排除指定的扩展名")
+
+
+class FilePreviewItem(BaseModel):
+    path: str
+    name: str
+    size: int
+
+
+class FilePreviewResponse(BaseModel):
+    total_items: int
+    eligible_items: int
+    filtering_rules: List[str] = []
+    items: List[FilePreviewItem]
+    warnings: List[str] = []
 
 
 @app.get("/zotero/collections")
@@ -1450,10 +1503,13 @@ def preview_zotero_import(req: ZoteroPreviewRequest):
             pass
 
     prefix = req.prefix or "[kb]"
+    include_exts = req.include_exts
     filtering_rules = [
         f"附件标题必须包含 {prefix} 前缀才会被导入",
         "已导入的文献会被跳过（通过 document 表查询）",
     ]
+    if include_exts:
+        filtering_rules.append(f"只导入扩展名: {', '.join(include_exts)}")
 
     eligible_items = []
     ineligible_items = []
@@ -1495,6 +1551,12 @@ def preview_zotero_import(req: ZoteroPreviewRequest):
         ext = Path(attachment_path).suffix.lower() if attachment_path else ""
         preview_item.attachment_type = ext.lstrip(".")
 
+        if include_exts and ext.lstrip(".") not in include_exts:
+            preview_item.is_eligible = False
+            preview_item.ineligible_reason = f"扩展名 {ext.lstrip('.')} 不在筛选范围内"
+            ineligible_items.append(preview_item)
+            continue
+
         if ext == ".pdf" and attachment_path:
             pdf_path = Path(attachment_path)
             if pdf_path.exists():
@@ -1518,6 +1580,123 @@ def preview_zotero_import(req: ZoteroPreviewRequest):
         duplicate_items=len(duplicate_items),
         items=eligible_items + ineligible_items + duplicate_items,
         filtering_rules=filtering_rules,
+    )
+
+
+@app.post("/obsidian/preview", response_model=ObsidianPreviewResponse)
+def preview_obsidian_import(req: ObsidianPreviewRequest):
+    from pathlib import Path
+
+    vault = Path(req.vault_path)
+    filtering_rules = [
+        "只处理 .md 文件",
+        "忽略以 _ 开头的目录（Obsidian 约定）",
+    ]
+    warnings = []
+
+    if not vault.exists():
+        return ObsidianPreviewResponse(
+            total_items=0,
+            eligible_items=0,
+            filtering_rules=filtering_rules,
+            items=[],
+            warnings=[f"Vault 路径不存在: {req.vault_path}"],
+        )
+
+    import_dir = vault
+    if req.folder_path:
+        import_dir = vault / req.folder_path
+        if not import_dir.exists():
+            return ObsidianPreviewResponse(
+                total_items=0,
+                eligible_items=0,
+                filtering_rules=filtering_rules,
+                items=[],
+                warnings=[f"文件夹路径不存在: {req.folder_path}"],
+            )
+
+    md_files = list(import_dir.rglob("*.md"))
+    md_files = [
+        f for f in md_files if not any(p.name.startswith("_") for p in f.parents)
+    ]
+
+    prefix = req.prefix
+    if prefix:
+        md_files = [f for f in md_files if f.name.startswith(prefix)]
+        filtering_rules.append(f"只导入文件名前缀为 '{prefix}' 的文件")
+
+    total_items = len(md_files)
+    filtering_rules.append(f"共找到 {total_items} 个 .md 文件")
+
+    preview_items = [
+        ObsidianPreviewItem(
+            path=str(f),
+            relative_path=str(f.relative_to(import_dir)),
+            size=f.stat().st_size,
+        )
+        for f in md_files[:50]
+    ]
+
+    return ObsidianPreviewResponse(
+        total_items=total_items,
+        eligible_items=total_items,
+        filtering_rules=filtering_rules,
+        items=preview_items,
+        warnings=warnings,
+    )
+
+
+@app.post("/file/preview", response_model=FilePreviewResponse)
+def preview_file_import(req: FilePreviewRequest):
+    from pathlib import Path
+    from kb.generic_processor import GenericImporter
+
+    importer = GenericImporter()
+    filtering_rules = []
+    warnings = []
+    all_files: List[Path] = []
+
+    for path_str in req.paths:
+        p = Path(path_str)
+        if not p.exists():
+            warnings.append(f"路径不存在: {path_str}")
+            continue
+        if p.is_file():
+            all_files.append(p)
+        elif p.is_dir():
+            files = importer.collect_files(
+                [p],
+                include_exts=req.include_exts or [],
+                exclude_exts=req.exclude_exts or [],
+            )
+            all_files.extend(files)
+
+    total_items = len(all_files)
+
+    if req.include_exts:
+        filtering_rules.append(f"只处理扩展名: {', '.join(req.include_exts)}")
+    if req.exclude_exts:
+        filtering_rules.append(f"排除扩展名: {', '.join(req.exclude_exts)}")
+    if not req.include_exts and not req.exclude_exts:
+        filtering_rules.append("使用默认扩展名: pdf, docx, xlsx, md, txt 等")
+
+    filtering_rules.append(f"共找到 {total_items} 个文件")
+
+    preview_items = [
+        FilePreviewItem(
+            path=str(f),
+            name=f.name,
+            size=f.stat().st_size,
+        )
+        for f in all_files[:50]
+    ]
+
+    return FilePreviewResponse(
+        total_items=total_items,
+        eligible_items=total_items,
+        filtering_rules=filtering_rules,
+        items=preview_items,
+        warnings=warnings,
     )
 
 
@@ -1879,14 +2058,6 @@ def check_consistency(kb_id: str):
 class RepairRequest(BaseModel):
     mode: str = Field(
         "sync", description="修复模式: sync(删除orphan), rebuild(重建), dry(只报告)"
-    )
-
-
-class DangerousOperationRequest(BaseModel):
-    """需要输入知识库名称确认的危险操作请求"""
-
-    confirmation_name: str = Field(
-        ..., description="输入知识库名称以确认操作（区分大小写）"
     )
 
 

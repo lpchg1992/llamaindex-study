@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useRef } from 'react'
+import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   useIngestSelective,
@@ -7,6 +7,8 @@ import {
   useObsidianVaults,
   useObsidianVaultTree,
   useZoteroPreview,
+  useObsidianPreview,
+  useFilePreview,
 } from '@/api/hooks'
 
 import { Button } from '@/components/ui/button'
@@ -24,6 +26,7 @@ import { FileTree } from '@/components/FileTree'
 import type { FileTreeItem } from '@/components/FileTree'
 import { SelectedFilesPanel } from '@/components/SelectedFilesPanel'
 import { ImportPreviewModal } from '@/components/ImportPreviewModal'
+import { FileListPreviewModal } from '@/components/FileListPreviewModal'
 import {
   Dialog,
   DialogContent,
@@ -32,7 +35,12 @@ import {
 } from '@/components/ui/dialog'
 import { Upload, FolderOpen, Book, FileText, RefreshCw, Eye, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
-import type { ObsidianVaultTree, ZoteroPreviewItem } from '@/types/api'
+import type { 
+  ObsidianVaultTree, 
+  ZoteroPreviewItem,
+  ObsidianPreviewItem,
+  FilePreviewItem,
+} from '@/types/api'
 
 interface ImportDialogProps {
   open: boolean
@@ -77,6 +85,7 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
     filteringRules: [] as string[],
   })
   const [zoteroPrefix, setZoteroPrefix] = useState("[kb]")
+  const [zoteroIncludeExts, setZoteroIncludeExts] = useState("")
   const [zoteroDetectedScannedIds, setZoteroDetectedScannedIds] = useState<Set<number>>(new Set())
   const [zoteroForceOcrIds, setZoteroForceOcrIds] = useState<Set<number>>(new Set())
   const [zoteroManualScannedIds, setZoteroManualScannedIds] = useState<Set<number>>(new Set())
@@ -88,6 +97,32 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
     meta: typeof previewMeta
     itemIds: number[]
   } | null>(null)
+
+  useEffect(() => {
+    setPreviewCache(null)
+  }, [zoteroIncludeExts])
+
+  const obsidianPreview = useObsidianPreview()
+  const [obsidianPreviewOpen, setObsidianPreviewOpen] = useState(false)
+  const [obsidianPreviewData, setObsidianPreviewData] = useState<ObsidianPreviewItem[]>([])
+  const [obsidianPreviewMeta, setObsidianPreviewMeta] = useState({
+    totalItems: 0,
+    eligibleItems: 0,
+    filteringRules: [] as string[],
+    warnings: [] as string[],
+  })
+  const [obsidianPrefix, setObsidianPrefix] = useState("")
+
+  const filePreview = useFilePreview()
+  const [filePreviewOpen, setFilePreviewOpen] = useState(false)
+  const [filePreviewData, setFilePreviewData] = useState<FilePreviewItem[]>([])
+  const [filePreviewMeta, setFilePreviewMeta] = useState({
+    totalItems: 0,
+    eligibleItems: 0,
+    filteringRules: [] as string[],
+    warnings: [] as string[],
+  })
+  const [fileIncludeExts, setFileIncludeExts] = useState("")
 
   const zoteroTreeItems = useMemo<FileTreeItem[]>(() => {
     if (!zoteroCollectionsData?.collections) return []
@@ -169,10 +204,15 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
     }
 
     try {
+      const includeExts = zoteroIncludeExts
+        .split(',')
+        .map(ext => ext.trim().toLowerCase())
+        .filter(ext => ext.length > 0)
       const result = await zoteroPreview.mutateAsync({
         kb_id: kbId,
         item_ids: itemIds,
         prefix: zoteroPrefix,
+        include_exts: includeExts.length > 0 ? includeExts : undefined,
       })
       const newMeta = {
         totalItems: result.total_items,
@@ -249,10 +289,15 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
     }
 
     try {
+      const includeExts = zoteroIncludeExts
+        .split(',')
+        .map(ext => ext.trim().toLowerCase())
+        .filter(ext => ext.length > 0)
       const result = await zoteroPreview.mutateAsync({
         kb_id: kbId,
         item_ids: itemIds,
         prefix: zoteroPrefix,
+        include_exts: includeExts.length > 0 ? includeExts : undefined,
       })
       const newMeta = {
         totalItems: result.total_items,
@@ -269,6 +314,66 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
       })
     } catch (error: any) {
       toast.error(error.response?.data?.detail || '刷新预览失败')
+    }
+  }
+
+  const handlePreviewObsidian = async () => {
+    if (!selectedVault) {
+      toast.error('请先选择 Vault')
+      return
+    }
+
+    const vault = obsidianVaults?.vaults.find(v => v.name === selectedVault)
+    if (!vault) {
+      toast.error('未找到 Vault 信息')
+      return
+    }
+
+    try {
+      const result = await obsidianPreview.mutateAsync({
+        vault_path: vault.path,
+        prefix: obsidianPrefix || undefined,
+      })
+      setObsidianPreviewData(result.items)
+      setObsidianPreviewMeta({
+        totalItems: result.total_items,
+        eligibleItems: result.eligible_items,
+        filteringRules: result.filtering_rules,
+        warnings: result.warnings,
+      })
+      setObsidianPreviewOpen(true)
+    } catch (error: any) {
+      toast.error(error.response?.data?.detail || '预览失败')
+    }
+  }
+
+  const handlePreviewFiles = async () => {
+    if (fileSelectedItems.length === 0) {
+      toast.error('请先选择文件')
+      return
+    }
+
+    const paths = fileSelectedItems.map(item => item.path || item.name)
+
+    try {
+      const includeExts = fileIncludeExts
+        .split(',')
+        .map(ext => ext.trim().toLowerCase())
+        .filter(ext => ext.length > 0)
+      const result = await filePreview.mutateAsync({
+        paths,
+        include_exts: includeExts.length > 0 ? includeExts : undefined,
+      })
+      setFilePreviewData(result.items)
+      setFilePreviewMeta({
+        totalItems: result.total_items,
+        eligibleItems: result.eligible_items,
+        filteringRules: result.filtering_rules,
+        warnings: result.warnings,
+      })
+      setFilePreviewOpen(true)
+    } catch (error: any) {
+      toast.error(error.response?.data?.detail || '预览失败')
     }
   }
 
@@ -468,6 +573,16 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
                       <Label htmlFor="prefix" className="text-xs text-muted-foreground">前缀</Label>
                       <Input id="prefix" value={zoteroPrefix} onChange={(e) => setZoteroPrefix(e.target.value)} className="h-7 w-20 text-xs" />
                     </div>
+                    <div className="flex items-center gap-2">
+                      <Label htmlFor="exts" className="text-xs text-muted-foreground">文件类型</Label>
+                      <Input 
+                        id="exts" 
+                        value={zoteroIncludeExts} 
+                        onChange={(e) => setZoteroIncludeExts(e.target.value)} 
+                        className="h-7 w-24 text-xs" 
+                        placeholder="如: pdf,docx"
+                      />
+                    </div>
                     <Button variant="default" size="sm" onClick={handlePreviewZotero} disabled={zoteroSelectedItems.filter(i => i.type === 'item').length === 0 || zoteroPreview.isPending}>
                       <Eye className={`h-4 w-4 ${zoteroPreview.isPending ? 'animate-spin' : ''} mr-1`} />
                       预览
@@ -508,6 +623,25 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
                     <Button variant="outline" size="sm" onClick={() => refetchVaults()} disabled={vaultsLoading}>
                       <RefreshCw className={`h-4 w-4 ${vaultsLoading ? 'animate-spin' : ''}`} />
                     </Button>
+                    <div className="flex items-center gap-2">
+                      <Label htmlFor="obsidian-prefix" className="text-xs text-muted-foreground">前缀</Label>
+                      <Input 
+                        id="obsidian-prefix" 
+                        value={obsidianPrefix} 
+                        onChange={(e) => setObsidianPrefix(e.target.value)} 
+                        className="h-7 w-20 text-xs" 
+                        placeholder="可选"
+                      />
+                    </div>
+                    <Button 
+                      variant="default" 
+                      size="sm" 
+                      onClick={handlePreviewObsidian} 
+                      disabled={!selectedVault || obsidianPreview.isPending}
+                    >
+                      <Eye className={`h-4 w-4 ${obsidianPreview.isPending ? 'animate-spin' : ''} mr-1`} />
+                      预览
+                    </Button>
                   </div>
                   <div className="text-sm text-muted-foreground mb-3">
                     {obsidianSelectedItems.length} 个文件已选择
@@ -532,6 +666,25 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
                     <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFileChange} />
                     <Button onClick={handleFilePicker} variant="outline" className="w-full max-w-xs">
                       <Upload className="h-4 w-4 mr-2" />选择文件
+                    </Button>
+                    <div className="flex items-center gap-2">
+                      <Label htmlFor="file-exts" className="text-xs text-muted-foreground">文件类型</Label>
+                      <Input 
+                        id="file-exts" 
+                        value={fileIncludeExts} 
+                        onChange={(e) => setFileIncludeExts(e.target.value)} 
+                        className="h-7 w-32 text-xs" 
+                        placeholder="如: pdf,docx"
+                      />
+                    </div>
+                    <Button 
+                      variant="default" 
+                      size="sm" 
+                      onClick={handlePreviewFiles} 
+                      disabled={fileSelectedItems.length === 0 || filePreview.isPending}
+                    >
+                      <Eye className={`h-4 w-4 ${filePreview.isPending ? 'animate-spin' : ''} mr-1`} />
+                      预览
                     </Button>
                     <p className="text-xs text-muted-foreground text-center">支持 PDF, DOCX, XLSX, PPTX, MD, TXT 等格式</p>
                   </div>
@@ -591,6 +744,32 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
       onConfirm={handlePreviewConfirm}
       onRefresh={handleRefreshPreview}
       isLoading={zoteroPreview.isPending}
+    />
+
+    <FileListPreviewModal
+      open={obsidianPreviewOpen}
+      onOpenChange={setObsidianPreviewOpen}
+      title="Obsidian 预览"
+      items={obsidianPreviewData}
+      filteringRules={obsidianPreviewMeta.filteringRules}
+      totalItems={obsidianPreviewMeta.totalItems}
+      warnings={obsidianPreviewMeta.warnings}
+      onRefresh={handlePreviewObsidian}
+      isLoading={obsidianPreview.isPending}
+      emptyMessage="没有找到 .md 文件"
+    />
+
+    <FileListPreviewModal
+      open={filePreviewOpen}
+      onOpenChange={setFilePreviewOpen}
+      title="文件预览"
+      items={filePreviewData}
+      filteringRules={filePreviewMeta.filteringRules}
+      totalItems={filePreviewMeta.totalItems}
+      warnings={filePreviewMeta.warnings}
+      onRefresh={handlePreviewFiles}
+      isLoading={filePreview.isPending}
+      emptyMessage="没有文件"
     />
     </>
   )

@@ -271,6 +271,7 @@ export interface ZoteroPreviewRequest {
   item_ids?: number[]
   collection_id?: string
   prefix?: string
+  include_exts?: string[]
 }
 
 
@@ -307,6 +308,46 @@ export interface ObsidianVaultTree {
   vault_name: string
   vault_path: string
   items: ObsidianVaultItem[]
+}
+
+export interface ObsidianPreviewRequest {
+  vault_path: string
+  folder_path?: string
+  prefix?: string
+}
+
+export interface ObsidianPreviewItem {
+  path: string
+  relative_path: string
+  size: number
+}
+
+export interface ObsidianPreviewResponse {
+  total_items: number
+  eligible_items: number
+  filtering_rules: string[]
+  items: ObsidianPreviewItem[]
+  warnings: string[]
+}
+
+export interface FilePreviewRequest {
+  paths: string[]
+  include_exts?: string[]
+  exclude_exts?: string[]
+}
+
+export interface FilePreviewItem {
+  path: string
+  name: string
+  size: number
+}
+
+export interface FilePreviewResponse {
+  total_items: number
+  eligible_items: number
+  filtering_rules: string[]
+  items: FilePreviewItem[]
+  warnings: string[]
 }
 
 // LanceDB

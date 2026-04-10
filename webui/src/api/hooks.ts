@@ -22,10 +22,14 @@ import type {
   ZoteroCollectionWithItems,
   ZoteroPreviewRequest,
   ZoteroPreviewResponse,
+  ObsidianPreviewRequest,
+  ObsidianPreviewResponse,
   ObsidianVaultsResponse,
   ObsidianVault,
   ObsidianVaultStructure,
   ObsidianVaultTree,
+  FilePreviewRequest,
+  FilePreviewResponse,
   LanceTableStats,
   LanceDocSummary,
   LanceNode,
@@ -455,6 +459,30 @@ export function useZoteroPreview() {
     mutationFn: async (req) => {
       const { data } = await apiClient.post<ZoteroPreviewResponse>(
         `${API_BASE}/zotero/preview`,
+        req
+      )
+      return data
+    },
+  })
+}
+
+export function useObsidianPreview() {
+  return useMutation<ObsidianPreviewResponse, Error, ObsidianPreviewRequest>({
+    mutationFn: async (req) => {
+      const { data } = await apiClient.post<ObsidianPreviewResponse>(
+        `${API_BASE}/obsidian/preview`,
+        req
+      )
+      return data
+    },
+  })
+}
+
+export function useFilePreview() {
+  return useMutation<FilePreviewResponse, Error, FilePreviewRequest>({
+    mutationFn: async (req) => {
+      const { data } = await apiClient.post<FilePreviewResponse>(
+        `${API_BASE}/file/preview`,
         req
       )
       return data
