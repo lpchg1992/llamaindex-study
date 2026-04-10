@@ -68,7 +68,7 @@ function VendorPanel({ vendor }: { vendor: VendorStats }) {
 
       {expanded && (
         <div className="p-4">
-          {vendor.models.length === 0 ? (
+          {models.length === 0 ? (
             <p className="text-muted-foreground text-center py-4">No model data</p>
           ) : (
             <div className="space-y-6">
