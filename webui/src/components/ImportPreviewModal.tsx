@@ -309,7 +309,7 @@ export function ImportPreviewModal({
                             return (
                               <Checkbox
                                 checked={forceOcrIds.has(item.item_id)}
-                                onCheckedChange={(checked) => toggleForceOcr(item.item_id, checked)}
+                                onCheckedChange={(checked) => toggleForceOcr(item.item_id, !!checked)}
                                 aria-label={`强制 OCR ${item.title}`}
                               />
                             )

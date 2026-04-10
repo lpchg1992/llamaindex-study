@@ -526,6 +526,12 @@ export interface ExtractResponse {
   error?: string
 }
 
+// File Preview
+export interface FilePreviewItem {
+  path: string
+  size: number
+}
+
 // Settings
 export interface SystemSettings {
   llm_mode: string
