@@ -615,6 +615,7 @@ class TaskQueue:
         total_chunks: int = None,
         db_written: bool = None,
         error: str = None,
+        file_name: str = None,
     ):
         """更新单个文件的进度"""
         with self._session_scope() as session:
@@ -641,6 +642,8 @@ class TaskQueue:
                         f["db_written"] = db_written
                     if error is not None:
                         f["error"] = error
+                    if file_name is not None:
+                        f["file_name"] = file_name
                     if (
                         status == FileStatus.PROCESSING.value
                         and f.get("started_at") is None

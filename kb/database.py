@@ -1091,6 +1091,29 @@ class KnowledgeBaseMetaDB:
             )
             return (result.rowcount or 0) > 0
 
+    def update_info(
+        self,
+        kb_id: str,
+        name: Optional[str] = None,
+        description: Optional[str] = None,
+    ) -> bool:
+        updates: Dict[str, Any] = {"updated_at": time.time()}
+        if name is not None:
+            updates["name"] = name
+        if description is not None:
+            updates["description"] = description
+
+        if len(updates) == 1:
+            return False
+
+        with self.db.session_scope() as session:
+            result = session.execute(
+                update(KnowledgeBaseMetaModel)
+                .where(KnowledgeBaseMetaModel.kb_id == kb_id)
+                .values(**updates)
+            )
+            return (result.rowcount or 0) > 0
+
     def update_topics(self, kb_id: str, topics: List[str]) -> bool:
         with self.db.session_scope() as session:
             result = session.execute(
@@ -1572,6 +1595,65 @@ class ChunkDB:
                 .values(embedding_generated=1, updated_at=time.time())
             )
             return result.rowcount or 0
+
+    def mark_failed_bulk(self, chunk_ids: List[str]) -> int:
+        if not chunk_ids:
+            return 0
+        with self.db.session_scope() as session:
+            result = session.execute(
+                update(ChunkModel)
+                .where(ChunkModel.id.in_(chunk_ids))
+                .values(embedding_generated=2, updated_at=time.time())
+            )
+            return result.rowcount or 0
+
+    def get_failed_chunks(self, kb_id: str, limit: int = 1000) -> List[Dict[str, Any]]:
+        with self.db.session_scope() as session:
+            rows = session.scalars(
+                select(ChunkModel)
+                .where(ChunkModel.kb_id == kb_id, ChunkModel.embedding_generated == 2)
+                .limit(limit)
+            ).all()
+            return [self._to_dict(row) for row in rows]
+
+    def get_embedding_stats(self, kb_id: str) -> Dict[str, int]:
+        with self.db.session_scope() as session:
+            total = (
+                session.scalar(
+                    select(func.count(ChunkModel.id)).where(ChunkModel.kb_id == kb_id)
+                )
+                or 0
+            )
+            success = (
+                session.scalar(
+                    select(func.count(ChunkModel.id)).where(
+                        ChunkModel.kb_id == kb_id, ChunkModel.embedding_generated == 1
+                    )
+                )
+                or 0
+            )
+            failed = (
+                session.scalar(
+                    select(func.count(ChunkModel.id)).where(
+                        ChunkModel.kb_id == kb_id, ChunkModel.embedding_generated == 2
+                    )
+                )
+                or 0
+            )
+            pending = (
+                session.scalar(
+                    select(func.count(ChunkModel.id)).where(
+                        ChunkModel.kb_id == kb_id, ChunkModel.embedding_generated == 0
+                    )
+                )
+                or 0
+            )
+            return {
+                "total": total,
+                "success": success,
+                "failed": failed,
+                "pending": pending,
+            }
 
     def update_parent(self, chunk_id: str, new_parent_id: Optional[str]) -> bool:
         with self.db.session_scope() as session:

@@ -985,6 +985,34 @@ export function useReembedChunk() {
   })
 }
 
+export function useFailedChunks(kbId: string) {
+  return useQuery<{ chunks: any[]; total: number; stats: { total: number; success: number; failed: number; pending: number } }>({
+    queryKey: ['failed-chunks', kbId],
+    queryFn: async () => {
+      const { data } = await apiClient.get(`${API_BASE}/kbs/${kbId}/chunks/failed`)
+      return data
+    },
+    enabled: !!kbId,
+  })
+}
+
+export function useReembedFailedChunks() {
+  const queryClient = useQueryClient()
+  return useMutation<{ status: string; processed: number; failed: number; message: string }, Error, { kbId: string; batchSize?: number }>({
+    mutationFn: async ({ kbId, batchSize = 50 }) => {
+      const { data } = await apiClient.post(`${API_BASE}/kbs/${kbId}/chunks/reembed-failed`, null, {
+        params: { batch_size: batchSize },
+      })
+      return data
+    },
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['failed-chunks', variables.kbId] })
+      queryClient.invalidateQueries({ queryKey: ['documents', variables.kbId] })
+      queryClient.invalidateQueries({ queryKey: ['document-chunks', variables.kbId] })
+    },
+  })
+}
+
 export function useDeleteChunk() {
   const queryClient = useQueryClient()
   return useMutation<

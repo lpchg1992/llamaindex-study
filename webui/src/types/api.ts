@@ -12,7 +12,6 @@ export interface KBInfo {
 export interface KBUpdateRequest {
   name?: string
   description?: string
-  chunk_strategy?: string
 }
 
 export interface TopicUpdateRequest {
@@ -409,7 +408,7 @@ export interface ChunkInfo {
   parent_chunk_id: string | null
   hierarchy_level: number
   metadata: Record<string, unknown>
-  embedding_generated: boolean
+  embedding_generated: 0 | 1 | 2
   created_at: number
   updated_at: number
 }

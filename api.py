@@ -173,6 +173,9 @@ app.add_middleware(
         # 远程 LAN 访问
         "http://100.66.1.2:5173",
         "http://100.66.1.2:37241",
+        # 用户 LAN 访问
+        "http://192.168.31.207:5173",
+        "http://192.168.31.207:37241",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -888,6 +891,28 @@ def get_kb_info(kb_id: str):
     return info
 
 
+class KBUpdateRequest(BaseModel):
+    name: Optional[str] = Field(None, description="知识库显示名称")
+    description: Optional[str] = Field(None, description="知识库描述")
+
+
+@app.put("/kbs/{kb_id}")
+def update_kb_info(kb_id: str, req: KBUpdateRequest):
+    """更新知识库信息"""
+    info = KnowledgeBaseService.get_info(kb_id)
+    if not info:
+        raise HTTPException(status_code=404, detail=f"知识库 {kb_id} 不存在")
+    try:
+        result = KnowledgeBaseService.update_info(
+            kb_id,
+            name=req.name,
+            description=req.description,
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @app.delete("/kbs/{kb_id}")
 def delete_kb(kb_id: str, req: DangerousOperationRequest = Body(...)):
     """删除知识库"""
@@ -960,6 +985,7 @@ def list_vendors():
 def create_vendor(req: VendorCreateRequest):
     """创建或更新供应商"""
     from kb.database import init_vendor_db
+    from kb.parallel_embedding import get_parallel_processor
 
     db = init_vendor_db()
     db.upsert(
@@ -969,6 +995,7 @@ def create_vendor(req: VendorCreateRequest):
         api_key=req.api_key,
         is_active=req.is_active,
     )
+    get_parallel_processor().refresh_endpoints()
     return VendorInfo(**db.get(req.id))
 
 
@@ -988,11 +1015,13 @@ def get_vendor(vendor_id: str):
 def delete_vendor(vendor_id: str):
     """删除供应商"""
     from kb.database import init_vendor_db
+    from kb.parallel_embedding import get_parallel_processor
 
     db = init_vendor_db()
     if not db.get(vendor_id):
         raise HTTPException(status_code=404, detail=f"供应商 {vendor_id} 不存在")
     db.delete(vendor_id)
+    get_parallel_processor().refresh_endpoints()
     return {"status": "deleted", "vendor_id": vendor_id}
 
 
@@ -1000,6 +1029,7 @@ def delete_vendor(vendor_id: str):
 def update_vendor(vendor_id: str, req: VendorCreateRequest):
     """更新供应商"""
     from kb.database import init_vendor_db
+    from kb.parallel_embedding import get_parallel_processor
 
     db = init_vendor_db()
     if not db.get(vendor_id):
@@ -1011,6 +1041,7 @@ def update_vendor(vendor_id: str, req: VendorCreateRequest):
         api_key=req.api_key,
         is_active=req.is_active,
     )
+    get_parallel_processor().refresh_endpoints()
     return VendorInfo(**db.get(vendor_id))
 
 
@@ -2603,6 +2634,82 @@ def reembed_chunk(kb_id: str, chunk_id: str):
         "status": "pending",
         "chunk_id": chunk_id,
         "message": "需要重新启动服务以加载 embedding 模型",
+    }
+
+
+@app.get("/kbs/{kb_id}/chunks/failed")
+def list_failed_chunks(kb_id: str, limit: int = 1000):
+    """获取所有 embedding 失败的 chunks"""
+    from kb.database import init_chunk_db
+
+    chunk_db = init_chunk_db()
+    failed_chunks = chunk_db.get_failed_chunks(kb_id, limit=limit)
+    stats = chunk_db.get_embedding_stats(kb_id)
+    return {
+        "chunks": failed_chunks,
+        "total": len(failed_chunks),
+        "stats": stats,
+    }
+
+
+@app.post("/kbs/{kb_id}/chunks/reembed-failed")
+def reembed_failed_chunks(kb_id: str, batch_size: int = 50):
+    """批量重新 embedding 所有失败的 chunks"""
+    from kb.database import init_chunk_db
+    from kb.lance_crud import LanceCRUDService
+    from llamaindex_study.llama_utils import get_default_embed_model
+
+    chunk_db = init_chunk_db()
+    failed_chunks = chunk_db.get_failed_chunks(kb_id, limit=10000)
+
+    if not failed_chunks:
+        return {
+            "status": "success",
+            "message": "没有需要重新 embedding 的 chunks",
+            "processed": 0,
+            "failed": 0,
+        }
+
+    embed_model = None
+    try:
+        embed_model = get_default_embed_model()
+    except Exception as e:
+        logger.warning(f"获取 embedding 模型失败: {e}")
+
+    if not embed_model:
+        return {
+            "status": "error",
+            "message": "无法获取 embedding 模型，需要重新启动服务",
+            "processed": 0,
+            "failed": len(failed_chunks),
+        }
+
+    processed = 0
+    failed = 0
+    failed_ids = []
+
+    for chunk in failed_chunks:
+        try:
+            embedding = embed_model.get_text_embedding(chunk["text"])
+            LanceCRUDService.upsert_vector(chunk["id"], chunk["doc_id"], embedding)
+            chunk_db.mark_embedded(chunk["id"])
+            processed += 1
+        except Exception as e:
+            logger.warning(f"Re-embed chunk {chunk['id']} failed: {e}")
+            failed_ids.append(chunk["id"])
+            failed += 1
+
+        if processed % batch_size == 0:
+            logger.info(f"Re-embedded {processed}/{len(failed_chunks)} chunks")
+
+    if failed_ids:
+        chunk_db.mark_failed_bulk(failed_ids)
+
+    return {
+        "status": "success",
+        "processed": processed,
+        "failed": failed,
+        "message": f"处理完成: {processed} 成功, {failed} 失败",
     }
 
 

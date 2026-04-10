@@ -129,6 +129,18 @@ class ParallelEmbeddingProcessor:
         except RuntimeError:
             logger.warning("无法启动健康检查循环：没有运行中的事件循环")
 
+    def refresh_endpoints(self) -> None:
+        """重新加载端点配置（vendor 变更后调用）"""
+        logger.info("刷新 embedding 端点配置")
+        new_endpoints = self._load_embedding_endpoints()
+        self.endpoints = new_endpoints
+        self._stats = {ep.name: 0 for ep in self.endpoints}
+        self._failures = {ep.name: 0 for ep in self.endpoints}
+        for ep in self.endpoints:
+            self._consecutive_failures[ep.name] = 0
+        self._models.clear()
+        logger.info(f"端点已刷新，共 {len(self.endpoints)} 个端点")
+
     def _load_embedding_endpoints(self) -> List["EmbeddingEndpoint"]:
         """从数据库加载 embedding 端点（带健康检查）"""
         from llamaindex_study.config import get_model_registry
@@ -352,6 +364,15 @@ class ParallelEmbeddingProcessor:
                 )
         return self._models[cache_key]
 
+    def _record_embedding(self, ep: EmbeddingEndpoint, token_count: int, error: bool):
+        try:
+            from llamaindex_study.ollama_utils import _record_embedding_call
+
+            vendor_id = "siliconflow" if ep.url == "siliconflow://" else "ollama"
+            _record_embedding_call(vendor_id, ep.model_id, token_count, error)
+        except Exception:
+            pass
+
     def _get_embedding_with_retry(
         self, text: str, ep: EmbeddingEndpoint
     ) -> EmbeddingResult:
@@ -366,14 +387,27 @@ class ParallelEmbeddingProcessor:
         sf_ep = next((e for e in self.endpoints if e.url == "siliconflow://"), None)
 
         def call_sf() -> EmbeddingResult:
+            text_len = len(text[:8192])
             if sf_ep is None:
+                self._record_embedding(ep, 0, True)
+                logger.error(
+                    f"[Fallback] SiliconFlow 端点未配置，embedding 失败 (text_len={text_len})"
+                )
                 return (ep.name, [0.0] * EMBEDDING_DIM, "SiliconFlow 端点不可用")
             model = self._get_model(sf_ep)
             try:
                 emb = model.get_text_embedding(text[:8192])
+                if all(v == 0.0 for v in emb):
+                    logger.warning(
+                        f"[{sf_ep.name}] SiliconFlow 返回零向量 (text_len={text_len})"
+                    )
+                self._record_embedding(sf_ep, text_len, False)
                 return (sf_ep.name, emb, None)
             except Exception as sf_err:
-                logger.warning(f"SiliconFlow fallback 也失败: {sf_err}")
+                logger.error(
+                    f"[{sf_ep.name}] SiliconFlow fallback 失败 (text_len={text_len}): {type(sf_err).__name__}: {sf_err}"
+                )
+                self._record_embedding(sf_ep, 0, True)
                 return (sf_ep.name, [0.0] * EMBEDDING_DIM, str(sf_err))
 
         if ep.url == "siliconflow://":
@@ -400,8 +434,10 @@ class ParallelEmbeddingProcessor:
                     if ep.avg_latency == 0
                     else (ep.avg_latency * 0.7 + latency * 0.3)
                 )
+            self._record_embedding(ep, len(text), False)
             return (ep.name, embedding, None)
         except Exception as e:
+            text_len = len(text[:8192])
             with self._lock:
                 self._failures[ep.name] += 1
                 self._consecutive_failures[ep.name] += 1
@@ -409,13 +445,12 @@ class ParallelEmbeddingProcessor:
                 if self._consecutive_failures[ep.name] >= self._failure_threshold:
                     ep.is_healthy = False
                     ep.last_error = str(e)
-                    logger.warning(
-                        f"[{ep.name}] 连续 {self._consecutive_failures[ep.name]} 次失败，"
-                        f"已标记为不健康: {e}"
+                    logger.error(
+                        f"[{ep.name}] 连续 {self._consecutive_failures[ep.name]} 次失败，已标记为不健康 (text_len={text_len}): {type(e).__name__}: {e}"
                     )
 
             logger.warning(
-                f"[{ep.name}] Ollama embedding 失败，切换到 SiliconFlow: {e}"
+                f"[{ep.name}] Ollama embedding 失败，切换到 SiliconFlow (text_len={text_len}): {type(e).__name__}: {e}"
             )
             return call_sf()
         finally:

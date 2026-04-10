@@ -44,10 +44,13 @@ class DocumentChunkService:
         file_size: int = 0,
         doc_id: Optional[str] = None,
         zotero_doc_id: Optional[str] = None,
+        failed_node_ids: Optional[List[str]] = None,
     ) -> Optional[Dict[str, Any]]:
         if not nodes:
             logger.warning(f"[{self.kb_id}] create_document: empty nodes, skipping")
             return None
+
+        failed_set = set(failed_node_ids or [])
 
         try:
             doc_db = self._get_doc_db()
@@ -95,6 +98,13 @@ class DocumentChunkService:
                     else (node.id_ if hasattr(node, "id_") else f"chunk_{idx}")
                 )
 
+                if node_id in failed_set:
+                    emb_status = 2
+                elif hasattr(node, "embedding") and node.embedding and not all(v == 0.0 for v in node.embedding):
+                    emb_status = 1
+                else:
+                    emb_status = 0
+
                 chunk = {
                     "id": node_id,
                     "doc_id": created_doc_id,
@@ -109,9 +119,7 @@ class DocumentChunkService:
                     "parent_chunk_id": parent_id,
                     "hierarchy_level": hierarchy_level,
                     "metadata": metadata,
-                    "embedding_generated": 1
-                    if (hasattr(node, "embedding") and node.embedding)
-                    else 0,
+                    "embedding_generated": emb_status,
                 }
                 chunks.append(chunk)
 
@@ -247,6 +255,16 @@ class DocumentChunkService:
         except Exception as e:
             logger.error(f"[{self.kb_id}] update_document_stats failed: {e}")
             return False
+
+    def mark_chunks_failed(self, chunk_ids: List[str]) -> int:
+        if not chunk_ids:
+            return 0
+        try:
+            chunk_db = self._get_chunk_db()
+            return chunk_db.mark_failed_bulk(chunk_ids)
+        except Exception as e:
+            logger.error(f"[{self.kb_id}] mark_chunks_failed failed: {e}")
+            return 0
 
     def get_stats(self) -> Dict[str, int]:
         try:

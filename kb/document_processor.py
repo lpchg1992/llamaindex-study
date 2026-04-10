@@ -170,14 +170,6 @@ class DocumentProcessor:
         self.embed_model = embed_model
 
     def _upsert_nodes(self, lance_store, nodes):
-        """
-        使用 merge_insert UPSERT 写入节点，自动处理表创建。
-        按 doc_id 去重：相同 doc_id 的节点会被替换。
-
-        Args:
-            lance_store: LlamaIndex LanceDBVectorStore
-            nodes: 节点列表
-        """
         import logging
         import pyarrow as pa
         from llama_index.core.vector_stores.utils import node_to_metadata_dict
@@ -187,12 +179,22 @@ class DocumentProcessor:
         valid_meta_keys = self._get_valid_metadata_keys(lance_store)
 
         data = []
+        skipped = 0
+        failed_ids = []
         doc_ids = set()
         for node in nodes:
+            if not hasattr(node, "embedding") or node.embedding is None:
+                skipped += 1
+                failed_ids.append(node.node_id)
+                continue
+            if isinstance(node.embedding, (list, tuple)) and len(node.embedding) > 0:
+                if all(v == 0.0 for v in node.embedding):
+                    skipped += 1
+                    failed_ids.append(node.node_id)
+                    continue
             metadata_dict = node_to_metadata_dict(
                 node, remove_text=False, flat_metadata=True
             )
-            # 过滤掉不属于 schema 的 metadata 字段
             if valid_meta_keys:
                 metadata_dict = {
                     k: v for k, v in metadata_dict.items() if k in valid_meta_keys
@@ -204,15 +206,13 @@ class DocumentProcessor:
                 "id": node.node_id,
                 "doc_id": doc_id,
                 "text": node.get_content(),
-                "vector": node.embedding
-                if hasattr(node, "embedding") and node.embedding
-                else [0.0] * 1024,
+                "vector": node.embedding,
                 "metadata": metadata_dict,
             }
             data.append(row)
 
         if not data:
-            return
+            return (0, skipped, failed_ids)
 
         df = pa.Table.from_pylist(data)
 
@@ -229,7 +229,6 @@ class DocumentProcessor:
             add_logger.debug(f"创建新表并插入 {len(data)} 节点")
         else:
             try:
-                # 按 doc_id 去重：先删除已存在的 doc_id 对应的所有行
                 if doc_ids:
                     doc_ids_str = " OR ".join(
                         [f"doc_id = '{did}'" for did in doc_ids if did]
@@ -244,12 +243,13 @@ class DocumentProcessor:
                                 )
                         except Exception as delete_err:
                             add_logger.warning(f"删除旧节点失败: {delete_err}")
-                # 插入新节点
                 (table.merge_insert("id").when_not_matched_insert_all().execute(df))
                 add_logger.debug(f"UPSERT {len(data)} 节点 (按 doc_id 去重)")
             except Exception as e:
                 add_logger.warning(f"UPSERT 失败，回退到追加写入: {e}")
                 table.add(data)
+
+        return (len(data), skipped, failed_ids)
 
     def _get_valid_metadata_keys(self, lance_store) -> set:
         try:
@@ -1525,8 +1525,9 @@ class DocumentProcessor:
         # 保存所有节点
         try:
             lance_store = vector_store._get_lance_vector_store()
-            self._upsert_nodes(lance_store, processed_batch)
-            saved = len(processed_batch)
+            saved, skipped, failed_ids = self._upsert_nodes(
+                lance_store, processed_batch
+            )
         except Exception as e:
             raise RuntimeError(f"向量数据库写入失败: {e}")
 

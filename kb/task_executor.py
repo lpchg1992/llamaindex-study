@@ -388,7 +388,9 @@ class TaskExecutor:
                         # 同步写入 LanceDB，等待完成才继续（确保原子性）
                     try:
                         processor = DocumentProcessor()
-                        processor._upsert_nodes(lance_store, nodes)
+                        success_count, skipped, failed_ids = processor._upsert_nodes(
+                            lance_store, nodes
+                        )
                         write_ok = True
                         write_err = ""
                     except Exception as write_ex:
@@ -400,7 +402,15 @@ class TaskExecutor:
                             f"LanceDB 写入失败，跳过文档: {rel_path}, 错误: {write_err}"
                         )
                         continue
-                    processed_chunks += len(nodes)
+                    processed_chunks += success_count
+
+                    # 标记失败的 chunks
+                    if failed_ids:
+                        try:
+                            svc = DocumentChunkService(kb_id)
+                            svc.mark_chunks_failed(failed_ids)
+                        except Exception as e:
+                            logger.warning(f"标记失败 chunks 失败: {e}")
 
                 current_hash = ""
                 if hash_tool:
@@ -499,11 +509,39 @@ class TaskExecutor:
 
         import hashlib
 
+        item_titles = {}
+        try:
+            from kb.zotero_processor import ZoteroImporter
+
+            for item in items:
+                if item.get("type") == "item":
+                    item_id = item.get("id")
+                    if item_id:
+                        try:
+                            importer = ZoteroImporter(kb_id=kb_id)
+                            zotero_item = importer.get_item(int(item_id), prefix=prefix)
+                            if zotero_item and zotero_item.title:
+                                item_titles[item_id] = zotero_item.title
+                            importer.close()
+                        except Exception as e:
+                            logger.debug(
+                                f"Failed to fetch title for item {item_id}: {e}"
+                            )
+        except Exception as e:
+            logger.debug(f"Failed to pre-fetch Zotero titles: {e}")
+
         file_list = []
         for idx, item in enumerate(items):
             item_type = item.get("type", "")
             item_id = str(item.get("id") or item.get("path") or f"item_{idx}")
-            file_name = f"{item_type}: {item_id}"
+            if (
+                item_type == "item"
+                and item.get("id")
+                and str(item.get("id")) in item_titles
+            ):
+                file_name = item_titles[str(item.get("id"))]
+            else:
+                file_name = f"{item_type}: {item_id}"
             file_id = hashlib.md5(
                 f"{task_id}:{item_type}:{item_id}".encode()
             ).hexdigest()[:12]
@@ -1096,7 +1134,9 @@ class TaskExecutor:
                             # 同步写入 LanceDB，等待完成才继续（确保原子性）
                             try:
                                 processor = DocumentProcessor()
-                                processor._upsert_nodes(lance_store, nodes)
+                                success_count, skipped, failed_ids = (
+                                    processor._upsert_nodes(lance_store, nodes)
+                                )
                                 write_ok = True
                                 write_err = ""
                             except Exception as write_ex:
@@ -1107,8 +1147,18 @@ class TaskExecutor:
                                     f"LanceDB 写入失败，跳过文档: {file_path}, 错误: {write_err}"
                                 )
                                 continue
-                            stats["nodes"] += len(nodes)
+                            stats["nodes"] += success_count
                             file_nodes.extend(nodes)
+
+                            # 标记失败的 chunks
+                            if failed_ids:
+                                try:
+                                    from kb.database import init_chunk_db
+
+                                    chunk_db = init_chunk_db()
+                                    chunk_db.mark_failed_bulk(failed_ids)
+                                except Exception as e:
+                                    logger.warning(f"标记失败 chunks 失败: {e}")
 
                     if file_nodes:
                         try:

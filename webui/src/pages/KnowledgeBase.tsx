@@ -242,10 +242,12 @@ function KBListItem({
   kb,
   isSelected,
   onSelect,
+  onDeleteSuccess,
 }: {
   kb: KBInfo
   isSelected: boolean
   onSelect: () => void
+  onDeleteSuccess?: () => void
 }) {
   const { data: kbTopics } = useKBTopics(kb.id)
   const [isEditOpen, setIsEditOpen] = useState(false)
@@ -256,6 +258,7 @@ function KBListItem({
 
   const handleConfirmDelete = async () => {
     await deleteKB.mutateAsync({ kbId: kb.id, confirmationName: kb.id })
+    onDeleteSuccess?.()
   }
 
   return (
@@ -454,6 +457,11 @@ export function KnowledgeBase() {
                   kb={kb}
                   isSelected={selectedKBId === kb.id}
                   onSelect={() => setSelectedKBId(kb.id)}
+                  onDeleteSuccess={() => {
+                    if (selectedKBId === kb.id) {
+                      setSelectedKBId(null)
+                    }
+                  }}
                 />
               ))}
             </div>
