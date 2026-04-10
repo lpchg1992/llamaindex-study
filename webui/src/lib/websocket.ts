@@ -155,6 +155,7 @@ export function useTaskWebSocket(enabled: boolean = true) {
 
 interface TaskResponse {
   task_id: string
+  task_type: 'zotero' | 'obsidian' | 'obsidian_folder' | 'generic' | 'initialize' | 'selective'
   status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused'
   kb_id: string
   message: string

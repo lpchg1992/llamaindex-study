@@ -1249,14 +1249,19 @@ class TaskExecutor:
         kb_id = task.kb_id
 
         self.queue.update_progress(task.task_id, message="初始化知识库...")
+        await self._notify_progress(task.task_id)
 
         from kb.services import KnowledgeBaseService
+
+        self.queue.update_progress(task.task_id, message="正在清空数据...")
+        await self._notify_progress(task.task_id)
 
         KnowledgeBaseService.initialize(kb_id)
 
         self.queue.complete_task(
             task.task_id, result={"message": "知识库已初始化（所有数据已清空）"}
         )
+        await self._notify_progress(task.task_id)
 
     def cancel_task(self, task_id: str) -> bool:
         """取消任务"""

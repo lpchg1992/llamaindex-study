@@ -71,30 +71,51 @@ function TaskDetailDialog({ taskId, open, onOpenChange }: TaskDetailDialogProps)
         ) : task ? (
           <ScrollArea className="h-[70vh]">
             <div className="space-y-4 p-1">
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div>
-                  <Label className="text-muted-foreground text-xs">Status</Label>
-                  <div className="mt-1">
-                    <Badge className={getStatusColor(task.status)}>
-                      {task.status}
-                    </Badge>
+              {task.task_type === 'initialize' ? (
+                <div className="border rounded-lg p-4 bg-orange-50 dark:bg-orange-950/20">
+                  <div className="flex items-center gap-2 mb-3">
+                    <Badge variant="outline" className="bg-orange-100 dark:bg-orange-900/30">Initialize</Badge>
+                    <span className="text-sm text-muted-foreground">Knowledge Base Initialization</span>
+                  </div>
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm">Status</span>
+                      <Badge className={getStatusColor(task.status)}>{task.status}</Badge>
+                    </div>
+                    {task.message && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm">Current Step</span>
+                        <span className="text-sm font-medium">{task.message}</span>
+                      </div>
+                    )}
                   </div>
                 </div>
-                <div>
-                  <Label className="text-muted-foreground text-xs">Progress</Label>
-                  <p className="font-medium">{task.progress}%</p>
+              ) : (
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div>
+                    <Label className="text-muted-foreground text-xs">Status</Label>
+                    <div className="mt-1">
+                      <Badge className={getStatusColor(task.status)}>
+                        {task.status}
+                      </Badge>
+                    </div>
+                  </div>
+                  <div>
+                    <Label className="text-muted-foreground text-xs">Progress</Label>
+                    <p className="font-medium">{task.progress}%</p>
+                  </div>
+                  <div>
+                    <Label className="text-muted-foreground text-xs">Files</Label>
+                    <p className="font-medium">{task.result?.files ?? 0}</p>
+                  </div>
+                  <div>
+                    <Label className="text-muted-foreground text-xs">Failed</Label>
+                    <p className="font-medium text-red-500">{task.result?.failed ?? 0}</p>
+                  </div>
                 </div>
-                <div>
-                  <Label className="text-muted-foreground text-xs">Files</Label>
-                  <p className="font-medium">{task.result?.files ?? 0}</p>
-                </div>
-                <div>
-                  <Label className="text-muted-foreground text-xs">Failed</Label>
-                  <p className="font-medium text-red-500">{task.result?.failed ?? 0}</p>
-                </div>
-              </div>
+              )}
 
-              {task.message && (
+              {task.message && task.task_type !== 'initialize' && (
                 <div>
                   <Label className="text-muted-foreground text-xs">Current Status</Label>
                   <p className="text-sm mt-1">{task.message}</p>
