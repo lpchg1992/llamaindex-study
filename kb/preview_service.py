@@ -100,6 +100,18 @@ class PreviewService:
                     except Exception as e:
                         warnings.append(f"扫描检测失败 item={item_id}: {e}")
 
+                md_cache_path = None
+                if is_pdf and attachment_path:
+                    md_cache_path = (
+                        Path("/Volumes/online/llamaindex/mddocs")
+                        / f"{Path(attachment_path).stem}.md"
+                    )
+                has_md_cache = (
+                    md_cache_path.exists() and md_cache_path.stat().st_size > 100
+                    if md_cache_path
+                    else False
+                )
+
                 eligible_items.append(
                     {
                         "item_id": item_id,
@@ -109,9 +121,11 @@ class PreviewService:
                         "attachment_path": attachment_path,
                         "is_pdf": is_pdf,
                         "is_scanned": is_scanned,
+                        "has_md_cache": has_md_cache,
                         "options": {
                             "is_scanned": is_scanned,
                             "force_ocr": False,
+                            "has_md_cache": has_md_cache,
                         },
                     }
                 )

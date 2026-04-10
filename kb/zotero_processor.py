@@ -110,12 +110,10 @@ class ZoteroImporter:
     def _get_attachment_path(self, item_id: int, prefix: str = "[kb]") -> Optional[str]:
         """获取附件文件路径
 
-        根据 Zotero UI 中修改的附件标题(fieldID=1)来判断是否包含指定前缀标记，
-        而非检查实际文件名。
-
-        支持两种附件类型：
-        - 独立附件：itemID 本身就是要查询的附件 ID
-        - 子附件：需要通过 parentItemID 查找父 item 下的附件
+        Zotero 存储机制：
+        - 附件存储在 {zotero_dir}/storage/{item_key}/{filename} 目录下
+        - item_key 是 items 表中的 key 字段，不是 storageHash
+        - storageHash 是文件内容哈希，用于去重，不代表目录名
 
         Args:
             item_id: Zotero 文献 ID
@@ -126,8 +124,9 @@ class ZoteroImporter:
 
         cursor.execute(
             """
-            SELECT ia.itemID, ia.path, ia.storageHash, ia.contentType, v.value as attachment_title
+            SELECT ia.itemID, ia.path, ia.contentType, i.key as item_key, v.value as attachment_title
             FROM itemAttachments ia
+            JOIN items i ON ia.itemID = i.itemID
             JOIN itemData d ON d.itemID = ia.itemID AND d.fieldID = 1
             JOIN itemDataValues v ON d.valueID = v.valueID
             WHERE (ia.itemID = ? OR ia.parentItemID = ?)
@@ -145,10 +144,10 @@ class ZoteroImporter:
         if prefix not in title:
             return None
 
-        storage_hash = row["storageHash"]
         path = row["path"]
-
+        item_key = row["item_key"]
         content_type = row["contentType"] or ""
+
         supported = any(
             ext in content_type
             for ext in [
@@ -166,31 +165,12 @@ class ZoteroImporter:
         if not supported:
             return None
 
-        if storage_hash:
-            hash_dir = self.storage_dir / storage_hash
-            if hash_dir.exists():
-                for f in hash_dir.iterdir():
-                    if f.is_file():
-                        return str(f)
-
-        if path.startswith("storage:"):
+        if path.startswith("storage:") and item_key:
             filename = path.replace("storage:", "")
-
-            for item_dir in self.storage_dir.iterdir():
-                if not item_dir.is_dir() or item_dir.name.startswith("."):
-                    continue
-
-                check = item_dir / filename
-                if check.exists():
-                    return str(check)
-
-                for f in item_dir.iterdir():
-                    if f.is_file() and filename == f.name:
-                        return str(f)
-
-            full_path = self.storage_dir / filename
-            if full_path.exists():
-                return str(full_path)
+            # 正确的路径：{storage_dir}/{item_key}/{filename}
+            correct_path = self.storage_dir / item_key / filename
+            if correct_path.exists():
+                return str(correct_path)
 
         return None
 
@@ -432,7 +412,8 @@ class ZoteroImporter:
         kb_id: Optional[str] = None,
         force_ocr: bool = False,
         is_scanned: Optional[bool] = None,
-    ) -> Tuple[int, List[Any], List[str]]:
+        has_md_cache: Optional[bool] = None,
+    ) -> Tuple[int, List[Any], List[str], Optional[str]]:
         """
         导入单个文献
 
@@ -444,9 +425,10 @@ class ZoteroImporter:
             kb_id: 知识库 ID（用于写入 document 表）
             force_ocr: 强制 OCR 处理
             is_scanned: 预计算的扫描件判断（用户可覆盖）
+            has_md_cache: 是否有 MD 缓存（前端传递，避免重复检测）
 
         Returns:
-            (生成的节点数, 所有节点列表, 处理过的源文件路径列表)
+            (生成的节点数, 所有节点列表, 处理过的源文件路径列表, 错误原因)
         """
         from kb.zotero_reader import create_zotero_reader
         from kb.document_chunk_service import get_document_chunk_service
@@ -535,11 +517,14 @@ class ZoteroImporter:
             f"[ZoteroImporter.import_item] item_id={item.item_id}, title={item.title}, file_path={item.file_path}, is_scanned={is_scanned}, force_ocr={force_ocr}"
         )
 
+        error_reason = None
         if not item.file_path:
+            error_reason = "附件路径未找到（Zotero 数据库中无附件记录）"
             logger.warning(
                 f"[ZoteroImporter.import_item] file_path is None, skipping attachment processing"
             )
         elif not Path(item.file_path).exists():
+            error_reason = f"附件文件不存在: {item.file_path}"
             logger.warning(
                 f"[ZoteroImporter.import_item] file_path does not exist: {item.file_path}"
             )
@@ -560,6 +545,7 @@ class ZoteroImporter:
                     metadata={**base_metadata, "source": str(file_path)},
                     force_ocr=force_ocr,
                     is_scanned=is_scanned,
+                    has_md_cache=has_md_cache,
                 )
             elif ext in [".docx", ".doc", ".xlsx", ".xls", ".pptx", ".md", ".txt"]:
                 logger.debug(f"使用 process_document 处理: {file_path}")
@@ -581,10 +567,14 @@ class ZoteroImporter:
 
                 for doc in docs:
                     nodes = node_parser.get_nodes_from_documents([doc])
+                    if not nodes:
+                        logger.warning(
+                            f"节点解析返回空: {file_path}, doc文本长度: {len(doc.text)}"
+                        )
+                        continue
                     doc_id = doc.id_
                     zotero_doc_id = str(item.item_id)
 
-                    # 先写入 LanceDB，确保成功后才创建 SQLite 记录
                     try:
                         self.processor._upsert_nodes(
                             vector_store._get_lance_vector_store(), nodes
@@ -606,10 +596,12 @@ class ZoteroImporter:
                         total_nodes += len(nodes)
                         all_nodes.extend(nodes)
                         processed_sources.append(str(file_path))
+                    else:
+                        logger.warning(f"文档记录创建失败: {file_path}")
             else:
                 logger.warning(f"文档处理返回空结果: {file_path}")
 
-        return total_nodes, all_nodes, processed_sources
+        return total_nodes, all_nodes, processed_sources, error_reason
 
     def import_collection(
         self,
@@ -700,7 +692,7 @@ class ZoteroImporter:
             logger.debug(f"处理文献: {item.title} (item_id={item_id})")
 
             try:
-                total_nodes, all_nodes = self.import_item(
+                total_nodes, all_nodes, _, _ = self.import_item(
                     item, vector_store, embed_model, progress, kb_id=kb_id
                 )
                 if total_nodes > 0:

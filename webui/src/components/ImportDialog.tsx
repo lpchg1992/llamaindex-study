@@ -77,8 +77,10 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
     filteringRules: [] as string[],
   })
   const [zoteroPrefix, setZoteroPrefix] = useState("[kb]")
+  const [zoteroDetectedScannedIds, setZoteroDetectedScannedIds] = useState<Set<number>>(new Set())
   const [zoteroForceOcrIds, setZoteroForceOcrIds] = useState<Set<number>>(new Set())
   const [zoteroManualScannedIds, setZoteroManualScannedIds] = useState<Set<number>>(new Set())
+  const [zoteroMdCacheIds, setZoteroMdCacheIds] = useState<Set<number>>(new Set())
 
   // 预览缓存
   const [previewCache, setPreviewCache] = useState<{
@@ -213,6 +215,12 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
 
     setZoteroManualScannedIds(new Set(manualScannedIds))
 
+    const detectedScanned = selectedPreviewItems.filter(item => item.is_scanned_pdf).map(item => item.item_id)
+    setZoteroDetectedScannedIds(new Set(detectedScanned))
+
+    const mdCacheIds = selectedPreviewItems.filter(item => item.has_md_cache).map(item => item.item_id)
+    setZoteroMdCacheIds(new Set(mdCacheIds))
+
     if (forceOcrIds.length > 0) {
       toast.success(`已确认 ${selectedPreviewItems.length} 篇文献（${forceOcrIds.length} 篇强制OCR）`)
     } else {
@@ -340,10 +348,17 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
           }
           if (activeSource === 'zotero' && item.type === 'item' && item.item_id !== undefined) {
             const options: Record<string, boolean> = {}
+            // 如果有 MD 缓存，传递给后端
+            if (zoteroMdCacheIds.has(item.item_id)) {
+              options.has_md_cache = true
+            }
+            // 强制 OCR 时，设置 is_scanned=true
             if (zoteroForceOcrIds.has(item.item_id)) {
               options.force_ocr = true
+              options.is_scanned = true
             }
-            if (zoteroManualScannedIds.has(item.item_id)) {
+            // 如果没有 MD 缓存且被检测为扫描件，设置 is_scanned
+            if (!zoteroMdCacheIds.has(item.item_id) && (zoteroManualScannedIds.has(item.item_id) || zoteroDetectedScannedIds.has(item.item_id))) {
               options.is_scanned = true
             }
             if (Object.keys(options).length > 0) {
@@ -359,7 +374,7 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
             source_type: sourceType,
             items: importItems,
             async_mode: true,
-            refresh_topics: true,
+            refresh_topics: false,
             ...(activeSource === 'zotero' && { prefix: zoteroPrefix }),
           },
         })
@@ -398,6 +413,8 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
     setPreviewCache(null)
     setZoteroForceOcrIds(new Set())
     setZoteroManualScannedIds(new Set())
+    setZoteroDetectedScannedIds(new Set())
+    setZoteroMdCacheIds(new Set())
   }
 
   const handleClose = (open: boolean) => {

@@ -143,6 +143,8 @@ export interface SelectiveImportItem {
   path?: string
   options?: {
     force_ocr?: boolean
+    is_scanned?: boolean
+    has_md_cache?: boolean
   }
 }
 

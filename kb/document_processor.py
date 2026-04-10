@@ -172,7 +172,7 @@ class DocumentProcessor:
     def _upsert_nodes(self, lance_store, nodes):
         """
         使用 merge_insert UPSERT 写入节点，自动处理表创建。
-        相同 id 的节点会被更新，新 id 的节点会被插入。
+        按 doc_id 去重：相同 doc_id 的节点会被替换。
 
         Args:
             lance_store: LlamaIndex LanceDBVectorStore
@@ -184,14 +184,25 @@ class DocumentProcessor:
 
         add_logger = logging.getLogger("lancedb.add")
 
+        valid_meta_keys = self._get_valid_metadata_keys(lance_store)
+
         data = []
+        doc_ids = set()
         for node in nodes:
             metadata_dict = node_to_metadata_dict(
                 node, remove_text=False, flat_metadata=True
             )
+            # 过滤掉不属于 schema 的 metadata 字段
+            if valid_meta_keys:
+                metadata_dict = {
+                    k: v for k, v in metadata_dict.items() if k in valid_meta_keys
+                }
+            doc_id = node.ref_doc_id if hasattr(node, "ref_doc_id") else None
+            if doc_id:
+                doc_ids.add(doc_id)
             row = {
                 "id": node.node_id,
-                "doc_id": node.ref_doc_id if hasattr(node, "ref_doc_id") else None,
+                "doc_id": doc_id,
                 "text": node.get_content(),
                 "vector": node.embedding
                 if hasattr(node, "embedding") and node.embedding
@@ -218,13 +229,24 @@ class DocumentProcessor:
             add_logger.debug(f"创建新表并插入 {len(data)} 节点")
         else:
             try:
-                (
-                    table.merge_insert("id")
-                    .when_matched_update_all()
-                    .when_not_matched_insert_all()
-                    .execute(df)
-                )
-                add_logger.debug(f"UPSERT {len(data)} 节点")
+                # 按 doc_id 去重：先删除已存在的 doc_id 对应的所有行
+                if doc_ids:
+                    doc_ids_str = " OR ".join(
+                        [f"doc_id = '{did}'" for did in doc_ids if did]
+                    )
+                    if doc_ids_str:
+                        try:
+                            delete_result = table.delete(f"{doc_ids_str}")
+                            deleted_count = getattr(delete_result, "num_deleted", 0)
+                            if deleted_count > 0:
+                                add_logger.debug(
+                                    f"删除 {deleted_count} 个已存在的节点 (doc_id 去重)"
+                                )
+                        except Exception as delete_err:
+                            add_logger.warning(f"删除旧节点失败: {delete_err}")
+                # 插入新节点
+                (table.merge_insert("id").when_not_matched_insert_all().execute(df))
+                add_logger.debug(f"UPSERT {len(data)} 节点 (按 doc_id 去重)")
             except Exception as e:
                 add_logger.warning(f"UPSERT 失败，回退到追加写入: {e}")
                 table.add(data)
@@ -1168,6 +1190,7 @@ class DocumentProcessor:
         metadata: dict = None,
         force_ocr: bool = False,
         is_scanned: Optional[bool] = None,
+        has_md_cache: Optional[bool] = None,
     ) -> List[LlamaDocument]:
         docs = []
         ext = Path(pdf_path).suffix.lower()
@@ -1184,8 +1207,36 @@ class DocumentProcessor:
             except Exception:
                 pass
 
+        # 优先使用 has_md_cache（如果前端已传递）
         if (
-            not force_ocr
+            has_md_cache is True
+            and md_file_path.exists()
+            and md_file_path.stat().st_size > 100
+        ):
+            meta = ConversionMetadata.load(md_file_path)
+            if meta and not meta.is_truncated:
+                print(f"   📄 使用已缓存的 MD（前端确认）: {md_file_path.name}")
+                try:
+                    md_content = md_file_path.read_text(encoding="utf-8")
+                    doc = LlamaDocument(
+                        text=md_content,
+                        metadata={
+                            "source": "pdf_scanned",
+                            "file_path": pdf_path,
+                            "converted": True,
+                            "md_file_path": str(md_file_path),
+                            **(metadata or {}),
+                        },
+                    )
+                    docs.append(doc)
+                    return docs
+                except Exception:
+                    pass
+
+        # fallback: 自动使用 MD 缓存（如果没有传递 has_md_cache）
+        if (
+            has_md_cache is None
+            and not force_ocr
             and md_file_path.exists()
             and md_file_path.stat().st_size > 100
         ):

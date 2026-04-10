@@ -576,11 +576,12 @@ class ZoteroService:
 
             force_ocr = options.get("force_ocr", False) if options else False
             is_scanned_override = options.get("is_scanned") if options else None
+            has_md_cache = options.get("has_md_cache") if options else None
 
             logger.info(
-                f"[ZoteroService.import_item] item_id={item_id}, prefix={prefix}, file_path={item.file_path}, force_ocr={force_ocr}, is_scanned_override={is_scanned_override}"
+                f"[ZoteroService.import_item] item_id={item_id}, prefix={prefix}, file_path={item.file_path}, force_ocr={force_ocr}, is_scanned_override={is_scanned_override}, has_md_cache={has_md_cache}"
             )
-            nodes, all_nodes, processed_sources = importer.import_item(
+            nodes, all_nodes, processed_sources, error_reason = importer.import_item(
                 item=item,
                 vector_store=vs,
                 embed_model=create_parallel_ollama_embedding(),
@@ -588,6 +589,7 @@ class ZoteroService:
                 kb_id=kb_id,
                 force_ocr=force_ocr,
                 is_scanned=is_scanned_override,
+                has_md_cache=has_md_cache,
             )
 
             if progress_callback:
@@ -596,7 +598,14 @@ class ZoteroService:
             if refresh_topics:
                 KnowledgeBaseService.refresh_topics(kb_id=kb_id, has_new_docs=nodes > 0)
 
-            return {"items": 1, "nodes": nodes, "processed_sources": processed_sources}
+            result = {
+                "items": 1,
+                "nodes": nodes,
+                "processed_sources": processed_sources,
+            }
+            if error_reason:
+                result["error"] = error_reason
+            return result
 
         finally:
             importer.close()
@@ -1028,7 +1037,10 @@ class KnowledgeBaseService:
         from kb.database import (
             init_kb_meta_db,
             init_progress_db,
+            init_document_db,
+            init_chunk_db,
         )
+        from sqlalchemy import delete
 
         info = KnowledgeBaseService.get_info(kb_id)
         if not info:
@@ -1047,6 +1059,33 @@ class KnowledgeBaseService:
         if persist_dir.exists():
             shutil.rmtree(persist_dir)
 
+        # 清理 SQLite documents 和 chunks
+        try:
+            doc_db = init_document_db()
+            chunk_db = init_chunk_db()
+
+            # 删除该 KB 的所有 chunks
+            with chunk_db.db.session_scope() as session:
+                from kb.database import ChunkModel
+
+                session.execute(delete(ChunkModel).where(ChunkModel.kb_id == kb_id))
+
+            # 删除该 KB 的所有 documents
+            with doc_db.db.session_scope() as session:
+                from kb.database import DocumentModel
+
+                session.execute(
+                    delete(DocumentModel).where(DocumentModel.kb_id == kb_id)
+                )
+
+            logger.info(
+                f"[KnowledgeBaseService.delete] 已清理 KB {kb_id} 的 documents 和 chunks"
+            )
+        except Exception as e:
+            logger.error(
+                f"[KnowledgeBaseService.delete] 清理 documents/chunks 失败: {e}"
+            )
+
         init_progress_db().reset(kb_id)
 
         init_kb_meta_db().set_active(kb_id, is_active=False)
@@ -1063,10 +1102,36 @@ class KnowledgeBaseService:
         清除向量存储、进度，但保留知识库配置。
         用于完全重置知识库到初始状态。
         """
-        from kb.database import init_progress_db
+        from kb.database import init_progress_db, init_document_db, init_chunk_db
+        from sqlalchemy import delete
 
         vs = VectorStoreService.get_vector_store(kb_id)
         vs.delete_table()
+
+        # 清理 SQLite documents 和 chunks
+        try:
+            doc_db = init_document_db()
+            chunk_db = init_chunk_db()
+
+            with chunk_db.db.session_scope() as session:
+                from kb.database import ChunkModel
+
+                session.execute(delete(ChunkModel).where(ChunkModel.kb_id == kb_id))
+
+            with doc_db.db.session_scope() as session:
+                from kb.database import DocumentModel
+
+                session.execute(
+                    delete(DocumentModel).where(DocumentModel.kb_id == kb_id)
+                )
+
+            logger.info(
+                f"[KnowledgeBaseService.initialize] 已清理 KB {kb_id} 的 documents 和 chunks"
+            )
+        except Exception as e:
+            logger.error(
+                f"[KnowledgeBaseService.initialize] 清理 documents/chunks 失败: {e}"
+            )
 
         init_progress_db().reset(kb_id)
 

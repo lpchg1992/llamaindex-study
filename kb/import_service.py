@@ -9,7 +9,7 @@ class ImportRequest:
     kind: str
     kb_id: str
     async_mode: bool = True
-    refresh_topics: bool = True
+    refresh_topics: bool = False
     source: str = ""
     path: Optional[str] = None
     paths: Optional[List[str]] = None
@@ -42,7 +42,7 @@ class SelectiveImportRequest:
     source_type: str
     items: List[SelectiveImportItem]
     async_mode: bool = True
-    refresh_topics: bool = True
+    refresh_topics: bool = False
     prefix: str = "[kb]"
 
 
