@@ -443,12 +443,26 @@ class TaskQueue:
             if error:
                 row.message = f"失败: {error}"
             else:
-                row.message = "已完成"
+                msg = "已完成"
+                if result:
+                    pc = result.get("processed_chunks", 0)
+                    tc = result.get("total_chunks", 0)
+                    if tc > 0:
+                        msg = f"已完成 ({pc}/{tc} chunks)"
+                    elif pc > 0:
+                        msg = f"部分完成 ({pc} chunks)"
+                row.message = msg
 
             row.result = json.dumps(result, ensure_ascii=False) if result else None
             row.error = error
             if not error:
-                row.progress = 100
+                processed = result.get("processed_chunks", 0) if result else 0
+                total = result.get("total_chunks", 0) if result else 0
+                row.progress = (
+                    int(processed / total * 100)
+                    if total > 0
+                    else (99 if processed > 0 else row.progress)
+                )
 
         # 通知等待者
         if task_id in self._task_events:
