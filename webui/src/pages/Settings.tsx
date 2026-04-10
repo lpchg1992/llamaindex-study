@@ -1120,7 +1120,7 @@ export function SettingsPage() {
                           <div className="flex items-center gap-3">
                             <Server className="h-4 w-4 text-muted-foreground" />
                             <span className="font-medium">{vendor.vendor_id}</span>
-                            <Badge variant="secondary">{vendor.models.length} models</Badge>
+                            <Badge variant="secondary">{vendor.models?.length || 0} models</Badge>
                           </div>
                           <div className="flex items-center gap-4 text-sm">
                             <span>

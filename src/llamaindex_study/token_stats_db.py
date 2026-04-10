@@ -258,26 +258,65 @@ class TokenStatsDB:
     ) -> List[Dict[str, Any]]:
         session = self.session
         try:
-            query = select(
+            # First get per-model stats
+            model_query = select(
                 DailyTokenStatsModel.vendor_id,
-                func.sum(DailyTokenStatsModel.call_count).label("total_calls"),
-                func.sum(DailyTokenStatsModel.prompt_tokens).label(
-                    "total_prompt_tokens"
-                ),
+                DailyTokenStatsModel.model_type,
+                DailyTokenStatsModel.model_id,
+                func.sum(DailyTokenStatsModel.call_count).label("call_count"),
+                func.sum(DailyTokenStatsModel.prompt_tokens).label("prompt_tokens"),
                 func.sum(DailyTokenStatsModel.completion_tokens).label(
-                    "total_completion_tokens"
+                    "completion_tokens"
                 ),
                 func.sum(DailyTokenStatsModel.total_tokens).label("total_tokens"),
-                func.sum(DailyTokenStatsModel.error_count).label("total_errors"),
+                func.sum(DailyTokenStatsModel.error_count).label("error_count"),
             )
             if start_date:
-                query = query.where(DailyTokenStatsModel.date >= start_date)
+                model_query = model_query.where(DailyTokenStatsModel.date >= start_date)
             if end_date:
-                query = query.where(DailyTokenStatsModel.date <= end_date)
-            query = query.group_by(DailyTokenStatsModel.vendor_id)
+                model_query = model_query.where(DailyTokenStatsModel.date <= end_date)
+            model_query = model_query.group_by(
+                DailyTokenStatsModel.vendor_id,
+                DailyTokenStatsModel.model_type,
+                DailyTokenStatsModel.model_id,
+            )
 
-            result = session.execute(query).fetchall()
-            return [row._asdict() for row in result]
+            model_result = session.execute(model_query).fetchall()
+
+            # Group by vendor and build nested structure
+            vendors: Dict[str, Dict[str, Any]] = {}
+            for row in model_result:
+                vendor_id = row.vendor_id
+                if vendor_id not in vendors:
+                    vendors[vendor_id] = {
+                        "vendor_id": vendor_id,
+                        "models": [],
+                        "total_calls": 0,
+                        "total_prompt_tokens": 0,
+                        "total_completion_tokens": 0,
+                        "total_tokens": 0,
+                        "total_errors": 0,
+                    }
+                vendors[vendor_id]["models"].append(
+                    {
+                        "model_type": row.model_type,
+                        "model_id": row.model_id,
+                        "call_count": row.call_count or 0,
+                        "prompt_tokens": row.prompt_tokens or 0,
+                        "completion_tokens": row.completion_tokens or 0,
+                        "total_tokens": row.total_tokens or 0,
+                        "error_count": row.error_count or 0,
+                    }
+                )
+                vendors[vendor_id]["total_calls"] += row.call_count or 0
+                vendors[vendor_id]["total_prompt_tokens"] += row.prompt_tokens or 0
+                vendors[vendor_id]["total_completion_tokens"] += (
+                    row.completion_tokens or 0
+                )
+                vendors[vendor_id]["total_tokens"] += row.total_tokens or 0
+                vendors[vendor_id]["total_errors"] += row.error_count or 0
+
+            return list(vendors.values())
         finally:
             session.close()
 
