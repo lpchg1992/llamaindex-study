@@ -1075,9 +1075,31 @@ class TaskExecutor:
 
         total_files = len(all_files)
 
+        from kb.task_queue import FileStatus
+        import hashlib
+
         await self._update_and_notify(
             task.task_id, total=total_files, message=f"找到 {total_files} 个文件"
         )
+
+        if total_files > 0:
+            import hashlib
+
+            file_list = []
+            for file_path in all_files:
+                file_id = hashlib.md5(str(file_path).encode()).hexdigest()[:12]
+                file_list.append(
+                    {
+                        "file_id": file_id,
+                        "file_name": str(file_path.name),
+                        "status": FileStatus.PENDING.value,
+                        "total_chunks": 0,
+                        "processed_chunks": 0,
+                        "db_written": False,
+                        "error": None,
+                    }
+                )
+            self.queue.set_file_progress(task.task_id, file_list)
 
         if total_files == 0:
             self.queue.complete_task(
@@ -1097,6 +1119,14 @@ class TaskExecutor:
         last_heartbeat_file_count = 0
 
         for i, file_path in enumerate(all_files):
+            file_id = hashlib.md5(str(file_path).encode()).hexdigest()[:12]
+            self.queue.update_file_progress(
+                task.task_id,
+                file_id,
+                status=FileStatus.PROCESSING.value,
+                file_name=file_path.name,
+            )
+
             if await self._check_cancelled(task.task_id):
                 self._save_partial_progress(
                     task.task_id,
@@ -1167,6 +1197,12 @@ class TaskExecutor:
                                 logger.warning(
                                     f"LanceDB 写入失败，跳过文档: {file_path}, 错误: {write_err}"
                                 )
+                                self.queue.update_file_progress(
+                                    task.task_id,
+                                    file_id,
+                                    status=FileStatus.FAILED.value,
+                                    error=write_err,
+                                )
                                 continue
                             stats["nodes"] += success_count
                             file_nodes.extend(nodes)
@@ -1217,6 +1253,13 @@ class TaskExecutor:
 
                     processed_sources.append(str(file_path))
                     stats["files"] += 1
+                    self.queue.update_file_progress(
+                        task.task_id,
+                        file_id,
+                        status=FileStatus.COMPLETED.value,
+                        processed_chunks=success_count,
+                        db_written=True,
+                    )
 
                 progress = int((i + 1) / total_files * 100) if total_files > 0 else 0
                 await self._update_and_notify(
@@ -1230,6 +1273,12 @@ class TaskExecutor:
 
             except Exception as e:
                 logger.warning(f"处理文件失败 {file_path}: {e}")
+                self.queue.update_file_progress(
+                    task.task_id,
+                    file_id,
+                    status=FileStatus.FAILED.value,
+                    error=str(e),
+                )
                 stats["failed"] += 1
 
         settings = get_settings()
