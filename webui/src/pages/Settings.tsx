@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useSettings, useUpdateSettings, useModels, useRestartScheduler, useReloadConfig, useRestartApi, useKBs, useEvaluate, useObservabilityStats, useResetObservability, useTraces, useObservabilityDates } from '@/api/hooks'
+import { useSettings, useUpdateSettings, useRestartScheduler, useReloadConfig, useRestartApi, useKBs, useEvaluate, useObservabilityStats, useResetObservability, useTraces, useObservabilityDates } from '@/api/hooks'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -209,8 +209,6 @@ function ModelRow({ model }: { model: any }) {
 
 export function SettingsPage() {
   const { data: settings, isLoading, error } = useSettings()
-  const { data: llmModels } = useModels('llm')
-  const { data: embeddingModels } = useModels('embedding')
   const updateSettings = useUpdateSettings()
   const restartScheduler = useRestartScheduler()
   const reloadConfig = useReloadConfig()
@@ -420,99 +418,6 @@ export function SettingsPage() {
 
         <TabsContent value="model">
           <div className="space-y-6">
-            {/* LLM Section */}
-            <Card>
-              <CardHeader>
-                <CardTitle>LLM Settings</CardTitle>
-                <CardDescription>Configure language model settings</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="llm-mode">LLM Mode</Label>
-                  <Select
-                    value={localSettings.llm_mode}
-                    onValueChange={(v) => updateField('llm_mode', v)}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="ollama">Ollama (Local)</SelectItem>
-                      <SelectItem value="siliconflow">SiliconFlow (Cloud)</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <p className="text-xs text-muted-foreground">
-                    Requires restart to take effect
-                  </p>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="default-llm">Default LLM Model</Label>
-                  <Select
-                    value={localSettings.default_llm_model || ''}
-                    onValueChange={(v) => updateField('default_llm_model', v)}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select default model..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {llmModels?.map((model) => (
-                        <SelectItem key={model.id} value={model.id}>
-                          {model.id}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <p className="text-xs text-muted-foreground">
-                    Requires restart to take effect
-                  </p>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Embedding Section */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Embedding Settings</CardTitle>
-                <CardDescription>Configure embedding model settings</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="embed-model">Embedding Model</Label>
-                  <Select
-                    value={localSettings.ollama_embed_model}
-                    onValueChange={(v) => updateField('ollama_embed_model', v)}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {embeddingModels?.map((model) => (
-                        <SelectItem key={model.id} value={model.id}>
-                          {model.id}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <p className="text-xs text-muted-foreground">
-                    Requires restart to take effect
-                  </p>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="ollama-url">Ollama Base URL</Label>
-                  <Input
-                    id="ollama-url"
-                    value={localSettings.ollama_base_url}
-                    onChange={(e) => updateField('ollama_base_url', e.target.value)}
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Requires restart to take effect
-                  </p>
-                </div>
-              </CardContent>
-            </Card>
-
             {/* Reranker Section */}
             <Card>
               <CardHeader>
