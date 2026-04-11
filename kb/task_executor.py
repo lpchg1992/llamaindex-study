@@ -1248,6 +1248,7 @@ class TaskExecutor:
                         task.task_id,
                         file_id,
                         status=FileStatus.COMPLETED.value,
+                        total_chunks=success_count,
                         processed_chunks=success_count,
                         db_written=True,
                     )
@@ -1273,6 +1274,7 @@ class TaskExecutor:
                 stats["failed"] += 1
 
         settings = get_settings()
+        file_progress = self.queue.get_file_progress(task.task_id)
         self.queue.complete_task(
             task.task_id,
             result={
@@ -1283,6 +1285,7 @@ class TaskExecutor:
                 "sources": processed_sources,
                 "endpoint_stats": embed_processor.get_stats(),
                 "chunk_strategy": settings.chunk_strategy,
+                "file_progress": file_progress,
             },
         )
 
