@@ -1087,6 +1087,7 @@ def list_models(type: Optional[str] = None):
 def create_model(req: ModelCreateRequest):
     """创建或更新模型"""
     from kb.database import init_model_db, init_vendor_db
+    from kb.parallel_embedding import get_parallel_processor
 
     vendor_db = init_vendor_db()
     if not vendor_db.get(req.vendor_id):
@@ -1112,6 +1113,12 @@ def create_model(req: ModelCreateRequest):
     from llamaindex_study.config import get_model_registry
 
     get_model_registry().reload()
+    try:
+        get_parallel_processor().refresh_endpoints()
+    except Exception as e:
+        logger.error(
+            f"refresh_endpoints() failed after model create: {e}", exc_info=True
+        )
     return ModelInfo(**model_db.get(req.id))
 
 
@@ -1132,12 +1139,19 @@ def delete_model(model_id: str):
     """删除模型"""
     from kb.database import init_model_db
     from llamaindex_study.config import get_model_registry
+    from kb.parallel_embedding import get_parallel_processor
 
     db = init_model_db()
     if not db.get(model_id):
         raise HTTPException(status_code=404, detail=f"模型 {model_id} 不存在")
     db.delete(model_id)
     get_model_registry().reload()
+    try:
+        get_parallel_processor().refresh_endpoints()
+    except Exception as e:
+        logger.error(
+            f"refresh_endpoints() failed after model delete: {e}", exc_info=True
+        )
     return {"status": "deleted", "model_id": model_id}
 
 
@@ -1146,6 +1160,7 @@ def update_model(model_id: str, req: ModelCreateRequest):
     """更新模型"""
     from kb.database import init_model_db
     from llamaindex_study.config import get_model_registry
+    from kb.parallel_embedding import get_parallel_processor
 
     db = init_model_db()
     if not db.get(model_id):
@@ -1162,6 +1177,12 @@ def update_model(model_id: str, req: ModelCreateRequest):
     if req.is_default:
         db.set_default(model_id)
     get_model_registry().reload()
+    try:
+        get_parallel_processor().refresh_endpoints()
+    except Exception as e:
+        logger.error(
+            f"refresh_endpoints() failed after model update: {e}", exc_info=True
+        )
     return ModelInfo(**db.get(model_id))
 
 
@@ -1170,12 +1191,19 @@ def set_default_model(model_id: str):
     """设置默认模型"""
     from kb.database import init_model_db
     from llamaindex_study.config import get_model_registry
+    from kb.parallel_embedding import get_parallel_processor
 
     db = init_model_db()
     if not db.get(model_id):
         raise HTTPException(status_code=404, detail=f"模型 {model_id} 不存在")
     db.set_default(model_id)
     get_model_registry().reload()
+    try:
+        get_parallel_processor().refresh_endpoints()
+    except Exception as e:
+        logger.error(
+            f"refresh_endpoints() failed after model set default: {e}", exc_info=True
+        )
     return {"status": "success", "model_id": model_id}
 
 
@@ -2580,6 +2608,21 @@ def list_document_chunks(
     }
 
 
+@app.get("/kbs/{kb_id}/chunks/failed")
+def list_failed_chunks(kb_id: str, limit: int = 1000):
+    """获取所有 embedding 失败的 chunks"""
+    from kb.database import init_chunk_db
+
+    chunk_db = init_chunk_db()
+    failed_chunks = chunk_db.get_failed_chunks(kb_id, limit=limit)
+    stats = chunk_db.get_embedding_stats(kb_id)
+    return {
+        "chunks": failed_chunks,
+        "total": len(failed_chunks),
+        "stats": stats,
+    }
+
+
 @app.get("/kbs/{kb_id}/chunks/{chunk_id}", response_model=ChunkResponse)
 def get_chunk(kb_id: str, chunk_id: str):
     """获取分块详情"""
@@ -2659,27 +2702,12 @@ def reembed_chunk(kb_id: str, chunk_id: str):
     }
 
 
-@app.get("/kbs/{kb_id}/chunks/failed")
-def list_failed_chunks(kb_id: str, limit: int = 1000):
-    """获取所有 embedding 失败的 chunks"""
-    from kb.database import init_chunk_db
-
-    chunk_db = init_chunk_db()
-    failed_chunks = chunk_db.get_failed_chunks(kb_id, limit=limit)
-    stats = chunk_db.get_embedding_stats(kb_id)
-    return {
-        "chunks": failed_chunks,
-        "total": len(failed_chunks),
-        "stats": stats,
-    }
-
-
 @app.post("/kbs/{kb_id}/chunks/reembed-failed")
 def reembed_failed_chunks(kb_id: str, batch_size: int = 50):
     """批量重新 embedding 所有失败的 chunks"""
     from kb.database import init_chunk_db
     from kb.lance_crud import LanceCRUDService
-    from llamaindex_study.llama_utils import get_default_embed_model
+    from kb.parallel_embedding import get_parallel_processor
 
     chunk_db = init_chunk_db()
     failed_chunks = chunk_db.get_failed_chunks(kb_id, limit=10000)
@@ -2692,16 +2720,11 @@ def reembed_failed_chunks(kb_id: str, batch_size: int = 50):
             "failed": 0,
         }
 
-    embed_model = None
-    try:
-        embed_model = get_default_embed_model()
-    except Exception as e:
-        logger.warning(f"获取 embedding 模型失败: {e}")
-
-    if not embed_model:
+    processor = get_parallel_processor()
+    if not processor.endpoints:
         return {
             "status": "error",
-            "message": "无法获取 embedding 模型，需要重新启动服务",
+            "message": "没有可用的 embedding 端点",
             "processed": 0,
             "failed": len(failed_chunks),
         }
@@ -2712,8 +2735,17 @@ def reembed_failed_chunks(kb_id: str, batch_size: int = 50):
 
     for chunk in failed_chunks:
         try:
-            embedding = embed_model.get_text_embedding(chunk["text"])
-            LanceCRUDService.upsert_vector(chunk["id"], chunk["doc_id"], embedding)
+            import asyncio
+
+            ep_name = processor.endpoints[0].name
+            ep_name, embedding, error = asyncio.run(
+                processor.get_embedding(chunk["text"], ep_name)
+            )
+            if error:
+                raise Exception(error)
+            LanceCRUDService.upsert_vector(
+                chunk["id"], chunk["doc_id"], embedding, kb_id=kb_id
+            )
             chunk_db.mark_embedded(chunk["id"])
             processed += 1
         except Exception as e:

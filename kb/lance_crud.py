@@ -694,7 +694,7 @@ class LanceCRUDService:
 
         import pyarrow as pa
 
-        table.upsert(
+        table.merge_insert("id").matching("id").upsert(
             {
                 "id": [chunk_id],
                 "doc_id": [doc_id],
