@@ -564,7 +564,7 @@ class TaskExecutor:
                             importer = ZoteroImporter(kb_id=kb_id)
                             zotero_item = importer.get_item(int(item_id), prefix=prefix)
                             if zotero_item and zotero_item.title:
-                                item_titles[item_id] = zotero_item.title
+                                item_titles[str(item_id)] = zotero_item.title
                             importer.close()
                         except Exception as e:
                             logger.debug(
@@ -572,6 +572,20 @@ class TaskExecutor:
                             )
         except Exception as e:
             logger.debug(f"Failed to pre-fetch Zotero titles: {e}")
+
+        if item_titles:
+            for idx, item in enumerate(items):
+                if item.get("type") == "item":
+                    item_id = item.get("id")
+                    if item_id and str(item_id) in item_titles:
+                        file_id = hashlib.md5(
+                            f"{task_id}:{item.get('type')}:{item_id}".encode()
+                        ).hexdigest()[:12]
+                        self.queue.update_file_progress(
+                            task_id,
+                            file_id,
+                            file_name=item_titles[str(item_id)],
+                        )
 
         stats = {"files": 0, "nodes": 0, "failed": 0, "processed_sources": []}
 
