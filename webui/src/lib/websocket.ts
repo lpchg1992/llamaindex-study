@@ -82,6 +82,7 @@ export function useTaskWebSocket(enabled: boolean = true) {
                 message: message.data.message,
                 result: message.data.result,
                 error: message.data.error,
+                file_progress: message.data.file_progress || oldData.file_progress,
               }
             })
 
@@ -100,6 +101,7 @@ export function useTaskWebSocket(enabled: boolean = true) {
                   total: message.data.total,
                   result: message.data.result,
                   error: message.data.error,
+                  file_progress: message.data.file_progress,
                 } as TaskResponse, ...oldData]
               }
 
@@ -113,6 +115,7 @@ export function useTaskWebSocket(enabled: boolean = true) {
                 message: message.data.message,
                 result: message.data.result,
                 error: message.data.error,
+                file_progress: message.data.file_progress || updatedTasks[taskIndex].file_progress,
               }
               return updatedTasks
             })
@@ -185,6 +188,7 @@ interface TaskResponse {
     chunk_strategy?: string
   }
   error?: string
+  file_progress?: FileProgressItem[]
 }
 
 export default useTaskWebSocket
