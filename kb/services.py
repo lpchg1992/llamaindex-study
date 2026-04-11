@@ -2182,7 +2182,10 @@ class TaskService:
         from kb.task_queue import TaskQueue, TaskStatus
 
         queue = TaskQueue()
-        tasks = queue.list_tasks(status=status)
+        if status == "all":
+            tasks = queue.list_tasks(limit=1000)
+        else:
+            tasks = queue.list_tasks(status=status)
         deleted = []
         cleaned_results = []
 
