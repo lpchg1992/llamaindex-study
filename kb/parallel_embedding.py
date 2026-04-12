@@ -178,11 +178,10 @@ class ParallelEmbeddingProcessor:
             )
 
             is_healthy = self._health_check(base_url, model_name)
+            ep.is_healthy = is_healthy
             if is_healthy:
-                ep.is_healthy = True
                 logger.debug(f"端点健康检查通过: {ep.name} ({base_url})")
             else:
-                ep.is_healthy = True
                 self._consecutive_failures[ep.name] = 0
                 logger.warning(
                     f"端点 {ep.name} ({base_url}) 初始检查未通过，将在健康检查循环中重试"
