@@ -851,13 +851,39 @@ export function useRepairAll() {
   })
 }
 
+export function useDocEmbeddingStats(kbId: string) {
+  return useQuery<{ kb_id: string; docs: { doc_id: string; total: number; in_lance: number; missing: number }[] }>({
+    queryKey: ['doc-embedding-stats', kbId],
+    queryFn: async () => {
+      const { data } = await apiClient.get(`${API_BASE}/kbs/${kbId}/consistency/doc-stats`)
+      return data
+    },
+    enabled: !!kbId,
+  })
+}
+
+export function useCheckAndMarkFailed() {
+  const queryClient = useQueryClient()
+  return useMutation<{ kb_id: string; marked_failed: number; total_checked: number; message: string }, Error, string>({
+    mutationFn: async (kbId: string) => {
+      const { data } = await apiClient.post(`${API_BASE}/kbs/${kbId}/consistency/check-and-mark-failed`)
+      return data
+    },
+    onSuccess: (_, kbId) => {
+      queryClient.invalidateQueries({ queryKey: ['doc-embedding-stats', kbId] })
+      queryClient.invalidateQueries({ queryKey: ['consistency-check', kbId] })
+      queryClient.invalidateQueries({ queryKey: ['documents', kbId] })
+    },
+  })
+}
+
 export function useRevectorTask() {
-  return useMutation<RevectorResult, Error, { kbId: string; includePending?: boolean; includeFailed?: boolean }>({
-    mutationFn: async ({ kbId, includePending = true, includeFailed = true }) => {
+  return useMutation<RevectorResult, Error, { kbId: string; includePending?: boolean; includeFailed?: boolean; includeEmbedded?: boolean }>({
+    mutationFn: async ({ kbId, includePending = true, includeFailed = true, includeEmbedded = false }) => {
       const { data } = await apiClient.post<RevectorResult>(
         `${API_BASE}/kbs/${kbId}/chunks/revector`,
         {},
-        { params: { include_pending: includePending, include_failed: includeFailed } }
+        { params: { include_pending: includePending, include_failed: includeFailed, include_embedded: includeEmbedded } }
       )
       return data
     },

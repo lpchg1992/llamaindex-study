@@ -583,6 +583,7 @@ export interface RevectorResult {
   message: string
   pending: number
   failed: number
+  embedded?: number
 }
 
 // Task batch operations

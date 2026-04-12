@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useKBs, useLanceStats, useLanceDuplicates, useDocuments, useDocumentChunks, useDeleteDocument, useUpdateChunk, useReembedChunk, useDeleteChunk, useChunkChildren, useFailedChunks, useReembedFailedChunks } from '@/api/hooks'
+import { useKBs, useLanceStats, useLanceDuplicates, useDocuments, useDocumentChunks, useDeleteDocument, useUpdateChunk, useReembedChunk, useDeleteChunk, useChunkChildren, useDocEmbeddingStats } from '@/api/hooks'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -139,6 +139,7 @@ export function LanceDBDialog({ open, onOpenChange, kbId }: { open: boolean; onO
 
 function DocumentManagementTab({ kbId }: { kbId: string }) {
   const { data: documents, isLoading } = useDocuments(kbId)
+  const { data: docStats } = useDocEmbeddingStats(kbId)
   const deleteDoc = useDeleteDocument()
   const [expandedDoc, setExpandedDoc] = useState<string | null>(null)
   const [selectedDocForChunks, setSelectedDocForChunks] = useState<DocumentInfo | null>(null)
@@ -149,14 +150,16 @@ function DocumentManagementTab({ kbId }: { kbId: string }) {
   const [chunkPageSize] = useState(20)
   const [chunkPageInput, setChunkPageInput] = useState('')
   const [chunkFilter, setChunkFilter] = useState<number | null>(null)
-  const [showFailedOnly, setShowFailedOnly] = useState(false)
   const { data: chunksData, isLoading: chunksLoading, refetch: refetchChunks } = useDocumentChunks(kbId, expandedDoc || '', chunkPage, chunkPageSize, chunkFilter)
   const { data: childrenData, isLoading: childrenLoading } = useChunkChildren(kbId, deletingChunk?.id || '')
   const updateChunk = useUpdateChunk()
   const reembedChunk = useReembedChunk()
   const deleteChunk = useDeleteChunk()
-  const { data: failedChunksData, refetch: refetchFailed } = useFailedChunks(kbId)
-  const reembedFailed = useReembedFailedChunks()
+
+  const docStatsMap = docStats?.docs?.reduce((acc, d) => {
+    acc[d.doc_id] = d
+    return acc
+  }, {} as Record<string, { total: number; in_lance: number; missing: number }>) || {}
 
   const handleDelete = async (doc: DocumentInfo) => {
     if (confirm(`Delete document "${doc.source_file}" and all its chunks?`)) {
@@ -183,15 +186,6 @@ function DocumentManagementTab({ kbId }: { kbId: string }) {
       refetchChunks()
     } else {
       toast.error(result.message || 'Reembed failed')
-    }
-  }
-
-  const handleReembedAllFailed = async () => {
-    if (confirm(`重新 embedding 所有 ${failedChunksData?.total || 0} 个失败的 chunks?`)) {
-      const result = await reembedFailed.mutateAsync({ kbId })
-      toast.success(result.message)
-      refetchFailed()
-      refetchChunks()
     }
   }
 
@@ -223,11 +217,6 @@ function DocumentManagementTab({ kbId }: { kbId: string }) {
     )
   }
 
-  const stats = failedChunksData?.stats
-  const failedCount = stats?.failed || 0
-  const successCount = stats?.success || 0
-  const pendingCount = stats?.pending || 0
-
   return (
     <div className="flex flex-col h-full w-full bg-card border rounded-lg overflow-hidden">
       <div className="flex items-center justify-between p-3 border-b shrink-0">
@@ -235,68 +224,8 @@ function DocumentManagementTab({ kbId }: { kbId: string }) {
           <FileText className="h-4 w-4 text-muted-foreground" />
           <h3 className="font-medium text-sm">Documents ({documents.length})</h3>
         </div>
-        <div className="flex items-center gap-2">
-          {stats && (
-            <div className="flex items-center gap-1 text-xs">
-              <Badge variant="default" className="bg-green-500">✓ {successCount}</Badge>
-              {failedCount > 0 && <Badge variant="destructive">✗ {failedCount}</Badge>}
-              {pendingCount > 0 && <Badge variant="secondary">○ {pendingCount}</Badge>}
-            </div>
-          )}
-          <Button
-            variant={showFailedOnly ? "default" : "outline"}
-            size="sm"
-            onClick={() => setShowFailedOnly(!showFailedOnly)}
-            disabled={failedCount === 0}
-          >
-            <AlertTriangle className="h-4 w-4 mr-1" />
-            Failed ({failedCount})
-          </Button>
-        </div>
       </div>
 
-      {showFailedOnly && failedChunksData && (
-        <div className="border-b bg-destructive/10 p-3">
-          <div className="flex items-center justify-between mb-2">
-            <h4 className="text-sm font-medium">Failed Chunks</h4>
-            <Button
-              variant="default"
-              size="sm"
-              onClick={handleReembedAllFailed}
-              disabled={reembedFailed.isPending || failedCount === 0}
-            >
-              {reembedFailed.isPending ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <RefreshCw className="h-4 w-4" />
-              )}
-              Reembed All Failed
-            </Button>
-          </div>
-          <div className="space-y-2 max-h-48 overflow-y-auto">
-            {failedChunksData.chunks.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No failed chunks</p>
-            ) : (
-              failedChunksData.chunks.map((chunk) => (
-                <div key={chunk.id} className="flex items-center justify-between p-2 bg-background rounded border">
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-mono truncate">{chunk.id}</p>
-                    <p className="text-xs text-muted-foreground truncate">{chunk.text}</p>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => handleReembed(chunk as ChunkInfo)}
-                    disabled={reembedChunk.isPending}
-                  >
-                    <RefreshCw className="h-4 w-4" />
-                  </Button>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-      )}
       <div className="flex-1 min-h-0 overflow-y-auto">
         <div className="space-y-3 p-4">
             {documents.map((doc) => (
@@ -311,8 +240,20 @@ function DocumentManagementTab({ kbId }: { kbId: string }) {
                     <p className="text-xs text-muted-foreground truncate">{doc.source_path}</p>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
-                    <Badge variant="secondary" className="text-xs whitespace-nowrap">{doc.chunk_count} chunks</Badge>
-                    <Badge variant="outline" className="text-xs whitespace-nowrap">{doc.total_chars.toLocaleString()} chars</Badge>
+                    {docStatsMap[doc.id] ? (
+                      <>
+                        <Badge variant="default" className="bg-green-500 text-xs whitespace-nowrap">
+                          ✓ {docStatsMap[doc.id].in_lance}
+                        </Badge>
+                        {docStatsMap[doc.id].missing > 0 && (
+                          <Badge variant="destructive" className="text-xs whitespace-nowrap">
+                            ✗ {docStatsMap[doc.id].missing}
+                          </Badge>
+                        )}
+                      </>
+                    ) : (
+                      <Badge variant="secondary" className="text-xs whitespace-nowrap">{doc.chunk_count} chunks</Badge>
+                    )}
                     <Button
                       variant="ghost"
                       size="icon"

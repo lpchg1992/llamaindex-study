@@ -1737,6 +1737,100 @@ class ChunkDB:
             ).all()
             return [self._to_dict(row) for row in rows]
 
+    def get_embedded(self, kb_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+        """Get chunks with embedding_generated=1 (success)"""
+        with self.db.session_scope() as session:
+            rows = session.scalars(
+                select(ChunkModel)
+                .where(ChunkModel.kb_id == kb_id, ChunkModel.embedding_generated == 1)
+                .limit(limit)
+            ).all()
+            return [self._to_dict(row) for row in rows]
+
+    def get_doc_embedding_stats(self, kb_id: str) -> List[Dict[str, Any]]:
+        """Get per-document embedding stats by checking LanceDB presence.
+
+        Returns list of dicts with doc_id, total_chunks, in_lance_count, missing_count
+        """
+        from kb.lance_crud import LanceCRUDService
+        from kb.vector_store import VectorStoreService
+
+        docs = []
+        with self.db.session_scope() as session:
+            rows = session.scalars(
+                select(ChunkModel.doc_id, func.count(ChunkModel.id).label("total"))
+                .where(ChunkModel.kb_id == kb_id)
+                .group_by(ChunkModel.doc_id)
+            ).all()
+            for row in rows:
+                docs.append({"doc_id": row.doc_id, "total": row.total})
+
+        try:
+            vs = VectorStoreService.get_vector_store(kb_id)
+            lance_store = vs._get_lance_vector_store()
+            lance_table = lance_store._connection.open_table(lance_store._table_name)
+            lance_ids = set(lance_table.to_pandas()["id"].tolist())
+        except Exception:
+            lance_ids = set()
+
+        result = []
+        for doc in docs:
+            doc_id = doc["doc_id"]
+            total = doc["total"]
+
+            with self.db.session_scope() as session:
+                chunk_ids = session.scalars(
+                    select(ChunkModel.id).where(ChunkModel.doc_id == doc_id)
+                ).all()
+                chunk_ids = [c for c in chunk_ids]
+
+            in_lance = len([cid for cid in chunk_ids if cid in lance_ids])
+            result.append(
+                {
+                    "doc_id": doc_id,
+                    "total": total,
+                    "in_lance": in_lance,
+                    "missing": total - in_lance,
+                }
+            )
+
+        return result
+
+    def mark_chunks_missing_from_lance(
+        self, kb_id: str, limit: int = 100000
+    ) -> Dict[str, int]:
+        """Check all chunks against LanceDB and mark those missing as failed.
+
+        Returns dict with marked count
+        """
+        from kb.lance_crud import LanceCRUDService
+        from kb.vector_store import VectorStoreService
+
+        with self.db.session_scope() as session:
+            rows = session.scalars(
+                select(ChunkModel).where(ChunkModel.kb_id == kb_id).limit(limit)
+            ).all()
+            chunks = [self._to_dict(row) for row in rows]
+
+        try:
+            vs = VectorStoreService.get_vector_store(kb_id)
+            lance_store = vs._get_lance_vector_store()
+            lance_table = lance_store._connection.open_table(lance_store._table_name)
+            lance_ids = set(lance_table.to_pandas()["id"].tolist())
+        except Exception:
+            lance_ids = set()
+
+        to_mark_failed = []
+        for chunk in chunks:
+            if chunk["embedding_generated"] != 2:
+                if chunk["id"] not in lance_ids:
+                    to_mark_failed.append(chunk["id"])
+
+        if to_mark_failed:
+            self.mark_failed_bulk(to_mark_failed)
+
+        return {"marked_failed": len(to_mark_failed), "total_checked": len(chunks)}
+
 
 def init_sync_db() -> SyncStateDB:
     return SyncStateDB(get_db())

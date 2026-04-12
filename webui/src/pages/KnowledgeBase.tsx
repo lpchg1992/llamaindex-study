@@ -1,6 +1,5 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { useKBs, useCreateKB, useDeleteKB, useKBTopics, useRefreshTopics, useConsistencyCheck, useConsistencyRepair, useInitializeKB, useRepairAll, useRevectorTask } from '@/api/hooks'
+import { useKBs, useCreateKB, useDeleteKB, useKBTopics, useRefreshTopics, useConsistencyCheck, useConsistencyRepair, useInitializeKB, useRepairAll, useCheckAndMarkFailed } from '@/api/hooks'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -15,7 +14,7 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { Plus, Trash2, Database, RefreshCw, Loader2, AlertTriangle, CheckCircle, Wrench, Trash, Sparkles, SparklesIcon, Pencil, WrenchIcon, HardDrive, Upload } from 'lucide-react'
+import { Plus, Trash2, Database, RefreshCw, Loader2, AlertTriangle, CheckCircle, Wrench, Trash, Sparkles, Pencil, WrenchIcon, HardDrive, Upload, Check } from 'lucide-react'
 import { toast } from 'sonner'
 import { KBEditDialog } from '@/components/KBEditDialog'
 import { DangerConfirmDialog } from '@/components/DangerConfirmDialog'
@@ -24,14 +23,12 @@ import { ImportDialog } from '@/components/ImportDialog'
 import type { KBInfo } from '@/types/api'
 
 function KBDetailsPanel({ kb }: { kb: KBInfo }) {
-  const navigate = useNavigate()
   const { data: topics, isLoading: topicsLoading } = useKBTopics(kb.id)
   const refreshTopics = useRefreshTopics()
   const { data: consistency, isLoading: consistencyLoading, refetch: refetchConsistency } = useConsistencyCheck(kb.id)
   const repairConsistency = useConsistencyRepair()
   const initializeKB = useInitializeKB()
-  const revectorTask = useRevectorTask()
-
+  const checkAndMarkFailed = useCheckAndMarkFailed()
   const [isRefreshingTopics, setIsRefreshingTopics] = useState(false)
   const [isInitializeOpen, setIsInitializeOpen] = useState(false)
 
@@ -57,6 +54,30 @@ function KBDetailsPanel({ kb }: { kb: KBInfo }) {
     }
   }
 
+  const handleCheckAndMarkFailed = async () => {
+    try {
+      const result = await checkAndMarkFailed.mutateAsync(kb.id)
+      toast.success(result.message)
+      refetchConsistency()
+    } catch (error) {
+      toast.error('Check and mark failed failed')
+    }
+  }
+
+  const handleSyncAllMissing = async () => {
+    try {
+      const result = await checkAndMarkFailed.mutateAsync(kb.id)
+      if (result.marked_failed > 0) {
+        toast.success(`已将 ${result.marked_failed} 个缺失向量的 chunk 标记为失败`)
+      } else {
+        toast.info('所有 chunk 都有对应的向量数据')
+      }
+      refetchConsistency()
+    } catch (error) {
+      toast.error('Sync failed')
+    }
+  }
+
   const handleConfirmInitialize = async () => {
     try {
       const result = await initializeKB.mutateAsync({ kbId: kb.id, confirmationName: kb.id, asyncMode: true })
@@ -68,20 +89,6 @@ function KBDetailsPanel({ kb }: { kb: KBInfo }) {
       const message = error?.response?.data?.detail || 'Initialization failed'
       toast.error(message)
       throw error
-    }
-  }
-
-  const handleRevector = async () => {
-    try {
-      const result = await revectorTask.mutateAsync({ kbId: kb.id })
-      if (result.status === 'submitted' && result.task_id) {
-        toast.success(`Revector task submitted: ${result.task_id}`)
-        navigate('/tasks')
-      } else if (result.status === 'no_chunks') {
-        toast.info('No chunks need re-vectorization')
-      }
-    } catch (error) {
-      toast.error('Failed to submit revector task')
     }
   }
 
@@ -203,29 +210,20 @@ function KBDetailsPanel({ kb }: { kb: KBInfo }) {
                           <Database className="h-4 w-4 text-muted-foreground" />
                           <span className="text-sm font-medium">向量状态明细</span>
                         </div>
-                        <div className="grid grid-cols-4 gap-2 text-xs">
+                        <div className="grid grid-cols-3 gap-2 text-xs">
                           <div className="p-2 bg-green-50 rounded">
-                            <p className="text-muted-foreground">✓ 已向量化</p>
-                            <p className="font-medium text-green-700">{consistency.embedding_stats?.success?.toLocaleString()}</p>
+                            <p className="text-muted-foreground">✓ LanceDB 向量数</p>
+                            <p className="font-medium text-green-700">{consistency.summary?.lance_rows?.toLocaleString()}</p>
                           </div>
-                          <div className="p-2 bg-yellow-50 rounded">
-                            <p className="text-muted-foreground">○ 待向量化</p>
-                            <p className="font-medium text-yellow-700">{consistency.embedding_stats?.pending?.toLocaleString()}</p>
+                          <div className="p-2 bg-muted rounded">
+                            <p className="text-muted-foreground">SQLite Chunk 总数</p>
+                            <p className="font-medium">{consistency.summary?.chunk_count_actual?.toLocaleString()}</p>
                           </div>
                           <div className="p-2 bg-red-50 rounded">
-                            <p className="text-muted-foreground">✗ 向量失败</p>
-                            <p className="font-medium text-red-700">{consistency.embedding_stats?.failed?.toLocaleString()}</p>
-                          </div>
-                          <div className="p-2 bg-blue-50 rounded">
-                            <p className="text-muted-foreground">DB 缺失</p>
-                            <p className="font-medium text-blue-700">
-                              {((consistency.embedding_stats?.missing_in_lance || 0) + (consistency.embedding_stats?.pending_not_in_lance || 0) + (consistency.embedding_stats?.failed_not_in_lance || 0))?.toLocaleString()}
-                            </p>
+                            <p className="text-muted-foreground">✗ 缺失向量数</p>
+                            <p className="font-medium text-red-700">{consistency.vector_integrity?.missing_count?.toLocaleString()}</p>
                           </div>
                         </div>
-                        <p className="text-xs text-muted-foreground mt-2">
-                          LanceDB 实际向量数: {consistency.embedding_stats?.in_lance?.toLocaleString()} / SQLite 已向量化: {consistency.embedding_stats?.success?.toLocaleString()}
-                        </p>
                       </div>
                     )}
 
@@ -282,14 +280,20 @@ function KBDetailsPanel({ kb }: { kb: KBInfo }) {
                     {/* Fix Button */}
                     <Button size="sm" variant="default" onClick={handleRepair} disabled={repairConsistency.isPending}>
                       {repairConsistency.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wrench className="h-4 w-4 mr-1" />}
-                      修正文档统计 (安全)
+                      修正文档统计
                     </Button>
 
-                    {/* Revector Button */}
-                    {((consistency.embedding_stats?.pending ?? 0) > 0 || (consistency.embedding_stats?.failed ?? 0) > 0) && (
-                      <Button size="sm" variant="outline" onClick={handleRevector} disabled={revectorTask.isPending}>
-                        {revectorTask.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <SparklesIcon className="h-4 w-4 mr-1" />}
-                        重新向量化 ({(((consistency.embedding_stats?.pending ?? 0) + (consistency.embedding_stats?.failed ?? 0))).toLocaleString()})
+                    {/* Check and Mark Failed Button */}
+                    <Button size="sm" variant="outline" onClick={handleCheckAndMarkFailed} disabled={checkAndMarkFailed.isPending}>
+                      {checkAndMarkFailed.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4 mr-1" />}
+                      检查并标记失败
+                    </Button>
+
+                    {/* Sync All Missing Button */}
+                    {(consistency.vector_integrity?.missing_count ?? 0) > 0 && (
+                      <Button size="sm" variant="default" onClick={handleSyncAllMissing} disabled={checkAndMarkFailed.isPending}>
+                        {checkAndMarkFailed.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-1" />}
+                        同步所有缺失向量 ({consistency.vector_integrity?.missing_count?.toLocaleString()})
                       </Button>
                     )}
                   </div>

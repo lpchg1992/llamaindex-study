@@ -2158,6 +2158,35 @@ def repair_all_consistency():
     return result
 
 
+@app.get("/kbs/{kb_id}/consistency/doc-stats")
+def get_doc_embedding_stats(kb_id: str):
+    """获取每个文档的向量统计（实际检查 LanceDB）"""
+    from kb.services import ConsistencyService
+
+    info = KnowledgeBaseService.get_info(kb_id)
+    if not info:
+        raise HTTPException(status_code=404, detail=f"知识库不存在: {kb_id}")
+
+    result = ConsistencyService.get_doc_embedding_stats(kb_id)
+    return {
+        "kb_id": kb_id,
+        "docs": result,
+    }
+
+
+@app.post("/kbs/{kb_id}/consistency/check-and-mark-failed")
+def check_and_mark_failed_chunks(kb_id: str):
+    """检查所有 chunk 是否存在于 LanceDB，并将不存在的标记为失败"""
+    from kb.services import ConsistencyService
+
+    info = KnowledgeBaseService.get_info(kb_id)
+    if not info:
+        raise HTTPException(status_code=404, detail=f"知识库不存在: {kb_id}")
+
+    result = ConsistencyService.check_and_mark_failed(kb_id)
+    return result
+
+
 # ============== Obsidian 全库分类导入 ==============
 
 
@@ -2784,10 +2813,11 @@ def submit_revector_task(
     kb_id: str,
     include_pending: bool = True,
     include_failed: bool = True,
+    include_embedded: bool = False,
     batch_size: int = 100,
     limit: int = 50000,
 ):
-    """提交重新向量化任务到任务调度器（处理 pending 和 failed chunks）"""
+    """提交重新向量化任务到任务调度器（处理 pending、failed 和 orphaned success chunks）"""
     from kb.task_queue import task_queue
     from kb.database import init_chunk_db
 
@@ -2795,13 +2825,21 @@ def submit_revector_task(
 
     pending_count = len(chunk_db.get_unembedded(kb_id, limit=1))
     failed_count = len(chunk_db.get_failed_chunks(kb_id, limit=1))
+    embedded_count = (
+        len(chunk_db.get_embedded(kb_id, limit=1)) if include_embedded else 0
+    )
 
-    if include_pending and pending_count == 0 and include_failed and failed_count == 0:
+    has_pending = include_pending and pending_count > 0
+    has_failed = include_failed and failed_count > 0
+    has_embedded = include_embedded and embedded_count > 0
+
+    if not has_pending and not has_failed and not has_embedded:
         return {
             "status": "no_chunks",
             "message": "没有需要重新向量化的 chunks",
-            "pending": 0,
-            "failed": 0,
+            "pending": pending_count,
+            "failed": failed_count,
+            "embedded": embedded_count,
         }
 
     task_id = task_queue.submit_task(
@@ -2810,6 +2848,7 @@ def submit_revector_task(
         params={
             "include_pending": include_pending,
             "include_failed": include_failed,
+            "include_embedded": include_embedded,
             "batch_size": batch_size,
             "limit": limit,
         },
@@ -2822,6 +2861,7 @@ def submit_revector_task(
         "message": f"重新向量化任务已提交: {task_id}",
         "pending": pending_count,
         "failed": failed_count,
+        "embedded": embedded_count,
     }
 
 

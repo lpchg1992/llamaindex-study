@@ -3160,3 +3160,24 @@ class ConsistencyService:
             "failed": failed,
             "results": results,
         }
+
+    @staticmethod
+    def get_doc_embedding_stats(kb_id: str) -> List[Dict[str, Any]]:
+        """获取每个文档的向量统计（实际检查 LanceDB）"""
+        from kb.database import init_chunk_db
+
+        return init_chunk_db().get_doc_embedding_stats(kb_id)
+
+    @staticmethod
+    def check_and_mark_failed(kb_id: str) -> Dict[str, Any]:
+        """检查所有 chunk 是否存在于 LanceDB，将不存在的标记为失败"""
+        from kb.database import init_chunk_db
+
+        chunk_db = init_chunk_db()
+        result = chunk_db.mark_chunks_missing_from_lance(kb_id)
+        return {
+            "kb_id": kb_id,
+            "marked_failed": result["marked_failed"],
+            "total_checked": result["total_checked"],
+            "message": f"已标记 {result['marked_failed']} 个 chunk 为失败（检查了 {result['total_checked']} 个）",
+        }

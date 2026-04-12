@@ -810,7 +810,7 @@ class TaskExecutor:
         )
 
     async def _execute_revector(self, task: "Task") -> None:
-        """执行重新向量化任务（处理 pending 和 failed chunks）"""
+        """执行重新向量化任务（处理 pending、failed 和 orphaned success chunks）"""
         from kb.database import init_chunk_db
         from kb.lance_crud import LanceCRUDService
         from kb.parallel_embedding import get_parallel_processor
@@ -821,12 +821,14 @@ class TaskExecutor:
 
         include_pending = params.get("include_pending", True)
         include_failed = params.get("include_failed", True)
+        include_embedded = params.get("include_embedded", False)
         batch_size = params.get("batch_size", 100)
         limit = params.get("limit", 50000)
 
         logger.info(
             f"[{task_id}] 开始重新向量化任务: kb_id={kb_id}, "
-            f"include_pending={include_pending}, include_failed={include_failed}, limit={limit}"
+            f"include_pending={include_pending}, include_failed={include_failed}, "
+            f"include_embedded={include_embedded}, limit={limit}"
         )
 
         chunk_db = init_chunk_db()
@@ -841,6 +843,7 @@ class TaskExecutor:
 
         pending_chunks = []
         failed_chunks = []
+        embedded_chunks = []
 
         if include_pending:
             pending_chunks = chunk_db.get_unembedded(kb_id, limit=limit)
@@ -848,7 +851,10 @@ class TaskExecutor:
         if include_failed:
             failed_chunks = chunk_db.get_failed_chunks(kb_id, limit=limit)
 
-        all_chunks = pending_chunks + failed_chunks
+        if include_embedded:
+            embedded_chunks = chunk_db.get_embedded(kb_id, limit=limit)
+
+        all_chunks = pending_chunks + failed_chunks + embedded_chunks
         total_chunks = len(all_chunks)
 
         if total_chunks == 0:
@@ -859,6 +865,7 @@ class TaskExecutor:
                     "processed": 0,
                     "pending": 0,
                     "failed": 0,
+                    "embedded": 0,
                     "success": 0,
                     "skipped": 0,
                 },
@@ -874,6 +881,7 @@ class TaskExecutor:
         stats = {
             "pending": len(pending_chunks),
             "failed": len(failed_chunks),
+            "embedded": len(embedded_chunks),
             "success": 0,
             "skipped": 0,
         }
@@ -954,6 +962,7 @@ class TaskExecutor:
 
         remaining_pending = len(chunk_db.get_unembedded(kb_id, limit=1))
         remaining_failed = len(chunk_db.get_failed_chunks(kb_id, limit=1))
+        remaining_embedded = len(chunk_db.get_embedded(kb_id, limit=1))
 
         self.queue.complete_task(
             task_id,
@@ -962,12 +971,14 @@ class TaskExecutor:
                 "processed": processed,
                 "pending": stats["pending"],
                 "failed": stats["failed"],
+                "embedded": stats["embedded"],
                 "success": stats["success"],
                 "skipped": stats["skipped"],
                 "remaining_pending": remaining_pending,
                 "remaining_failed": remaining_failed,
+                "remaining_embedded": remaining_embedded,
                 "message": f"完成: {stats['success']} 成功, {stats['skipped']} 失败. "
-                f"剩余: pending={remaining_pending}, failed={remaining_failed}",
+                f"剩余: pending={remaining_pending}, failed={remaining_failed}, embedded={remaining_embedded}",
             },
         )
 
