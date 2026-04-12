@@ -2580,9 +2580,188 @@ class ConsistencyService:
     """知识库一致性校验与修复服务"""
 
     @staticmethod
+    def check(kb_id: str) -> Dict[str, Any]:
+        """
+        统一的一致性检查
+
+        检查两个维度：
+        1. 文档统计准确性：documents.chunk_count vs chunks 表实际数量
+        2. 向量完整性：LanceDB 行数与文档统计的匹配情况
+
+        Returns:
+            {
+                "kb_id": str,
+                "status": str,  # "ok" | "issues_found"
+                "summary": {
+                    "doc_count": int,
+                    "chunk_count_stored": int,  # documents.chunk_count 总和
+                    "chunk_count_actual": int,  # chunks 表实际数量
+                    "lance_rows": int,          # LanceDB 行数
+                },
+                "doc_stats": {
+                    "accurate": bool,
+                    "mismatched_count": int,
+                    "issues": [...],
+                },
+                "vector_integrity": {
+                    "status": str,  # "ok" | "missing" | "orphan" | "mismatch"
+                    "missing_count": int,   # LanceDB 缺少的 chunk 数
+                    "orphan_count": int,    # LanceDB 多余的 chunk 数
+                    "issues": [...],
+                },
+                "recommendations": [...],  # 建议采取的行动
+            }
+        """
+        from kb.database import init_document_db, init_chunk_db
+
+        doc_db = init_document_db()
+        chunk_db = init_chunk_db()
+        docs = doc_db.get_by_kb(kb_id)
+
+        if not docs:
+            return {
+                "kb_id": kb_id,
+                "status": "ok",
+                "summary": {
+                    "doc_count": 0,
+                    "chunk_count_stored": 0,
+                    "chunk_count_actual": 0,
+                    "lance_rows": 0,
+                },
+                "doc_stats": {"accurate": True, "mismatched_count": 0, "issues": []},
+                "vector_integrity": {
+                    "status": "ok",
+                    "missing_count": 0,
+                    "orphan_count": 0,
+                    "issues": [],
+                },
+                "recommendations": [],
+            }
+
+        chunk_count_stored = 0
+        chunk_count_actual = 0
+        doc_stats_issues = []
+
+        for doc in docs:
+            doc_id = doc.get("id")
+            stored = doc.get("chunk_count", 0)
+            actual = chunk_db.count_by_doc(doc_id)
+            chunk_count_stored += stored
+            chunk_count_actual += actual
+
+            if stored != actual:
+                diff = actual - stored
+                doc_stats_issues.append(
+                    {
+                        "doc_id": doc_id,
+                        "source_file": doc.get("source_file", ""),
+                        "stored": stored,
+                        "actual": actual,
+                        "diff": diff,
+                        "description": f"文档 {doc.get('source_file') or doc_id} 记录 {stored} chunks，实际 {actual} chunks (差异: {diff:+d})",
+                    }
+                )
+
+        try:
+            vs = VectorStoreService.get_vector_store(kb_id)
+            stats = vs.get_stats()
+            lance_rows = stats.get("row_count", 0) if stats.get("exists") else 0
+        except Exception as e:
+            logger.error(f"读取 LanceDB 失败: {e}")
+            return {
+                "kb_id": kb_id,
+                "error": f"读取 LanceDB 失败: {e}",
+                "status": "error",
+            }
+
+        missing_count = max(0, chunk_count_stored - lance_rows)
+        orphan_count = max(0, lance_rows - chunk_count_actual)
+        actual_mismatch = lance_rows - chunk_count_stored
+
+        vector_issues = []
+        if missing_count > 0:
+            vector_issues.append(
+                {
+                    "type": "missing",
+                    "count": missing_count,
+                    "description": f"LanceDB 缺少 {missing_count} 个 chunk（documents 记录存在但 LanceDB 没有）",
+                }
+            )
+        if orphan_count > 0:
+            if doc_stats_issues:
+                vector_issues.append(
+                    {
+                        "type": "orphan_stats_error",
+                        "count": orphan_count,
+                        "description": f"LanceDB 比 documents.chunk_count 总和多 {orphan_count} 个，可能是统计错误导致",
+                    }
+                )
+            else:
+                vector_issues.append(
+                    {
+                        "type": "orphan_real",
+                        "count": orphan_count,
+                        "description": f"LanceDB 有 {orphan_count} 个 chunk 无法匹配到 documents 记录",
+                    }
+                )
+
+        recommendations = []
+        if doc_stats_issues:
+            recommendations.append(
+                {
+                    "action": "fix_doc_stats",
+                    "priority": "high",
+                    "description": f"修正 {len(doc_stats_issues)} 个文档的 chunk_count 统计（安全操作，不删数据）",
+                }
+            )
+        if missing_count > 0:
+            recommendations.append(
+                {
+                    "action": "reimport",
+                    "priority": "high",
+                    "description": f"LanceDB 缺少 {missing_count} 个 chunk，需要重新导入相关文档",
+                }
+            )
+        if orphan_count > 0 and not doc_stats_issues:
+            recommendations.append(
+                {
+                    "action": "investigate",
+                    "priority": "medium",
+                    "description": f"存在 {orphan_count} 个无法匹配的 LanceDB 记录，需要人工确认",
+                }
+            )
+
+        has_issues = len(doc_stats_issues) > 0 or missing_count > 0 or orphan_count > 0
+
+        return {
+            "kb_id": kb_id,
+            "status": "issues_found" if has_issues else "ok",
+            "summary": {
+                "doc_count": len(docs),
+                "chunk_count_stored": chunk_count_stored,
+                "chunk_count_actual": chunk_count_actual,
+                "lance_rows": lance_rows,
+            },
+            "doc_stats": {
+                "accurate": len(doc_stats_issues) == 0,
+                "mismatched_count": len(doc_stats_issues),
+                "issues": doc_stats_issues,
+            },
+            "vector_integrity": {
+                "status": "ok"
+                if not vector_issues
+                else vector_issues[0].get("type", "unknown"),
+                "missing_count": missing_count,
+                "orphan_count": orphan_count,
+                "issues": vector_issues,
+            },
+            "recommendations": recommendations,
+        }
+
+    @staticmethod
     def verify(kb_id: str) -> Dict[str, Any]:
         """
-        校验知识库一致性
+        校验知识库一致性（兼容旧接口）
 
         比较 documents 表中的 chunk 总数与 LanceDB 实际行数。
         """
@@ -2630,238 +2809,154 @@ class ConsistencyService:
         }
 
     @staticmethod
-    def repair(kb_id: str, mode: str = "sync") -> Dict[str, Any]:
+    def verify_doc_stats(kb_id: str) -> Dict[str, Any]:
         """
-        修复知识库一致性
+        校验文档级别的 chunk_count 准确性
+
+        比较每个文档的 documents.chunk_count 与 chunks 表中的实际数量。
+        不修改任何数据，只报告问题。
+        """
+        from kb.database import init_document_db, init_chunk_db
+
+        doc_db = init_document_db()
+        chunk_db = init_chunk_db()
+
+        docs = doc_db.get_by_kb(kb_id)
+        mismatched_docs = []
+        total_stored_count = 0
+        total_actual_count = 0
+
+        for doc in docs:
+            doc_id = doc.get("id")
+            stored_count = doc.get("chunk_count", 0)
+            actual_count = chunk_db.count_by_doc(doc_id)
+
+            total_stored_count += stored_count
+            total_actual_count += actual_count
+
+            if stored_count != actual_count:
+                mismatched_docs.append(
+                    {
+                        "doc_id": doc_id,
+                        "source_file": doc.get("source_file", ""),
+                        "stored_count": stored_count,
+                        "actual_count": actual_count,
+                        "diff": actual_count - stored_count,
+                    }
+                )
+
+        return {
+            "kb_id": kb_id,
+            "total_documents": len(docs),
+            "mismatched_count": len(mismatched_docs),
+            "total_stored_count": total_stored_count,
+            "total_actual_count": total_actual_count,
+            "mismatched_docs": mismatched_docs,
+            "is_accurate": len(mismatched_docs) == 0,
+        }
+
+    @staticmethod
+    def fix_doc_stats(kb_id: str, dry_run: bool = False) -> Dict[str, Any]:
+        """
+        修复文档的 chunk_count 和 total_chars 统计信息
+
+        此方法只更新 documents 表的统计字段，不涉及任何数据删除。
+        通过查询 chunks 表的实际数量来更新统计值。
 
         Args:
             kb_id: 知识库 ID
-            mode: 修复模式
-                - "sync": 从 dedup 同步到 LanceDB（删除 orphan 向量）
-                - "rebuild": 重新扫描文件重建（较慢但不丢数据）
-                - "dry": 只报告，不修复
+            dry_run: 如果为 True，只报告会做什么，不实际执行修改
 
         Returns:
             {
                 "kb_id": str,
                 "mode": str,
-                "repaired": bool,
-                "message": str,
-                "details": dict,
+                "fixed": int,
+                "skipped": int,
+                "details": [...],
             }
-        """
-        if mode == "dry":
-            verify_result = ConsistencyService.verify(kb_id)
-            if verify_result.get("status") == "error":
-                return {
-                    "kb_id": kb_id,
-                    "mode": mode,
-                    "repaired": False,
-                    "message": "校验失败",
-                    "details": verify_result,
-                }
-            if verify_result["consistent"]:
-                return {
-                    "kb_id": kb_id,
-                    "mode": mode,
-                    "repaired": True,
-                    "message": "知识库已一致，无需修复",
-                    "details": verify_result,
-                }
-            return {
-                "kb_id": kb_id,
-                "mode": mode,
-                "repaired": False,
-                "message": f"发现不一致: missing={verify_result['missing_chunks']}, orphan={verify_result['orphan_rows']}",
-                "details": verify_result,
-            }
-
-        if mode == "sync":
-            return ConsistencyService._repair_sync(kb_id)
-        elif mode == "rebuild":
-            return ConsistencyService._repair_rebuild(kb_id)
-        else:
-            return {
-                "kb_id": kb_id,
-                "mode": mode,
-                "repaired": False,
-                "message": f"未知修复模式: {mode}",
-            }
-
-    @staticmethod
-    def _repair_sync(kb_id: str) -> Dict[str, Any]:
-        """
-        同步模式修复：删除 LanceDB 中的 orphan 向量
-
-        从 documents 表获取所有 doc_id，删除 LanceDB 中不在这些 doc_id 中的记录。
         """
         from kb.database import init_document_db
-
-        verify_result = ConsistencyService.verify(kb_id)
-        if verify_result.get("status") == "error":
-            return {
-                "kb_id": kb_id,
-                "mode": "sync",
-                "repaired": False,
-                "message": "校验阶段失败",
-                "details": verify_result,
-            }
-
-        if verify_result["orphan_rows"] == 0:
-            return {
-                "kb_id": kb_id,
-                "mode": "sync",
-                "repaired": True,
-                "message": "没有 orphan 数据需要清理",
-                "details": verify_result,
-            }
+        from kb.document_chunk_service import get_document_chunk_service
 
         doc_db = init_document_db()
-
-        # 获取 documents 表中记录的 doc_id 集合
         docs = doc_db.get_by_kb(kb_id)
-        valid_doc_ids = set()
+
+        if not docs:
+            return {
+                "kb_id": kb_id,
+                "mode": "fix_stats",
+                "fixed": 0,
+                "skipped": 0,
+                "message": "没有文档需要修复",
+            }
+
+        service = get_document_chunk_service(kb_id=kb_id)
+        fixed = 0
+        skipped = 0
+        details = []
+
         for doc in docs:
             doc_id = doc.get("id")
-            if doc_id:
-                valid_doc_ids.add(doc_id)
+            stored_count = doc.get("chunk_count", 0)
 
-        if not valid_doc_ids:
-            return {
-                "kb_id": kb_id,
-                "mode": "sync",
-                "repaired": False,
-                "message": "documents 记录为空，无法修复",
-                "details": {"valid_doc_ids": 0},
-            }
+            if dry_run:
+                from kb.database import init_chunk_db
 
-        # 删除 LanceDB 中不在 valid_doc_ids 中的记录
-        try:
-            import lancedb
+                chunk_db = init_chunk_db()
+                actual_count = chunk_db.count_by_doc(doc_id)
+                if stored_count != actual_count:
+                    details.append(
+                        {
+                            "doc_id": doc_id,
+                            "source_file": doc.get("source_file", ""),
+                            "stored_count": stored_count,
+                            "actual_count": actual_count,
+                            "action": "would_fix",
+                        }
+                    )
+                else:
+                    skipped += 1
+            else:
+                success = service.update_document_stats(doc_id)
+                if success:
+                    fixed += 1
+                    details.append(
+                        {
+                            "doc_id": doc_id,
+                            "source_file": doc.get("source_file", ""),
+                            "stored_count": stored_count,
+                            "action": "fixed",
+                        }
+                    )
+                else:
+                    skipped += 1
+                    details.append(
+                        {
+                            "doc_id": doc_id,
+                            "source_file": doc.get("source_file", ""),
+                            "action": "failed",
+                        }
+                    )
 
-            vs = VectorStoreService.get_vector_store(kb_id)
-            persist_dir = vs.persist_dir or vs._get_uri()
-
-            db = lancedb.connect(str(persist_dir))
-            table = db.open_table(kb_id)
-
-            # 获取 LanceDB 中所有的 id
-            df = table.to_pandas()
-            lance_ids = (
-                set(df["id"].astype(str).tolist())
-                if df is not None and "id" in df.columns
-                else set()
-            )
-
-            # 计算需要删除的 id
-            orphan_ids = lance_ids - valid_doc_ids
-
-            if not orphan_ids:
-                return {
-                    "kb_id": kb_id,
-                    "mode": "sync",
-                    "repaired": True,
-                    "message": "没有 orphan 数据",
-                    "details": {"orphan_count": 0},
-                }
-
-            # 批量删除（分批执行避免过大）
-            deleted = 0
-            batch_size = 1000
-            orphan_list = list(orphan_ids)
-
-            for i in range(0, len(orphan_list), batch_size):
-                batch = orphan_list[i : i + batch_size]
-                id_list = "', '".join(batch)
-                try:
-                    result = table.delete(f"id IN ('{id_list}')")
-                    if hasattr(result, "num_deleted"):
-                        deleted += result.num_deleted
-                    elif hasattr(result, "count"):
-                        deleted += result.count
-                except Exception as e:
-                    logger.warning(f"删除批次失败: {e}")
-
-            # 验证修复结果
-            verify_after = ConsistencyService.verify(kb_id)
-
-            return {
-                "kb_id": kb_id,
-                "mode": "sync",
-                "repaired": verify_after["consistent"],
-                "message": f"删除了 {deleted} 个 orphan 记录",
-                "details": {
-                    "deleted_count": deleted,
-                    "before": verify_result,
-                    "after": verify_after,
-                },
-            }
-
-        except Exception as e:
-            logger.error(f"同步修复失败: {e}")
-            return {
-                "kb_id": kb_id,
-                "mode": "sync",
-                "repaired": False,
-                "message": f"修复失败: {e}",
-            }
+        return {
+            "kb_id": kb_id,
+            "mode": "fix_stats",
+            "dry_run": dry_run,
+            "fixed": fixed,
+            "skipped": skipped,
+            "message": f"修复完成: {fixed} 个文档已更新, {skipped} 个跳过",
+            "details": details,
+        }
 
     @staticmethod
-    def _repair_rebuild(kb_id: str) -> Dict[str, Any]:
+    def repair(kb_id: str) -> Dict[str, Any]:
         """
-        重建模式修复：重新扫描文件并重建向量
+        修复知识库一致性
 
-        这是最可靠的修复方式，但速度较慢。
+        修正 documents 表的 chunk_count 统计（安全操作，不删数据）
         """
-        from kb.registry import KnowledgeBaseRegistry
-
-        try:
-            registry = KnowledgeBaseRegistry()
-            kb = registry.get(kb_id)
-
-            if not kb:
-                return {
-                    "kb_id": kb_id,
-                    "mode": "rebuild",
-                    "repaired": False,
-                    "message": f"知识库 {kb_id} 不存在",
-                }
-
-            # 获取所有文件
-            vault_root = kb.vault_root()
-            source_paths = kb.source_paths_abs(vault_root)
-
-            all_files = []
-            for source_path in source_paths:
-                if source_path.exists():
-                    if source_path.is_file():
-                        all_files.append(source_path)
-                    elif source_path.is_dir():
-                        all_files.extend(source_path.rglob("*.md"))
-
-            # 记录文件列表
-            file_count = len(all_files)
-            logger.info(f"重建模式: 发现 {file_count} 个文件")
-
-            return {
-                "kb_id": kb_id,
-                "mode": "rebuild",
-                "repaired": True,
-                "message": f"扫描到 {file_count} 个文件，请使用 ingest 命令重新导入",
-                "details": {
-                    "file_count": file_count,
-                    "note": "使用 ingest 命令重新导入以完成修复",
-                },
-            }
-
-        except Exception as e:
-            logger.error(f"重建扫描失败: {e}")
-            return {
-                "kb_id": kb_id,
-                "mode": "rebuild",
-                "repaired": False,
-                "message": f"扫描失败: {e}",
-            }
+        return ConsistencyService.fix_doc_stats(kb_id)
 
     @staticmethod
     def safe_delete_files(kb_id: str, sources: List[str]) -> Dict[str, Any]:
@@ -2958,7 +3053,7 @@ class ConsistencyService:
         }
 
     @staticmethod
-    def repair_all(mode: str = "sync") -> Dict[str, Any]:
+    def repair_all() -> Dict[str, Any]:
         """
         修复所有知识库的一致性
 
@@ -2982,9 +3077,9 @@ class ConsistencyService:
         for kb in kbs:
             kb_id = kb.id
             try:
-                result = ConsistencyService.repair(kb_id, mode=mode)
+                result = ConsistencyService.repair(kb_id)
                 results.append(result)
-                if result.get("repaired"):
+                if result.get("fixed", 0) > 0:
                     repaired += 1
             except Exception as e:
                 logger.error(f"修复知识库 {kb_id} 失败: {e}")
