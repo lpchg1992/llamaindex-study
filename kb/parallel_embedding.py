@@ -94,9 +94,13 @@ class ParallelEmbeddingProcessor:
         self.endpoints = self._load_embedding_endpoints()
         if not self.endpoints:
             endpoint_configs = settings.get_ollama_endpoints()
-            self.endpoints = [
-                EmbeddingEndpoint(name, url) for name, url in endpoint_configs
-            ]
+            for name, url in endpoint_configs:
+                ep = EmbeddingEndpoint(name, url)
+                is_healthy = self._health_check(url, self._model_name)
+                ep.is_healthy = is_healthy
+                if not is_healthy:
+                    logger.warning(f"端点 {name} ({url}) 健康检查失败，将在未来重试")
+                self.endpoints.append(ep)
 
         for ep in self.endpoints:
             self._consecutive_failures[ep.name] = 0
