@@ -2125,44 +2125,36 @@ class RepairMode(str):
 
 @app.get("/kbs/{kb_id}/consistency")
 def check_consistency(kb_id: str):
-    """校验知识库一致性"""
+    """统一的知识库一致性检查"""
     from kb.services import ConsistencyService
 
     info = KnowledgeBaseService.get_info(kb_id)
     if not info:
         raise HTTPException(status_code=404, detail=f"知识库不存在: {kb_id}")
 
-    result = ConsistencyService.verify(kb_id)
+    result = ConsistencyService.check(kb_id)
     return result
 
 
-class RepairRequest(BaseModel):
-    mode: str = Field(
-        "sync", description="修复模式: sync(删除orphan), rebuild(重建), dry(只报告)"
-    )
-
-
 @app.post("/kbs/{kb_id}/consistency/repair")
-def repair_consistency(kb_id: str, req: RepairRequest):
-    """修复知识库一致性"""
+def repair_consistency(kb_id: str):
+    """修复知识库一致性（修正文档统计）"""
     from kb.services import ConsistencyService
 
     info = KnowledgeBaseService.get_info(kb_id)
     if not info:
         raise HTTPException(status_code=404, detail=f"知识库不存在: {kb_id}")
 
-    result = ConsistencyService.repair(kb_id, mode=req.mode)
+    result = ConsistencyService.repair(kb_id)
     return result
 
 
 @app.post("/consistency/repair-all")
-def repair_all_consistency(
-    mode: str = Query("sync", description="修复模式: sync, rebuild, dry"),
-):
+def repair_all_consistency():
     """修复所有知识库的一致性"""
     from kb.services import ConsistencyService
 
-    result = ConsistencyService.repair_all(mode=mode)
+    result = ConsistencyService.repair_all()
     return result
 
 
