@@ -2723,13 +2723,13 @@ def reembed_chunk(kb_id: str, chunk_id: str):
         }
 
     try:
-        ep_name = processor.endpoints[0].name
+        ep = processor._get_best_endpoint()
         import asyncio
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         _, embedding, error = loop.run_until_complete(
-            processor.get_embedding(chunk["text"], ep_name)
+            processor.get_embedding(chunk["text"], ep.name)
         )
         loop.close()
 

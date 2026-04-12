@@ -694,13 +694,17 @@ class LanceCRUDService:
 
         import pyarrow as pa
 
-        table.merge_insert("id").matching("id").upsert(
+        data = pa.table(
             {
                 "id": [chunk_id],
                 "doc_id": [doc_id],
                 "vector": [vector],
             }
         )
+
+        table.merge_insert(
+            "id"
+        ).when_not_matched_insert_all().when_matched_update_all().execute(data)
 
         return True
 
