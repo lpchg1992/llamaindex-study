@@ -812,7 +812,7 @@ class TaskExecutor:
         )
 
     async def _execute_revector(self, task: "Task") -> None:
-        """执行重新向量化任务（处理 pending、failed 和 orphaned success chunks）"""
+        """执行重新向量化任务（处理 pending、failed 和 orphaned success chunks）- 批量优化版"""
         from kb.database import init_chunk_db
         from kb.lance_crud import LanceCRUDService
         from kb.parallel_embedding import get_parallel_processor
@@ -825,12 +825,14 @@ class TaskExecutor:
         include_failed = params.get("include_failed", True)
         include_embedded = params.get("include_embedded", False)
         batch_size = params.get("batch_size", 100)
+        chunk_batch_size = params.get("chunk_batch_size", 500)
         limit = params.get("limit", 50000)
 
         logger.info(
             f"[{task_id}] 开始重新向量化任务: kb_id={kb_id}, "
             f"include_pending={include_pending}, include_failed={include_failed}, "
-            f"include_embedded={include_embedded}, limit={limit}"
+            f"include_embedded={include_embedded}, limit={limit}, "
+            f"batch_size={batch_size}, chunk_batch_size={chunk_batch_size}"
         )
 
         chunk_db = init_chunk_db()
@@ -890,9 +892,8 @@ class TaskExecutor:
 
         processed = 0
         failed_ids = []
-        ep_name = processor.endpoints[0].name
 
-        for i, chunk in enumerate(all_chunks):
+        for batch_start in range(0, total_chunks, chunk_batch_size):
             if await self._check_cancelled(task_id):
                 self.queue.complete_task(
                     task_id,
@@ -917,50 +918,61 @@ class TaskExecutor:
                 )
                 return
 
+            batch_end = min(batch_start + chunk_batch_size, total_chunks)
+            chunk_batch = all_chunks[batch_start:batch_end]
+
+            texts = [chunk["text"] for chunk in chunk_batch]
+            chunk_ids = [chunk["id"] for chunk in chunk_batch]
+            doc_ids = [chunk["doc_id"] for chunk in chunk_batch]
+
             try:
                 loop = asyncio.get_event_loop()
             except RuntimeError:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
 
-            try:
-                _, embedding, error = await loop.run_in_executor(
-                    None,
-                    lambda: processor.get_embedding(chunk["text"], ep_name),
-                )
+            embedding_results = await loop.run_in_executor(
+                None,
+                lambda: processor.process_batch(texts),
+            )
 
-                if error:
-                    raise Exception(error)
+            batch_failed_ids = []
+            for idx, (ep_name, embedding, error) in enumerate(embedding_results):
+                chunk_id = chunk_ids[idx]
 
-                if all(v == 0.0 for v in embedding):
-                    raise Exception("Embedding returned zero vector")
+                try:
+                    if error:
+                        raise Exception(error)
 
-                LanceCRUDService.upsert_vector(
-                    chunk["id"], chunk["doc_id"], embedding, kb_id=kb_id
-                )
-                chunk_db.mark_embedded(chunk["id"])
-                stats["success"] += 1
+                    if all(v == 0.0 for v in embedding):
+                        raise Exception("Embedding returned zero vector")
 
-            except Exception as e:
-                logger.warning(f"Re-embed chunk {chunk['id']} failed: {e}")
-                failed_ids.append(chunk["id"])
-                stats["skipped"] += 1
+                    LanceCRUDService.upsert_vector(
+                        chunk_id, doc_ids[idx], embedding, kb_id=kb_id
+                    )
+                    chunk_db.mark_embedded(chunk_id)
+                    stats["success"] += 1
 
-            processed += 1
+                except Exception as e:
+                    logger.warning(f"Re-embed chunk {chunk_id} failed: {e}")
+                    batch_failed_ids.append(chunk_id)
+                    stats["skipped"] += 1
 
-            if (i + 1) % batch_size == 0:
-                progress_pct = int(processed / total_chunks * 100)
-                await self._update_and_notify(
-                    task_id,
-                    progress=progress_pct,
-                    current=processed,
-                    total=total_chunks,
-                    message=f"进度: {processed}/{total_chunks}",
-                )
-                await self._update_heartbeat(task_id)
+            failed_ids.extend(batch_failed_ids)
+            processed += len(chunk_batch)
 
-        if failed_ids:
-            chunk_db.mark_failed_bulk(failed_ids)
+            if batch_failed_ids:
+                chunk_db.mark_failed_bulk(batch_failed_ids)
+
+            progress_pct = int(processed / total_chunks * 100)
+            await self._update_and_notify(
+                task_id,
+                progress=progress_pct,
+                current=processed,
+                total=total_chunks,
+                message=f"进度: {processed}/{total_chunks} (成功: {stats['success']}, 失败: {stats['skipped']})",
+            )
+            await self._update_heartbeat(task_id)
 
         remaining_pending = len(chunk_db.get_unembedded(kb_id, limit=1))
         remaining_failed = len(chunk_db.get_failed_chunks(kb_id, limit=1))
