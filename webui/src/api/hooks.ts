@@ -825,24 +825,23 @@ export function useConsistencyCheck(kbId: string) {
 
 export function useConsistencyRepair() {
   const queryClient = useQueryClient()
-  return useMutation<ConsistencyRepairResult, Error, { kbId: string; mode: string }>({
-    mutationFn: async ({ kbId, mode }) => {
-      const { data } = await apiClient.post(`${API_BASE}/kbs/${kbId}/consistency/repair`, { mode })
+  return useMutation<ConsistencyRepairResult, Error, string>({
+    mutationFn: async (kbId: string) => {
+      const { data } = await apiClient.post(`${API_BASE}/kbs/${kbId}/consistency/repair`, {})
       return data
     },
-    onSuccess: () => {
+    onSuccess: (_, kbId) => {
       queryClient.invalidateQueries({ queryKey: ['kbs'] })
+      queryClient.invalidateQueries({ queryKey: ['consistency-check', kbId] })
     },
   })
 }
 
 export function useRepairAll() {
   const queryClient = useQueryClient()
-  return useMutation<{ repaired: number; message: string }, Error, string>({
-    mutationFn: async (mode) => {
-      const { data } = await apiClient.post(`${API_BASE}/consistency/repair-all`, null, {
-        params: { mode },
-      })
+  return useMutation<{ repaired: number; message: string }, Error, void>({
+    mutationFn: async () => {
+      const { data } = await apiClient.post(`${API_BASE}/consistency/repair-all`, {})
       return data
     },
     onSuccess: () => {

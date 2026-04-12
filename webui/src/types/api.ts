@@ -503,18 +503,58 @@ export interface ObservabilityDatesResponse {
 }
 
 // Consistency
+export interface ConsistencySummary {
+  doc_count: number
+  chunk_count_stored: number
+  chunk_count_actual: number
+  lance_rows: number
+}
+
+export interface DocStatsIssue {
+  doc_id: string
+  source_file: string
+  stored: number
+  actual: number
+  diff: number
+  description: string
+}
+
+export interface VectorIntegrityIssue {
+  type: string
+  count: number
+  description: string
+}
+
+export interface ConsistencyRecommendation {
+  action: string
+  priority: string
+  description: string
+}
+
 export interface ConsistencyCheckResult {
   kb_id: string
-  is_consistent: boolean
-  issues: string[]
-  details?: Record<string, unknown>
+  status: "ok" | "issues_found" | "error"
+  error?: string
+  summary: ConsistencySummary
+  doc_stats: {
+    accurate: boolean
+    mismatched_count: number
+    issues: DocStatsIssue[]
+  }
+  vector_integrity: {
+    status: string
+    missing_count: number
+    orphan_count: number
+    issues: VectorIntegrityIssue[]
+  }
+  recommendations: ConsistencyRecommendation[]
 }
 
 export interface ConsistencyRepairResult {
   kb_id: string
   mode: string
-  repaired: number
-  deleted: number
+  fixed: number
+  skipped: number
   message: string
 }
 

@@ -14,13 +14,6 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { Plus, Trash2, Database, RefreshCw, Loader2, AlertTriangle, CheckCircle, Wrench, Trash, Sparkles, Pencil, WrenchIcon, HardDrive, Upload } from 'lucide-react'
 import { toast } from 'sonner'
 import { KBEditDialog } from '@/components/KBEditDialog'
@@ -30,14 +23,13 @@ import { ImportDialog } from '@/components/ImportDialog'
 import type { KBInfo } from '@/types/api'
 
 function KBDetailsPanel({ kb }: { kb: KBInfo }) {
-  const { data: topics, isLoading: topicsLoading, refetch: refetchTopics } = useKBTopics(kb.id)
+  const { data: topics, isLoading: topicsLoading } = useKBTopics(kb.id)
   const refreshTopics = useRefreshTopics()
-  const { data: consistency, isLoading: consistencyLoading } = useConsistencyCheck(kb.id)
+  const { data: consistency, isLoading: consistencyLoading, refetch: refetchConsistency } = useConsistencyCheck(kb.id)
   const repairConsistency = useConsistencyRepair()
   const initializeKB = useInitializeKB()
 
   const [isRefreshingTopics, setIsRefreshingTopics] = useState(false)
-  const [repairMode, setRepairMode] = useState<string>('dry')
   const [isInitializeOpen, setIsInitializeOpen] = useState(false)
 
   const handleRefreshTopics = async () => {
@@ -54,8 +46,9 @@ function KBDetailsPanel({ kb }: { kb: KBInfo }) {
 
   const handleRepair = async () => {
     try {
-      const result = await repairConsistency.mutateAsync({ kbId: kb.id, mode: repairMode })
+      const result = await repairConsistency.mutateAsync(kb.id)
       toast.success(result.message)
+      refetchConsistency()
     } catch (error) {
       toast.error('Repair failed')
     }
@@ -154,55 +147,98 @@ function KBDetailsPanel({ kb }: { kb: KBInfo }) {
 
           <TabsContent value="consistency" className="space-y-4">
             <div className="flex items-center justify-between">
-              <h4 className="text-sm font-medium">Consistency Check</h4>
-              <Button variant="outline" size="sm" onClick={() => refetchTopics()} disabled={consistencyLoading} title="检查知识库一致性">
+              <h4 className="text-sm font-medium">一致性检查</h4>
+              <Button variant="outline" size="sm" onClick={() => refetchConsistency()} disabled={consistencyLoading}>
                 {consistencyLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-1" />}
-                Check
+                检查
               </Button>
             </div>
+
             {consistency ? (
-              <div className="space-y-3">
-                <div className="flex items-center gap-2">
-                  {consistency.is_consistent ? (
-                    <>
-                      <CheckCircle className="h-5 w-5 text-green-500" />
-                      <span className="text-sm font-medium text-green-600">Consistent</span>
-                    </>
-                  ) : (
-                    <>
-                      <AlertTriangle className="h-5 w-5 text-yellow-500" />
-                      <span className="text-sm font-medium text-yellow-600">Issues Found</span>
-                    </>
-                  )}
-                </div>
-                {consistency.issues?.length > 0 && (
-                  <ScrollArea className="h-32">
-                    <ul className="text-sm space-y-1">
-                      {consistency.issues.map((issue, index) => (
-                        <li key={index} className="text-muted-foreground">• {issue}</li>
-                      ))}
-                    </ul>
-                  </ScrollArea>
+              <div className="space-y-4">
+                {consistency.status === "ok" ? (
+                  <div className="flex items-center gap-2 p-4 bg-green-50 rounded-lg">
+                    <CheckCircle className="h-5 w-5 text-green-500" />
+                    <span className="text-sm font-medium text-green-700">知识库正常</span>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {/* Summary Stats */}
+                    <div className="grid grid-cols-3 gap-2 text-xs">
+                      <div className="p-2 bg-muted rounded">
+                        <p className="text-muted-foreground">文档数</p>
+                        <p className="font-medium">{consistency.summary?.doc_count}</p>
+                      </div>
+                      <div className="p-2 bg-muted rounded">
+                        <p className="text-muted-foreground">记录 chunks</p>
+                        <p className="font-medium">{consistency.summary?.chunk_count_stored}</p>
+                      </div>
+                      <div className="p-2 bg-muted rounded">
+                        <p className="text-muted-foreground">实际 chunks</p>
+                        <p className="font-medium">{consistency.summary?.chunk_count_actual}</p>
+                      </div>
+                    </div>
+
+                    {/* Doc Stats Issues */}
+                    {!consistency.doc_stats?.accurate && (
+                      <div className="p-3 border rounded-lg">
+                        <div className="flex items-center gap-2 mb-2">
+                          <AlertTriangle className="h-4 w-4 text-yellow-500" />
+                          <span className="text-sm font-medium">文档统计不准确</span>
+                        </div>
+                        <p className="text-xs text-muted-foreground mb-2">
+                          {consistency.doc_stats?.mismatched_count} 个文档的 chunk_count 记录与实际不符
+                        </p>
+                        <ScrollArea className="h-24">
+                          <ul className="text-xs space-y-1">
+                            {consistency.doc_stats?.issues?.slice(0, 10).map((issue: any, idx: number) => (
+                              <li key={idx} className="flex justify-between">
+                                <span className="truncate max-w-[150px]">{issue.source_file || issue.doc_id}</span>
+                                <span className="font-mono ml-2">{issue.stored} → {issue.actual}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </ScrollArea>
+                      </div>
+                    )}
+
+                    {/* Vector Integrity Issues */}
+                    {consistency.vector_integrity?.issues?.length > 0 && (
+                      <div className="p-3 border rounded-lg">
+                        <div className="flex items-center gap-2 mb-2">
+                          <AlertTriangle className="h-4 w-4 text-orange-500" />
+                          <span className="text-sm font-medium">向量完整性问题</span>
+                        </div>
+                        <ul className="text-xs space-y-1">
+                          {consistency.vector_integrity?.issues?.map((issue: any, idx: number) => (
+                            <li key={idx} className="text-muted-foreground">• {issue.description}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {/* Recommendations */}
+                    {consistency.recommendations?.length > 0 && (
+                      <div className="p-3 bg-blue-50 rounded-lg">
+                        <p className="text-xs font-medium text-blue-700 mb-2">建议操作</p>
+                        <ul className="text-xs space-y-1">
+                          {consistency.recommendations?.map((rec: any, idx: number) => (
+                            <li key={idx} className="text-blue-600">• {rec.description}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {/* Fix Button */}
+                    <Button size="sm" variant="default" onClick={handleRepair} disabled={repairConsistency.isPending}>
+                      {repairConsistency.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wrench className="h-4 w-4 mr-1" />}
+                      修正文档统计 (安全)
+                    </Button>
+                  </div>
                 )}
-                <div className="flex gap-2">
-                  <Select value={repairMode} onValueChange={setRepairMode}>
-                    <SelectTrigger className="w-32">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="dry">Dry Run</SelectItem>
-                      <SelectItem value="sync">Sync</SelectItem>
-                      <SelectItem value="rebuild">Rebuild</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <Button size="sm" onClick={handleRepair} disabled={repairConsistency.isPending} title="修复知识库一致性问题">
-                    {repairConsistency.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wrench className="h-4 w-4 mr-1" />}
-                    Repair
-                  </Button>
-                </div>
               </div>
             ) : (
-              <p className="text-sm text-muted-foreground text-center py-4">Click Check to verify consistency</p>
+              <p className="text-sm text-muted-foreground text-center py-4">点击"检查"开始一致性检查</p>
             )}
           </TabsContent>
 
@@ -370,7 +406,7 @@ export function KnowledgeBase() {
   const handleRepairAll = async () => {
     if (!confirm('Repair consistency for all knowledge bases?')) return
     try {
-      const result = await repairAll.mutateAsync('sync')
+      const result = await repairAll.mutateAsync()
       toast.success(result.message)
     } catch (error) {
       toast.error('Repair all failed')
