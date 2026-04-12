@@ -1400,10 +1400,30 @@ class DocumentDB:
     ) -> bool:
         with self.db.session_scope() as session:
             updates = {"updated_at": time.time()}
-            if chunk_count is not None:
-                updates["chunk_count"] = chunk_count
+            # Always query actual chunk count from chunks table to ensure accuracy
+            # (create_bulk uses INSERT OR IGNORE so passed count may be inaccurate)
+            actual_count = (
+                session.scalar(
+                    select(func.count())
+                    .select_from(ChunkModel)
+                    .where(ChunkModel.doc_id == doc_id)
+                )
+                or 0
+            )
+            updates["chunk_count"] = actual_count
             if total_chars is not None:
                 updates["total_chars"] = total_chars
+            else:
+                # Recalculate total_chars from actual chunks
+                actual_chars = (
+                    session.scalar(
+                        select(func.sum(ChunkModel.text_length))
+                        .select_from(ChunkModel)
+                        .where(ChunkModel.doc_id == doc_id)
+                    )
+                    or 0
+                )
+                updates["total_chars"] = actual_chars
             result = session.execute(
                 update(DocumentModel)
                 .where(DocumentModel.id == doc_id)
