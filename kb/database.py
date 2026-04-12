@@ -1563,6 +1563,36 @@ class ChunkDB:
             )
             return int(count) if count else 0
 
+    def count_by_doc_filtered(self, doc_id: str, embedding_status: int) -> int:
+        """Count chunks for a document filtered by embedding status."""
+        with self.db.session_scope() as session:
+            count = session.scalar(
+                select(func.count())
+                .select_from(ChunkModel)
+                .where(
+                    ChunkModel.doc_id == doc_id,
+                    ChunkModel.embedding_generated == embedding_status,
+                )
+            )
+            return int(count) if count else 0
+
+    def get_by_doc_filtered(
+        self, doc_id: str, embedding_status: int, offset: int = 0, limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        """Get chunks for a document filtered by embedding status."""
+        with self.db.session_scope() as session:
+            rows = session.scalars(
+                select(ChunkModel)
+                .where(
+                    ChunkModel.doc_id == doc_id,
+                    ChunkModel.embedding_generated == embedding_status,
+                )
+                .order_by(ChunkModel.chunk_index, ChunkModel.hierarchy_level)
+                .offset(offset)
+                .limit(limit)
+            ).all()
+            return [self._to_dict(row) for row in rows]
+
     def get_by_kb(self, kb_id: str, limit: int = 1000) -> List[Dict[str, Any]]:
         with self.db.session_scope() as session:
             rows = session.scalars(

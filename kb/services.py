@@ -2678,6 +2678,12 @@ class ConsistencyService:
         orphan_count = max(0, lance_rows - chunk_count_actual)
         actual_mismatch = lance_rows - chunk_count_stored
 
+        embedding_stats = chunk_db.get_embedding_stats(kb_id)
+        emb_success = embedding_stats.get("success", 0)
+        emb_pending = embedding_stats.get("pending", 0)
+        emb_failed = embedding_stats.get("failed", 0)
+        emb_total = embedding_stats.get("total", 0)
+
         vector_issues = []
         if missing_count > 0:
             vector_issues.append(
@@ -2746,6 +2752,16 @@ class ConsistencyService:
                 "accurate": len(doc_stats_issues) == 0,
                 "mismatched_count": len(doc_stats_issues),
                 "issues": doc_stats_issues,
+            },
+            "embedding_stats": {
+                "total": emb_total,
+                "success": emb_success,
+                "pending": emb_pending,
+                "failed": emb_failed,
+                "in_lance": min(emb_success, lance_rows),
+                "missing_in_lance": max(0, emb_success - lance_rows),
+                "pending_not_in_lance": emb_pending,
+                "failed_not_in_lance": emb_failed,
             },
             "vector_integrity": {
                 "status": "ok"
@@ -2957,6 +2973,52 @@ class ConsistencyService:
         修正 documents 表的 chunk_count 统计（安全操作，不删数据）
         """
         return ConsistencyService.fix_doc_stats(kb_id)
+
+    @staticmethod
+    def get_embedding_stats(kb_id: str) -> Dict[str, Any]:
+        """
+        获取 chunk 向量化统计信息
+
+        Returns:
+            {
+                "kb_id": str,
+                "total": int,        # 总 chunk 数
+                "success": int,      # 成功向量化的 chunk 数 (embedding_generated=1)
+                "failed": int,       # 向量化失败的 chunk 数 (embedding_generated=2)
+                "pending": int,      # 等待向量化的 chunk 数 (embedding_generated=0)
+                "lance_rows": int,   # LanceDB 实际行数
+                "missing_count": int,  # LanceDB 缺少的数量
+                "orphan_count": int,   # LanceDB 多余的数量
+            }
+        """
+        from kb.database import init_chunk_db
+
+        chunk_db = init_chunk_db()
+        stats = chunk_db.get_embedding_stats(kb_id)
+
+        try:
+            vs = VectorStoreService.get_vector_store(kb_id)
+            lance_stats = vs.get_stats()
+            lance_rows = (
+                lance_stats.get("row_count", 0) if lance_stats.get("exists") else 0
+            )
+        except Exception:
+            lance_rows = 0
+
+        chunk_count_actual = stats["total"]
+        missing_count = max(0, chunk_count_actual - lance_rows)
+        orphan_count = max(0, lance_rows - chunk_count_actual)
+
+        return {
+            "kb_id": kb_id,
+            "total": stats["total"],
+            "success": stats["success"],
+            "failed": stats["failed"],
+            "pending": stats["pending"],
+            "lance_rows": lance_rows,
+            "missing_count": missing_count,
+            "orphan_count": orphan_count,
+        }
 
     @staticmethod
     def safe_delete_files(kb_id: str, sources: List[str]) -> Dict[str, Any]:

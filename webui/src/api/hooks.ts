@@ -42,6 +42,7 @@ import type {
   TracesResponse,
   ConsistencyCheckResult,
   ConsistencyRepairResult,
+  RevectorResult,
   TaskBatchResult,
   VendorCreateRequest,
   ModelCreateRequest,
@@ -850,6 +851,19 @@ export function useRepairAll() {
   })
 }
 
+export function useRevectorTask() {
+  return useMutation<RevectorResult, Error, { kbId: string; includePending?: boolean; includeFailed?: boolean }>({
+    mutationFn: async ({ kbId, includePending = true, includeFailed = true }) => {
+      const { data } = await apiClient.post<RevectorResult>(
+        `${API_BASE}/kbs/${kbId}/chunks/revector`,
+        {},
+        { params: { include_pending: includePending, include_failed: includeFailed } }
+      )
+      return data
+    },
+  })
+}
+
 export function useSettings() {
   return useQuery<SystemSettings>({
     queryKey: ['settings'],
@@ -939,13 +953,17 @@ interface PaginatedChunksResponse {
   total_pages: number
 }
 
-export function useDocumentChunks(kbId: string, docId: string, page: number = 1, pageSize: number = 20) {
+export function useDocumentChunks(kbId: string, docId: string, page: number = 1, pageSize: number = 20, embeddingStatus?: number | null) {
   return useQuery<PaginatedChunksResponse>({
-    queryKey: ['document-chunks', kbId, docId, page, pageSize],
+    queryKey: ['document-chunks', kbId, docId, page, pageSize, embeddingStatus],
     queryFn: async () => {
+      const params: Record<string, any> = { page, page_size: pageSize }
+      if (embeddingStatus !== undefined && embeddingStatus !== null) {
+        params.embedding_status = embeddingStatus
+      }
       const { data } = await apiClient.get<PaginatedChunksResponse>(
         `${API_BASE}/kbs/${kbId}/documents/${docId}/chunks`,
-        { params: { page, page_size: pageSize } }
+        { params }
       )
       return data
     },

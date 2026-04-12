@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { useKBs, useCreateKB, useDeleteKB, useKBTopics, useRefreshTopics, useConsistencyCheck, useConsistencyRepair, useInitializeKB, useRepairAll } from '@/api/hooks'
+import { useNavigate } from 'react-router-dom'
+import { useKBs, useCreateKB, useDeleteKB, useKBTopics, useRefreshTopics, useConsistencyCheck, useConsistencyRepair, useInitializeKB, useRepairAll, useRevectorTask } from '@/api/hooks'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -14,7 +15,7 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { Plus, Trash2, Database, RefreshCw, Loader2, AlertTriangle, CheckCircle, Wrench, Trash, Sparkles, Pencil, WrenchIcon, HardDrive, Upload } from 'lucide-react'
+import { Plus, Trash2, Database, RefreshCw, Loader2, AlertTriangle, CheckCircle, Wrench, Trash, Sparkles, SparklesIcon, Pencil, WrenchIcon, HardDrive, Upload } from 'lucide-react'
 import { toast } from 'sonner'
 import { KBEditDialog } from '@/components/KBEditDialog'
 import { DangerConfirmDialog } from '@/components/DangerConfirmDialog'
@@ -23,11 +24,13 @@ import { ImportDialog } from '@/components/ImportDialog'
 import type { KBInfo } from '@/types/api'
 
 function KBDetailsPanel({ kb }: { kb: KBInfo }) {
+  const navigate = useNavigate()
   const { data: topics, isLoading: topicsLoading } = useKBTopics(kb.id)
   const refreshTopics = useRefreshTopics()
   const { data: consistency, isLoading: consistencyLoading, refetch: refetchConsistency } = useConsistencyCheck(kb.id)
   const repairConsistency = useConsistencyRepair()
   const initializeKB = useInitializeKB()
+  const revectorTask = useRevectorTask()
 
   const [isRefreshingTopics, setIsRefreshingTopics] = useState(false)
   const [isInitializeOpen, setIsInitializeOpen] = useState(false)
@@ -65,6 +68,20 @@ function KBDetailsPanel({ kb }: { kb: KBInfo }) {
       const message = error?.response?.data?.detail || 'Initialization failed'
       toast.error(message)
       throw error
+    }
+  }
+
+  const handleRevector = async () => {
+    try {
+      const result = await revectorTask.mutateAsync({ kbId: kb.id })
+      if (result.status === 'submitted' && result.task_id) {
+        toast.success(`Revector task submitted: ${result.task_id}`)
+        navigate('/tasks')
+      } else if (result.status === 'no_chunks') {
+        toast.info('No chunks need re-vectorization')
+      }
+    } catch (error) {
+      toast.error('Failed to submit revector task')
     }
   }
 
@@ -170,14 +187,47 @@ function KBDetailsPanel({ kb }: { kb: KBInfo }) {
                         <p className="font-medium">{consistency.summary?.doc_count}</p>
                       </div>
                       <div className="p-2 bg-muted rounded">
-                        <p className="text-muted-foreground">记录 chunks</p>
-                        <p className="font-medium">{consistency.summary?.chunk_count_stored}</p>
+                        <p className="text-muted-foreground">LanceDB</p>
+                        <p className="font-medium">{consistency.summary?.lance_rows?.toLocaleString()}</p>
                       </div>
                       <div className="p-2 bg-muted rounded">
-                        <p className="text-muted-foreground">实际 chunks</p>
-                        <p className="font-medium">{consistency.summary?.chunk_count_actual}</p>
+                        <p className="text-muted-foreground">SQLite</p>
+                        <p className="font-medium">{consistency.summary?.chunk_count_actual?.toLocaleString()}</p>
                       </div>
                     </div>
+
+                    {/* Embedding Stats Breakdown */}
+                    {consistency.embedding_stats && (
+                      <div className="p-3 border rounded-lg">
+                        <div className="flex items-center gap-2 mb-2">
+                          <Database className="h-4 w-4 text-muted-foreground" />
+                          <span className="text-sm font-medium">向量状态明细</span>
+                        </div>
+                        <div className="grid grid-cols-4 gap-2 text-xs">
+                          <div className="p-2 bg-green-50 rounded">
+                            <p className="text-muted-foreground">✓ 已向量化</p>
+                            <p className="font-medium text-green-700">{consistency.embedding_stats?.success?.toLocaleString()}</p>
+                          </div>
+                          <div className="p-2 bg-yellow-50 rounded">
+                            <p className="text-muted-foreground">○ 待向量化</p>
+                            <p className="font-medium text-yellow-700">{consistency.embedding_stats?.pending?.toLocaleString()}</p>
+                          </div>
+                          <div className="p-2 bg-red-50 rounded">
+                            <p className="text-muted-foreground">✗ 向量失败</p>
+                            <p className="font-medium text-red-700">{consistency.embedding_stats?.failed?.toLocaleString()}</p>
+                          </div>
+                          <div className="p-2 bg-blue-50 rounded">
+                            <p className="text-muted-foreground">DB 缺失</p>
+                            <p className="font-medium text-blue-700">
+                              {((consistency.embedding_stats?.missing_in_lance || 0) + (consistency.embedding_stats?.pending_not_in_lance || 0) + (consistency.embedding_stats?.failed_not_in_lance || 0))?.toLocaleString()}
+                            </p>
+                          </div>
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-2">
+                          LanceDB 实际向量数: {consistency.embedding_stats?.in_lance?.toLocaleString()} / SQLite 已向量化: {consistency.embedding_stats?.success?.toLocaleString()}
+                        </p>
+                      </div>
+                    )}
 
                     {/* Doc Stats Issues */}
                     {!consistency.doc_stats?.accurate && (
@@ -234,6 +284,14 @@ function KBDetailsPanel({ kb }: { kb: KBInfo }) {
                       {repairConsistency.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wrench className="h-4 w-4 mr-1" />}
                       修正文档统计 (安全)
                     </Button>
+
+                    {/* Revector Button */}
+                    {((consistency.embedding_stats?.pending ?? 0) > 0 || (consistency.embedding_stats?.failed ?? 0) > 0) && (
+                      <Button size="sm" variant="outline" onClick={handleRevector} disabled={revectorTask.isPending}>
+                        {revectorTask.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <SparklesIcon className="h-4 w-4 mr-1" />}
+                        重新向量化 ({(((consistency.embedding_stats?.pending ?? 0) + (consistency.embedding_stats?.failed ?? 0))).toLocaleString()})
+                      </Button>
+                    )}
                   </div>
                 )}
               </div>

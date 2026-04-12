@@ -62,6 +62,7 @@ class TaskType(str, Enum):
     OBSIDIAN = "obsidian"  # Obsidian 导入
     GENERIC = "generic"  # 通用文件导入
     INITIALIZE = "initialize"  # 初始化知识库（清空数据）
+    REVECTOR = "revector"  # 重新向量化未成功向量化的 chunks
 
 
 class FileStatus(str, Enum):

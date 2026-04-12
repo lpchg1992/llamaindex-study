@@ -148,8 +148,9 @@ function DocumentManagementTab({ kbId }: { kbId: string }) {
   const [chunkPage, setChunkPage] = useState(1)
   const [chunkPageSize] = useState(20)
   const [chunkPageInput, setChunkPageInput] = useState('')
+  const [chunkFilter, setChunkFilter] = useState<number | null>(null)
   const [showFailedOnly, setShowFailedOnly] = useState(false)
-  const { data: chunksData, isLoading: chunksLoading } = useDocumentChunks(kbId, expandedDoc || '', chunkPage, chunkPageSize)
+  const { data: chunksData, isLoading: chunksLoading, refetch: refetchChunks } = useDocumentChunks(kbId, expandedDoc || '', chunkPage, chunkPageSize, chunkFilter)
   const { data: childrenData, isLoading: childrenLoading } = useChunkChildren(kbId, deletingChunk?.id || '')
   const updateChunk = useUpdateChunk()
   const reembedChunk = useReembedChunk()
@@ -176,7 +177,13 @@ function DocumentManagementTab({ kbId }: { kbId: string }) {
   }
 
   const handleReembed = async (chunk: ChunkInfo) => {
-    await reembedChunk.mutateAsync({ kbId, chunkId: chunk.id })
+    const result = await reembedChunk.mutateAsync({ kbId, chunkId: chunk.id })
+    if (result.status === 'success') {
+      toast.success('Chunk reembedded successfully')
+      refetchChunks()
+    } else {
+      toast.error(result.message || 'Reembed failed')
+    }
   }
 
   const handleReembedAllFailed = async () => {
@@ -184,6 +191,7 @@ function DocumentManagementTab({ kbId }: { kbId: string }) {
       const result = await reembedFailed.mutateAsync({ kbId })
       toast.success(result.message)
       refetchFailed()
+      refetchChunks()
     }
   }
 
@@ -400,18 +408,34 @@ function DocumentManagementTab({ kbId }: { kbId: string }) {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={!!selectedDocForChunks} onOpenChange={() => { setSelectedDocForChunks(null); setChunkPage(1) }}>
+      <Dialog open={!!selectedDocForChunks} onOpenChange={() => { setSelectedDocForChunks(null); setChunkPage(1); setChunkFilter(null) }}>
         <DialogContent className="max-w-6xl w-[95vw] h-[90vh] flex flex-col">
           <DialogHeader className="shrink-0">
             <DialogTitle className="flex items-center gap-2">
               <FileText className="h-5 w-5" />
               Chunks: {selectedDocForChunks?.source_file}
             </DialogTitle>
-            <p className="text-sm text-muted-foreground">
-              {chunksLoading ? 'Loading...' : (
-                chunksData ? `Page ${chunksData.page} of ${chunksData.total_pages} - ${chunksData.total} chunks total` : 'No chunks'
-              )}
-            </p>
+            <div className="flex items-center gap-4">
+              <p className="text-sm text-muted-foreground">
+                {chunksLoading ? 'Loading...' : (
+                  chunksData ? `Page ${chunksData.page} of ${chunksData.total_pages} - ${chunksData.total} chunks total` : 'No chunks'
+                )}
+              </p>
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-muted-foreground">Filter:</span>
+                <Select value={chunkFilter === null ? 'all' : String(chunkFilter)} onValueChange={(v) => { setChunkFilter(v === 'all' ? null : Number(v)); setChunkPage(1) }}>
+                  <SelectTrigger className="w-32 h-8">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All</SelectItem>
+                    <SelectItem value="1">✓ Embedded</SelectItem>
+                    <SelectItem value="0">○ Pending</SelectItem>
+                    <SelectItem value="2">✗ Failed</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
           </DialogHeader>
           <ScrollArea className="flex-1 min-h-0">
             {chunksLoading ? (
@@ -421,28 +445,34 @@ function DocumentManagementTab({ kbId }: { kbId: string }) {
             ) : (
               <div className="space-y-3 p-4">
                 {chunksData?.chunks?.map((chunk) => (
-                  <div key={chunk.id} className="p-4 border rounded-lg">
+                  <div key={chunk.id} className={`p-4 border rounded-lg ${chunk.embedding_generated === 2 ? 'border-red-300 bg-red-50' : chunk.embedding_generated === 0 ? 'border-yellow-300 bg-yellow-50' : ''}`}>
                     <div className="flex items-center justify-between mb-3">
                       <div className="flex items-center gap-3">
                         <Badge variant="outline" className="text-sm">{chunk.chunk_index}</Badge>
                         <Badge variant="secondary" className="text-sm">L{chunk.hierarchy_level}</Badge>
+                        {chunk.embedding_generated === 1 && <Badge variant="default" className="bg-green-500 text-xs">✓ Embedded</Badge>}
+                        {chunk.embedding_generated === 0 && <Badge variant="secondary" className="bg-yellow-500 text-xs">○ Pending</Badge>}
+                        {chunk.embedding_generated === 2 && <Badge variant="destructive" className="text-xs">✗ Failed</Badge>}
                         <code className="text-xs text-muted-foreground font-mono">{chunk.id}</code>
                       </div>
                       <div className="flex items-center gap-1">
+                        {chunk.embedding_generated !== 1 && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleReembed(chunk)}
+                            disabled={reembedChunk.isPending}
+                            title="Reembed"
+                          >
+                            <RefreshCw className={`h-4 w-4 ${reembedChunk.isPending ? 'animate-spin' : ''}`} />
+                          </Button>
+                        )}
                         <Button
                           variant="ghost"
                           size="icon"
                           onClick={() => handleEditStart(chunk)}
                         >
                           <Edit2 className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => handleReembed(chunk)}
-                          disabled={reembedChunk.isPending}
-                        >
-                          <RefreshCw className={`h-4 w-4 ${reembedChunk.isPending ? 'animate-spin' : ''}`} />
                         </Button>
                         <Button
                           variant="ghost"

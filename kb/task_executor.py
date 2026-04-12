@@ -88,6 +88,8 @@ class TaskExecutor:
                 await self._execute_initialize(task)
             elif task.task_type == "selective":
                 await self._execute_selective(task)
+            elif task.task_type == "revector":
+                await self._execute_revector(task)
             else:
                 raise ValueError(f"Unknown task type: {task.task_type}")
 
@@ -805,6 +807,168 @@ class TaskExecutor:
                 "file_progress": file_progress,
             },
             error=error_msg,
+        )
+
+    async def _execute_revector(self, task: "Task") -> None:
+        """执行重新向量化任务（处理 pending 和 failed chunks）"""
+        from kb.database import init_chunk_db
+        from kb.lance_crud import LanceCRUDService
+        from kb.parallel_embedding import get_parallel_processor
+
+        kb_id = task.kb_id
+        params = task.params
+        task_id = task.task_id
+
+        include_pending = params.get("include_pending", True)
+        include_failed = params.get("include_failed", True)
+        batch_size = params.get("batch_size", 100)
+        limit = params.get("limit", 50000)
+
+        logger.info(
+            f"[{task_id}] 开始重新向量化任务: kb_id={kb_id}, "
+            f"include_pending={include_pending}, include_failed={include_failed}, limit={limit}"
+        )
+
+        chunk_db = init_chunk_db()
+        processor = get_parallel_processor()
+
+        if not processor.endpoints:
+            self.queue.complete_task(
+                task_id,
+                error="没有可用的 embedding 端点",
+            )
+            return
+
+        pending_chunks = []
+        failed_chunks = []
+
+        if include_pending:
+            pending_chunks = chunk_db.get_unembedded(kb_id, limit=limit)
+
+        if include_failed:
+            failed_chunks = chunk_db.get_failed_chunks(kb_id, limit=limit)
+
+        all_chunks = pending_chunks + failed_chunks
+        total_chunks = len(all_chunks)
+
+        if total_chunks == 0:
+            self.queue.complete_task(
+                task_id,
+                result={
+                    "kb_id": kb_id,
+                    "processed": 0,
+                    "pending": 0,
+                    "failed": 0,
+                    "success": 0,
+                    "skipped": 0,
+                },
+            )
+            return
+
+        await self._update_and_notify(
+            task_id,
+            total=total_chunks,
+            message=f"准备重新向量化 {total_chunks} 个 chunks",
+        )
+
+        stats = {
+            "pending": len(pending_chunks),
+            "failed": len(failed_chunks),
+            "success": 0,
+            "skipped": 0,
+        }
+
+        processed = 0
+        failed_ids = []
+        ep_name = processor.endpoints[0].name
+
+        for i, chunk in enumerate(all_chunks):
+            if await self._check_cancelled(task_id):
+                self.queue.complete_task(
+                    task_id,
+                    result={
+                        **stats,
+                        "processed": processed,
+                        "message": "任务已取消",
+                    },
+                    error="任务已取消",
+                )
+                return
+
+            if await self._check_paused(task_id):
+                self.queue.complete_task(
+                    task_id,
+                    result={
+                        **stats,
+                        "processed": processed,
+                        "message": "任务已暂停",
+                    },
+                    error="任务已暂停",
+                )
+                return
+
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+
+            try:
+                _, embedding, error = await loop.run_in_executor(
+                    None,
+                    lambda: processor.get_embedding(chunk["text"], ep_name),
+                )
+
+                if error:
+                    raise Exception(error)
+
+                if all(v == 0.0 for v in embedding):
+                    raise Exception("Embedding returned zero vector")
+
+                LanceCRUDService.upsert_vector(
+                    chunk["id"], chunk["doc_id"], embedding, kb_id=kb_id
+                )
+                chunk_db.mark_embedded(chunk["id"])
+                stats["success"] += 1
+
+            except Exception as e:
+                logger.warning(f"Re-embed chunk {chunk['id']} failed: {e}")
+                failed_ids.append(chunk["id"])
+                stats["skipped"] += 1
+
+            processed += 1
+
+            if (i + 1) % batch_size == 0:
+                progress_pct = int(processed / total_chunks * 100)
+                await self._update_and_notify(
+                    task_id,
+                    progress=progress_pct,
+                    current=processed,
+                    total=total_chunks,
+                    message=f"进度: {processed}/{total_chunks}",
+                )
+                await self._update_heartbeat(task_id)
+
+        if failed_ids:
+            chunk_db.mark_failed_bulk(failed_ids)
+
+        remaining_pending = len(chunk_db.get_unembedded(kb_id, limit=1))
+        remaining_failed = len(chunk_db.get_failed_chunks(kb_id, limit=1))
+
+        self.queue.complete_task(
+            task_id,
+            result={
+                "kb_id": kb_id,
+                "processed": processed,
+                "pending": stats["pending"],
+                "failed": stats["failed"],
+                "success": stats["success"],
+                "skipped": stats["skipped"],
+                "remaining_pending": remaining_pending,
+                "remaining_failed": remaining_failed,
+                "message": f"完成: {stats['success']} 成功, {stats['skipped']} 失败. "
+                f"剩余: pending={remaining_pending}, failed={remaining_failed}",
+            },
         )
 
     # ==================== 其他任务类型 ====================

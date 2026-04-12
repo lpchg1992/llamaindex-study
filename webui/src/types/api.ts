@@ -414,6 +414,15 @@ export interface ChunkInfo {
   updated_at: number
 }
 
+export interface PaginatedChunksResponse {
+  chunks: ChunkInfo[]
+  total: number
+  page: number
+  page_size: number
+  total_pages: number
+  embedding_status?: number | null
+}
+
 // Chat
 export interface ChatMessage {
   role: 'user' | 'assistant'
@@ -541,6 +550,16 @@ export interface ConsistencyCheckResult {
     mismatched_count: number
     issues: DocStatsIssue[]
   }
+  embedding_stats?: {
+    total: number
+    success: number
+    pending: number
+    failed: number
+    in_lance: number
+    missing_in_lance: number
+    pending_not_in_lance: number
+    failed_not_in_lance: number
+  }
   vector_integrity: {
     status: string
     missing_count: number
@@ -556,6 +575,14 @@ export interface ConsistencyRepairResult {
   fixed: number
   skipped: number
   message: string
+}
+
+export interface RevectorResult {
+  status: string
+  task_id?: string
+  message: string
+  pending: number
+  failed: number
 }
 
 // Task batch operations

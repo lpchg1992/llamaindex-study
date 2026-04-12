@@ -2575,8 +2575,13 @@ def list_document_chunks(
     doc_id: str,
     page: int = 1,
     page_size: int = 20,
+    embedding_status: int = None,
 ):
-    """获取文档的分块（分页）"""
+    """获取文档的分块（分页）
+
+    Args:
+        embedding_status: 可选，按 embedding 状态过滤 (0=pending, 1=success, 2=failed)
+    """
     from kb.database import init_document_db, init_chunk_db
 
     doc_db = init_document_db()
@@ -2587,9 +2592,17 @@ def list_document_chunks(
         raise HTTPException(status_code=404, detail=f"文档不属于知识库 {kb_id}")
 
     chunk_db = init_chunk_db()
-    total = chunk_db.count_by_doc(doc_id)
-    offset = (page - 1) * page_size
-    chunks = chunk_db.get_by_doc(doc_id, offset=offset, limit=page_size)
+
+    if embedding_status is not None:
+        total = chunk_db.count_by_doc_filtered(doc_id, embedding_status)
+        offset = (page - 1) * page_size
+        chunks = chunk_db.get_by_doc_filtered(
+            doc_id, embedding_status, offset=offset, limit=page_size
+        )
+    else:
+        total = chunk_db.count_by_doc(doc_id)
+        offset = (page - 1) * page_size
+        chunks = chunk_db.get_by_doc(doc_id, offset=offset, limit=page_size)
 
     return {
         "chunks": chunks,
@@ -2597,6 +2610,7 @@ def list_document_chunks(
         "page": page,
         "page_size": page_size,
         "total_pages": (total + page_size - 1) // page_size if total > 0 else 0,
+        "embedding_status": embedding_status,
     }
 
 
@@ -2651,7 +2665,8 @@ def update_chunk_text(kb_id: str, chunk_id: str, req: Dict[str, str]):
 def reembed_chunk(kb_id: str, chunk_id: str):
     """重新生成分块的 embedding"""
     from kb.database import init_chunk_db
-    from llamaindex_study.config import get_model_registry
+    from kb.lance_crud import LanceCRUDService
+    from kb.parallel_embedding import get_parallel_processor
 
     chunk_db = init_chunk_db()
     chunk = chunk_db.get(chunk_id)
@@ -2660,38 +2675,43 @@ def reembed_chunk(kb_id: str, chunk_id: str):
     if chunk["kb_id"] != kb_id:
         raise HTTPException(status_code=404, detail=f"分块不属于知识库 {kb_id}")
 
-    registry = get_model_registry()
-    registry.reload()
+    processor = get_parallel_processor()
+    if not processor.endpoints:
+        return {
+            "status": "error",
+            "chunk_id": chunk_id,
+            "message": "没有可用的 embedding 端点",
+        }
 
-    embed_model = None
     try:
-        from llama_index.core import Settings as LlamaSettings
-        from llamaindex_study.llama_utils import get_default_embed_model
+        ep_name = processor.endpoints[0].name
+        import asyncio
 
-        embed_model = get_default_embed_model()
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        _, embedding, error = loop.run_until_complete(
+            processor.get_embedding(chunk["text"], ep_name)
+        )
+        loop.close()
+
+        if error:
+            raise Exception(error)
+
+        if all(v == 0.0 for v in embedding):
+            raise Exception("Embedding returned zero vector")
+
+        LanceCRUDService.upsert_vector(
+            chunk_id, chunk["doc_id"], embedding, kb_id=kb_id
+        )
+        chunk_db.mark_embedded(chunk_id)
+        return {
+            "status": "success",
+            "chunk_id": chunk_id,
+            "message": "embedding 已重新生成",
+        }
     except Exception as e:
-        logger.warning(f"获取 embedding 模型失败: {e}")
-
-    if embed_model:
-        try:
-            embedding = embed_model.get_text_embedding(chunk["text"])
-            from kb.lance_crud import LanceCRUDService
-
-            LanceCRUDService.upsert_vector(chunk_id, chunk["doc_id"], embedding)
-            chunk_db.mark_embedded(chunk_id)
-            return {
-                "status": "success",
-                "chunk_id": chunk_id,
-                "message": "embedding 已重新生成",
-            }
-        except Exception as e:
-            return {"status": "error", "chunk_id": chunk_id, "message": str(e)}
-
-    return {
-        "status": "pending",
-        "chunk_id": chunk_id,
-        "message": "需要重新启动服务以加载 embedding 模型",
-    }
+        chunk_db.mark_failed_bulk([chunk_id])
+        return {"status": "error", "chunk_id": chunk_id, "message": str(e)}
 
 
 @app.post("/kbs/{kb_id}/chunks/reembed-failed")
@@ -2756,6 +2776,52 @@ def reembed_failed_chunks(kb_id: str, batch_size: int = 50):
         "processed": processed,
         "failed": failed,
         "message": f"处理完成: {processed} 成功, {failed} 失败",
+    }
+
+
+@app.post("/kbs/{kb_id}/chunks/revector")
+def submit_revector_task(
+    kb_id: str,
+    include_pending: bool = True,
+    include_failed: bool = True,
+    batch_size: int = 100,
+    limit: int = 50000,
+):
+    """提交重新向量化任务到任务调度器（处理 pending 和 failed chunks）"""
+    from kb.task_queue import task_queue
+    from kb.database import init_chunk_db
+
+    chunk_db = init_chunk_db()
+
+    pending_count = len(chunk_db.get_unembedded(kb_id, limit=1))
+    failed_count = len(chunk_db.get_failed_chunks(kb_id, limit=1))
+
+    if include_pending and pending_count == 0 and include_failed and failed_count == 0:
+        return {
+            "status": "no_chunks",
+            "message": "没有需要重新向量化的 chunks",
+            "pending": 0,
+            "failed": 0,
+        }
+
+    task_id = task_queue.submit_task(
+        task_type="revector",
+        kb_id=kb_id,
+        params={
+            "include_pending": include_pending,
+            "include_failed": include_failed,
+            "batch_size": batch_size,
+            "limit": limit,
+        },
+        source="api.revector",
+    )
+
+    return {
+        "status": "submitted",
+        "task_id": task_id,
+        "message": f"重新向量化任务已提交: {task_id}",
+        "pending": pending_count,
+        "failed": failed_count,
     }
 
 
