@@ -925,16 +925,7 @@ class TaskExecutor:
             chunk_ids = [chunk["id"] for chunk in chunk_batch]
             doc_ids = [chunk["doc_id"] for chunk in chunk_batch]
 
-            try:
-                loop = asyncio.get_event_loop()
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-
-            embedding_results = await loop.run_in_executor(
-                None,
-                lambda: processor.process_batch(texts),
-            )
+            embedding_results = await processor.process_batch(texts)
 
             batch_failed_ids = []
             for idx, (ep_name, embedding, error) in enumerate(embedding_results):
