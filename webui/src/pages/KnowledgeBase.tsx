@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useKBs, useCreateKB, useDeleteKB, useKBTopics, useRefreshTopics, useConsistencyCheck, useConsistencyRepair, useInitializeKB, useRepairAll, useCheckAndMarkFailed } from '@/api/hooks'
+import { useKBs, useCreateKB, useDeleteKB, useKBTopics, useRefreshTopics, useConsistencyCheck, useConsistencyRepair, useInitializeKB, useRepairAll, useCheckAndMarkFailed, useRevectorTask } from '@/api/hooks'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -31,6 +31,7 @@ function KBDetailsPanel({ kb }: { kb: KBInfo }) {
   const repairConsistency = useConsistencyRepair()
   const initializeKB = useInitializeKB()
   const checkAndMarkFailed = useCheckAndMarkFailed()
+  const revectorTask = useRevectorTask()
   const [isRefreshingTopics, setIsRefreshingTopics] = useState(false)
   const [isInitializeOpen, setIsInitializeOpen] = useState(false)
 
@@ -73,7 +74,12 @@ function KBDetailsPanel({ kb }: { kb: KBInfo }) {
 
   const handleSyncAllMissing = async () => {
     try {
-      const result = await checkAndMarkFailed.mutateAsync(kb.id)
+      const result = await revectorTask.mutateAsync({
+        kbId: kb.id,
+        includePending: true,
+        includeFailed: true,
+        includeEmbedded: false,
+      })
       if (result.task_id) {
         toast.success(`任务已提交: ${result.task_id}`)
         navigate('/tasks')
@@ -299,8 +305,8 @@ function KBDetailsPanel({ kb }: { kb: KBInfo }) {
 
                     {/* Sync All Missing Button */}
                     {(consistency.vector_integrity?.missing_count ?? 0) > 0 && (
-                      <Button size="sm" variant="default" onClick={handleSyncAllMissing} disabled={checkAndMarkFailed.isPending}>
-                        {checkAndMarkFailed.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-1" />}
+                      <Button size="sm" variant="default" onClick={handleSyncAllMissing} disabled={revectorTask.isPending}>
+                        {revectorTask.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-1" />}
                         同步所有缺失向量 ({consistency.vector_integrity?.missing_count?.toLocaleString()})
                       </Button>
                     )}
