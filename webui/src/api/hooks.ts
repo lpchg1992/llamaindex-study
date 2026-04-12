@@ -864,7 +864,7 @@ export function useDocEmbeddingStats(kbId: string) {
 
 export function useCheckAndMarkFailed() {
   const queryClient = useQueryClient()
-  return useMutation<{ kb_id: string; marked_failed: number; total_checked: number; message: string }, Error, string>({
+  return useMutation<{ status: string; task_id?: string; message: string; marked_failed?: number; total_checked?: number }, Error, string>({
     mutationFn: async (kbId: string) => {
       const { data } = await apiClient.post(`${API_BASE}/kbs/${kbId}/consistency/check-and-mark-failed`)
       return data

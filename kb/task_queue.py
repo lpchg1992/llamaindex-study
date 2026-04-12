@@ -63,6 +63,7 @@ class TaskType(str, Enum):
     GENERIC = "generic"  # 通用文件导入
     INITIALIZE = "initialize"  # 初始化知识库（清空数据）
     REVECTOR = "revector"  # 重新向量化未成功向量化的 chunks
+    CHECK_MARK_FAILED = "check_mark_failed"  # 检查并标记缺失向量的 chunks 为失败
 
 
 class FileStatus(str, Enum):

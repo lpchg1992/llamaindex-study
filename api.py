@@ -2175,16 +2175,26 @@ def get_doc_embedding_stats(kb_id: str):
 
 
 @app.post("/kbs/{kb_id}/consistency/check-and-mark-failed")
-def check_and_mark_failed_chunks(kb_id: str):
-    """检查所有 chunk 是否存在于 LanceDB，并将不存在的标记为失败"""
-    from kb.services import ConsistencyService
+def check_and_mark_failed_chunks(kb_id: str, limit: int = 200000):
+    """提交检查并标记缺失向量任务到任务调度器"""
+    from kb.task_queue import task_queue
 
     info = KnowledgeBaseService.get_info(kb_id)
     if not info:
         raise HTTPException(status_code=404, detail=f"知识库不存在: {kb_id}")
 
-    result = ConsistencyService.check_and_mark_failed(kb_id)
-    return result
+    task_id = task_queue.submit_task(
+        task_type="check_mark_failed",
+        kb_id=kb_id,
+        params={"limit": limit},
+        source="api.check_mark_failed",
+    )
+
+    return {
+        "status": "submitted",
+        "task_id": task_id,
+        "message": f"检查并标记失败任务已提交: {task_id}",
+    }
 
 
 # ============== Obsidian 全库分类导入 ==============

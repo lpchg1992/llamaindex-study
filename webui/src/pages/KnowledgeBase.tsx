@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useKBs, useCreateKB, useDeleteKB, useKBTopics, useRefreshTopics, useConsistencyCheck, useConsistencyRepair, useInitializeKB, useRepairAll, useCheckAndMarkFailed } from '@/api/hooks'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -23,6 +24,7 @@ import { ImportDialog } from '@/components/ImportDialog'
 import type { KBInfo } from '@/types/api'
 
 function KBDetailsPanel({ kb }: { kb: KBInfo }) {
+  const navigate = useNavigate()
   const { data: topics, isLoading: topicsLoading } = useKBTopics(kb.id)
   const refreshTopics = useRefreshTopics()
   const { data: consistency, isLoading: consistencyLoading, refetch: refetchConsistency } = useConsistencyCheck(kb.id)
@@ -57,8 +59,13 @@ function KBDetailsPanel({ kb }: { kb: KBInfo }) {
   const handleCheckAndMarkFailed = async () => {
     try {
       const result = await checkAndMarkFailed.mutateAsync(kb.id)
-      toast.success(result.message)
-      refetchConsistency()
+      if (result.task_id) {
+        toast.success(`任务已提交: ${result.task_id}`)
+        navigate('/tasks')
+      } else {
+        toast.success(result.message)
+        refetchConsistency()
+      }
     } catch (error) {
       toast.error('Check and mark failed failed')
     }
@@ -67,12 +74,13 @@ function KBDetailsPanel({ kb }: { kb: KBInfo }) {
   const handleSyncAllMissing = async () => {
     try {
       const result = await checkAndMarkFailed.mutateAsync(kb.id)
-      if (result.marked_failed > 0) {
-        toast.success(`已将 ${result.marked_failed} 个缺失向量的 chunk 标记为失败`)
+      if (result.task_id) {
+        toast.success(`任务已提交: ${result.task_id}`)
+        navigate('/tasks')
       } else {
-        toast.info('所有 chunk 都有对应的向量数据')
+        toast.success(result.message)
+        refetchConsistency()
       }
-      refetchConsistency()
     } catch (error) {
       toast.error('Sync failed')
     }

@@ -90,6 +90,8 @@ class TaskExecutor:
                 await self._execute_selective(task)
             elif task.task_type == "revector":
                 await self._execute_revector(task)
+            elif task.task_type == "check_mark_failed":
+                await self._execute_check_mark_failed(task)
             else:
                 raise ValueError(f"Unknown task type: {task.task_type}")
 
@@ -979,6 +981,93 @@ class TaskExecutor:
                 "remaining_embedded": remaining_embedded,
                 "message": f"完成: {stats['success']} 成功, {stats['skipped']} 失败. "
                 f"剩余: pending={remaining_pending}, failed={remaining_failed}, embedded={remaining_embedded}",
+            },
+        )
+
+    async def _execute_check_mark_failed(self, task: "Task") -> None:
+        """执行检查并标记缺失向量的 chunks 为失败"""
+        kb_id = task.kb_id
+        task_id = task.task_id
+        params = task.params
+        limit = params.get("limit", 200000)
+
+        logger.info(f"[{task_id}] 开始检查并标记缺失向量: kb_id={kb_id}, limit={limit}")
+
+        from kb.database import init_chunk_db
+
+        chunk_db = init_chunk_db()
+
+        total_before = 0
+        failed_before = 0
+        success_before = 0
+
+        with chunk_db.db.session_scope() as session:
+            from kb.database import ChunkModel
+            from sqlalchemy import select, func
+
+            total_before = session.scalar(
+                select(func.count()).where(ChunkModel.kb_id == kb_id)
+            )
+            failed_before = session.scalar(
+                select(func.count()).where(
+                    ChunkModel.kb_id == kb_id, ChunkModel.embedding_generated == 2
+                )
+            )
+            success_before = session.scalar(
+                select(func.count()).where(
+                    ChunkModel.kb_id == kb_id, ChunkModel.embedding_generated == 1
+                )
+            )
+
+        await self._update_and_notify(
+            task_id,
+            total=1,
+            message=f"开始检查 {total_before} 个 chunks...",
+        )
+
+        result = chunk_db.mark_chunks_missing_from_lance(kb_id, limit=limit)
+
+        total_after = 0
+        failed_after = 0
+        success_after = 0
+
+        with chunk_db.db.session_scope() as session:
+            from kb.database import ChunkModel
+            from sqlalchemy import select, func
+
+            total_after = session.scalar(
+                select(func.count()).where(ChunkModel.kb_id == kb_id)
+            )
+            failed_after = session.scalar(
+                select(func.count()).where(
+                    ChunkModel.kb_id == kb_id, ChunkModel.embedding_generated == 2
+                )
+            )
+            success_after = session.scalar(
+                select(func.count()).where(
+                    ChunkModel.kb_id == kb_id, ChunkModel.embedding_generated == 1
+                )
+            )
+
+        marked = result["marked_failed"]
+        checked = result["total_checked"]
+
+        logger.info(
+            f"[{task_id}] 检查完成: checked={checked}, marked_failed={marked}, "
+            f"failed: {failed_before} -> {failed_after}, success: {success_before} -> {success_after}"
+        )
+
+        self.queue.complete_task(
+            task_id,
+            result={
+                "kb_id": kb_id,
+                "checked": checked,
+                "marked_failed": marked,
+                "failed_before": failed_before,
+                "failed_after": failed_after,
+                "success_before": success_before,
+                "success_after": success_after,
+                "message": f"检查完成: 标记 {marked} 个 chunks 为失败 (共检查 {checked} 个)",
             },
         )
 
