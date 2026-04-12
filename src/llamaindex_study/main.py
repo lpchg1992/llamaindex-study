@@ -799,69 +799,152 @@ def handle_kb_consistency(args: argparse.Namespace) -> int:
 
     kb_id = args.kb_id
     repair = args.repair
-    mode = args.mode if hasattr(args, "mode") else "dry"
 
-    if repair:
-        mode = "sync"
+    def check_and_display(kid: str) -> bool:
+        result = ConsistencyService.check(kid)
 
-    if kb_id:
-        result = ConsistencyService.verify(kb_id)
         print(f"\n{'=' * 60}")
-        print(f"📊 知识库一致性校验: {kb_id}")
+        print(f"📊 知识库一致性检查: {kid}")
         print(f"{'=' * 60}")
 
-        if result.get("status") == "error":
-            print(f"❌ 校验失败: {result.get('error')}")
-            return 1
+        if result.get("error"):
+            print(f"❌ 检查失败: {result.get('error')}")
+            return False
 
-        print(
-            f"  Dedup 记录: {result.get('dedup_files', 0)} 文件, {result.get('dedup_chunks', 0)} chunks"
-        )
-        print(f"  LanceDB:    {result.get('lance_rows', 0)} 行")
+        summary = result.get("summary", {})
+        print(f"\n📈 概览:")
+        print(f"  文档数: {summary.get('doc_count', 0)}")
+        print(f"  记录 chunks: {summary.get('chunk_count_stored', 0)}")
+        print(f"  实际 chunks: {summary.get('chunk_count_actual', 0)}")
+        print(f"  LanceDB 行数: {summary.get('lance_rows', 0)}")
 
-        status = result.get("status", "unknown")
-        if status == "consistent":
-            print(f"  状态: ✅ 一致")
-        elif status == "missing_data":
-            print(f"  状态: ⚠️ 缺失数据 (缺少 {result.get('missing_chunks', 0)} chunks)")
-        elif status == "orphan_data":
-            print(f"  状态: ⚠️ 多余数据 (orphan {result.get('orphan_rows', 0)} 行)")
+        doc_stats = result.get("doc_stats", {})
+        if doc_stats.get("accurate"):
+            print(f"\n✅ 文档统计: 准确")
         else:
-            print(f"  状态: ⚠️ 混合不一致")
+            print(f"\n⚠️  文档统计: 不准确")
+            print(f"  错误文档数: {doc_stats.get('mismatched_count', 0)}")
+            for issue in doc_stats.get("issues", [])[:5]:
+                print(f"    - {issue.get('description', '')}")
+            if len(doc_stats.get("issues", [])) > 5:
+                print(f"    ... 还有 {len(doc_stats.get('issues', [])) - 5} 个")
 
-        if not result.get("consistent"):
-            if repair or mode == "sync":
-                print(f"\n🔧 尝试修复...")
-                repair_result = ConsistencyService.repair(kb_id, mode=mode)
-                if repair_result.get("repaired"):
-                    print(f"✅ 修复成功: {repair_result.get('message')}")
-                else:
-                    print(f"❌ 修复失败: {repair_result.get('message')}")
-            elif mode == "dry":
-                print(f"\n💡 使用 --repair 参数尝试自动修复")
+        vector_integrity = result.get("vector_integrity", {})
+        vec_status = vector_integrity.get("status", "unknown")
+        if vec_status == "ok":
+            print(f"\n✅ 向量完整性: 正常")
+        else:
+            print(f"\n⚠️  向量完整性: {vec_status}")
+            for issue in vector_integrity.get("issues", []):
+                print(f"    - {issue.get('description', '')}")
 
-        print(f"{'=' * 60}\n")
+        recommendations = result.get("recommendations", [])
+        if recommendations:
+            print(f"\n💡 建议操作:")
+            for rec in recommendations:
+                priority = rec.get("priority", "")
+                emoji = "🔴" if priority == "high" else "🟡"
+                print(f"  {emoji} {rec.get('description', '')}")
+
+        return result.get("status") == "ok"
+
+    if kb_id:
+        check_and_display(kb_id)
+        if repair:
+            print(f"\n{'=' * 60}")
+            print(f"🔧 执行修复...")
+            repair_result = ConsistencyService.repair(kb_id)
+            fixed = repair_result.get("fixed", 0)
+            skipped = repair_result.get("skipped", 0)
+            print(f"  已修正: {fixed} 个文档")
+            print(f"  跳过: {skipped} 个文档")
+            if fixed > 0:
+                print(f"\n✅ 修复完成！建议重新检查确认:")
+                check_and_display(kb_id)
     else:
         print(f"\n{'=' * 60}")
-        print("📊 所有知识库一致性校验")
+        print("📊 所有知识库一致性检查")
         print(f"{'=' * 60}")
 
         kbs = registry.list()
+        all_ok = True
         for kb in kbs:
-            result = ConsistencyService.verify(kb.id)
-            status = result.get("status", "unknown")
-            if status == "consistent":
-                icon = "✅"
-            elif status == "error":
-                icon = "❌"
-            else:
-                icon = "⚠️"
+            ok = check_and_display(kb.id)
+            if not ok:
+                all_ok = False
+
+        if all_ok:
+            print(f"\n✅ 所有知识库都正常")
+        else:
+            print(f"\n⚠️  部分知识库存在问题，使用 --repair 修复")
+
+    print(f"{'=' * 60}\n")
+    return 0
+
+
+def handle_kb_fix_stats(args: argparse.Namespace) -> int:
+    from kb.services import ConsistencyService
+    from kb.registry import registry
+
+    kb_id = args.kb_id
+    dry_run = args.dry_run if hasattr(args, "dry_run") else False
+
+    def fix_single_kb(kid: str) -> bool:
+        print(f"\n{'=' * 60}")
+        print(f"🔧 修正文档统计: {kid}")
+        print(f"{'=' * 60}")
+
+        verify_result = ConsistencyService.verify_doc_stats(kid)
+        print(f"  文档总数: {verify_result['total_documents']}")
+        print(f"  统计错误文档: {verify_result['mismatched_count']}")
+        print(f"  记录的总chunk数: {verify_result['total_stored_count']}")
+        print(f"  实际chunk总数: {verify_result['total_actual_count']}")
+
+        if verify_result["mismatched_count"] == 0:
+            print(f"  状态: ✅ 所有文档统计正确")
+            return True
+
+        print(f"\n{'=' * 60}")
+        print(f"📋 统计错误的文档:")
+        print(f"{'=' * 60}")
+        for doc_info in verify_result["mismatched_docs"][:10]:
             print(
-                f"  {icon} {kb.id}: dedup={result.get('dedup_chunks', 0)} chunks, lance={result.get('lance_rows', 0)} rows"
+                f"  - {doc_info['source_file']}: 记录={doc_info['stored_count']}, 实际={doc_info['actual_count']} (差异: {doc_info['diff']:+d})"
             )
+        if len(verify_result["mismatched_docs"]) > 10:
+            print(f"  ... 还有 {len(verify_result['mismatched_docs']) - 10} 个文档")
 
-        print(f"{'=' * 60}\n")
+        if dry_run:
+            print(f"\n🔍 [Dry Run] 不会进行实际修改")
+            return True
 
+        print(f"\n🔧 开始修正...")
+        fix_result = ConsistencyService.fix_doc_stats(kid)
+        print(f"  已修正: {fix_result['fixed']} 个文档")
+        print(f"  跳过: {fix_result['skipped']} 个文档")
+
+        if fix_result["details"]:
+            print(f"\n📋 修正详情 (前10条):")
+            for detail in fix_result["details"][:10]:
+                action = detail.get("action", "unknown")
+                if action == "fixed":
+                    print(
+                        f"  ✅ {detail['source_file']}: {detail.get('stored_count', 0)} -> 修正"
+                    )
+                elif action == "failed":
+                    print(f"  ❌ {detail['source_file']}: 修正失败")
+        return True
+
+    if kb_id:
+        fix_single_kb(kb_id)
+    else:
+        kbs = registry.list()
+        for kb in kbs:
+            fix_single_kb(kb.id)
+
+    print(f"\n{'=' * 60}")
+    print(f"✅ 完成")
+    print(f"{'=' * 60}\n")
     return 0
 
 
@@ -2348,16 +2431,12 @@ def build_parser() -> argparse.ArgumentParser:
     kb_topics_local.add_argument("--update", action="store_true", help="更新到数据库")
     kb_topics_local.set_defaults(handler=handle_kb_topics_local)
 
-    kb_consistency = kb_sub.add_parser("consistency", help="校验知识库一致性")
+    kb_consistency = kb_sub.add_parser("consistency", help="知识库一致性检查和修复")
     kb_consistency.add_argument(
         "kb_id", nargs="?", default=None, help="知识库ID，不指定则检查所有"
     )
-    kb_consistency.add_argument("--repair", action="store_true", help="自动修复不一致")
     kb_consistency.add_argument(
-        "--mode",
-        choices=["sync", "rebuild", "dry"],
-        default="dry",
-        help="修复模式: sync(删除orphan), rebuild(重建), dry(只报告)",
+        "--repair", action="store_true", help="自动修复发现的问题"
     )
     kb_consistency.set_defaults(handler=handle_kb_consistency)
 
