@@ -1753,7 +1753,7 @@ class ChunkDB:
         Returns list of dicts with doc_id, total_chunks, in_lance_count, missing_count
         """
         from kb.lance_crud import LanceCRUDService
-        from kb.vector_store import VectorStoreService
+        from kb.services import VectorStoreService
 
         docs = []
         with self.db.session_scope() as session:
@@ -1804,7 +1804,7 @@ class ChunkDB:
         Returns dict with marked count
         """
         from kb.lance_crud import LanceCRUDService
-        from kb.vector_store import VectorStoreService
+        from kb.services import VectorStoreService
 
         with self.db.session_scope() as session:
             rows = session.scalars(
