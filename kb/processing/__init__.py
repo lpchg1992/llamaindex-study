@@ -1,0 +1,3 @@
+"""
+Document processing pipeline.
+"""

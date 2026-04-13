@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""根据 source_path 重新计算并填充 documents 表的 file_hash"""
+"""
+**独立脚本**
+根据 source_path 重新计算并填充 documents 表的 file_hash"""
 
 import sys
 from pathlib import Path

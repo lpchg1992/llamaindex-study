@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """
+**独立脚本**
 检查并修复 documents 表的 zotero_doc_id 字段
 """
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """
+**独立脚本**
 Re-export truncated md files using their UIDs (no OCR credit consumed).
 
 This script:

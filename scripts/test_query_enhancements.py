@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """
+**独立脚本**
 Query Enhancement Test Script
 
 Tests all combinations of:
