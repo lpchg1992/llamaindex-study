@@ -5,6 +5,13 @@ Embedding 负载均衡器
 - 并行调用（同时向所有健康端点发送请求）
 - 故障自动切换
 - 性能监控
+
+用法:
+    from llamaindex_study.embedding_loadbalancer import EmbeddingLoadBalancer
+
+    lb = EmbeddingLoadBalancer()
+    lb.add_endpoint("本地", "http://localhost:11434", is_local=True)
+    result = lb.get_text_embedding("测试文本")
 """
 
 import asyncio
@@ -19,8 +26,20 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class Endpoint:
-    """Ollama 端点"""
-
+    """Ollama Embedding 端点
+    
+    Attributes:
+        name: 端点名称（如"本地"、"远程 3080"）
+        url: 端点 URL
+        enabled: 是否启用
+        healthy: 是否健康
+        avg_latency: 平均延迟（秒）
+        total_requests: 总请求数
+        failed_requests: 失败请求数
+        last_check: 最后检查时间
+        last_error: 最后错误信息
+        is_local: 是否为本地端点
+    """
     name: str
     url: str
     enabled: bool = True
@@ -35,8 +54,14 @@ class Endpoint:
 
 @dataclass
 class LoadBalancerConfig:
-    """负载均衡配置"""
-
+    """负载均衡器配置
+    
+    Attributes:
+        endpoints: 端点列表 [(name, url), ...]
+        health_check_interval: 健康检查间隔（秒）
+        failure_threshold: 失败阈值
+        parallel_mode: 是否使用并行模式
+    """
     endpoints: List[Tuple[str, str]] = field(default_factory=list)
     health_check_interval: int = 30
     failure_threshold: int = 3
@@ -83,6 +108,7 @@ class EmbeddingLoadBalancer:
         return self
 
     async def _get_embedder(self, endpoint: Endpoint):
+        """获取或创建 embedder（每次创建新实例，避免事件循环问题）"""
         """获取或创建 embedder（每次创建新实例，避免事件循环问题）"""
         from llamaindex_study.ollama_utils import create_ollama_embedding
 
@@ -151,7 +177,7 @@ class EmbeddingLoadBalancer:
                 await self._health_check_endpoint(endpoint)
 
     async def stop_health_checks(self):
-        """停止健康检查"""
+        """停止健康检查后台任务"""
         if self._health_check_task:
             self._health_check_task.cancel()
             try:
@@ -165,6 +191,7 @@ class EmbeddingLoadBalancer:
         return [ep for ep in self.endpoints if ep.enabled and ep.healthy]
 
     async def _parallel_get_embedding(self, text: str) -> List[float]:
+        """并行模式：同时向所有健康端点发送请求，使用最快的结果"""
         """并行模式：同时向所有健康端点发送请求，使用最快的结果"""
         healthy = self._get_healthy_endpoints()
 
@@ -398,7 +425,7 @@ _global_lb: Optional[EmbeddingLoadBalancer] = None
 def get_embedding_loadbalancer(
     model_name: str = "bge-m3", parallel: bool = True
 ) -> EmbeddingLoadBalancer:
-    """获取全局负载均衡器实例"""
+    """获取全局负载均衡器实例（单例模式）"""
     global _global_lb
     if _global_lb is None:
         _global_lb = EmbeddingLoadBalancer(model_name=model_name)

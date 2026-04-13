@@ -1,4 +1,19 @@
 #!/usr/bin/env python3
+"""
+LlamaIndex Study CLI 入口
+
+命令行接口，提供知识库管理、文档导入、检索问答等功能。
+
+用法:
+    uv run llamaindex-study <command> [options]
+
+主要命令:
+    - kb: 知识库管理 (list, create, delete, topics, etc.)
+    - ingest: 文档导入 (obsidian, zotero, file, batch)
+    - search/query: 检索问答
+    - task: 任务管理 (list, watch, cancel, etc.)
+"""
+
 import argparse
 import asyncio
 import json

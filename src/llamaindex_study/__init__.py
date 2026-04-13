@@ -1,5 +1,19 @@
 """
 LlamaIndex Study
+
+基于 LlamaIndex 的现代化 RAG 应用核心库，提供：
+- 配置管理 (Settings, get_settings)
+- 日志工具 (get_logger, get_app_logger, etc.)
+- Embedding 服务 (OllamaEmbeddingService, create_ollama_embedding)
+- 文档处理 (DocumentReader, SmartDocumentProcessor, load_and_split)
+- 查询引擎 (QueryEngineWrapper, create_query_engine)
+- 向量存储 (LanceDBVectorStore, ChromaVectorStore, QdrantVectorStore)
+- 回调和可观测性 (setup_callbacks, get_token_counter, get_rag_stats)
+- 聊天服务 (ChatService, ChatStore)
+- 结构化提取 (StructuredExtractor, PydanticProgram)
+
+用法:
+    from llamaindex_study import get_settings, get_logger, QueryEngineWrapper
 """
 
 __version__ = "0.1.0"

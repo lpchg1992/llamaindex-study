@@ -1,5 +1,18 @@
 """
-Structured Extraction 模块
+结构化数据提取模块
+
+提供从非结构化文本中提取结构化数据的能力，基于 LLM 实现。
+
+支持：
+- 从文本提取 JSON 格式的结构化数据
+- 支持自定义 schema 和 prompt
+- Pydantic 对象直接映射
+
+用法:
+    from llamaindex_study.structured_extractor import StructuredExtractor
+
+    extractor = StructuredExtractor()
+    result = extractor.extract(text, schema={"name": {"type": "string"}, "age": {"type": "int"}})
 """
 
 from typing import Any, Dict, Type, Optional, List
@@ -11,7 +24,17 @@ logger = get_logger(__name__)
 
 
 class StructuredExtractor:
+    """
+    结构化数据提取器
+    
+    使用 LLM 从文本中提取结构化数据（JSON 格式）。
+    
+    Attributes:
+        _llm: LLM 实例（如果为 None，自动创建）
+    """
+    
     def __init__(self, llm: Optional[Any] = None):
+        """初始化提取器"""
         self._llm = llm
 
     def extract(
@@ -20,6 +43,17 @@ class StructuredExtractor:
         schema: Dict[str, Any],
         prompt_template: Optional[str] = None,
     ) -> Dict[str, Any]:
+        """
+        从文本提取结构化数据
+        
+        Args:
+            text: 源文本
+            schema: JSON Schema 定义期望的数据结构
+            prompt_template: 自定义 prompt 模板
+        
+        Returns:
+            提取的结构化数据（字典）或包含 error 的字典
+        """
         if self._llm is None:
             from llamaindex_study.ollama_utils import create_llm
 
@@ -51,6 +85,7 @@ class StructuredExtractor:
             return {"error": str(e)}
 
     def _default_prompt_template(self, schema: Dict[str, Any]) -> str:
+        """默认的 prompt 模板"""
         return """从以下文本中提取结构化数据，返回 JSON 格式。
 
 schema:
@@ -63,7 +98,18 @@ schema:
 
 
 class PydanticProgram:
+    """
+    Pydantic 程序
+    
+    基于 StructuredExtractor，提供 Pydantic 类型直接映射能力。
+    
+    Attributes:
+        _llm: LLM 实例
+        _extractor: 底层提取器
+    """
+    
     def __init__(self, llm: Optional[Any] = None):
+        """初始化 Pydantic 程序"""
         self._llm = llm
         self._extractor = StructuredExtractor(llm=llm)
 
@@ -73,6 +119,17 @@ class PydanticProgram:
         output_cls: Type,
         prompt_template: Optional[str] = None,
     ) -> Any:
+        """
+        从文本提取并映射到 Pydantic 对象
+        
+        Args:
+            text: 源文本
+            output_cls: Pydantic 类型
+            prompt_template: 自定义 prompt
+        
+        Returns:
+            Pydantic 对象实例或包含 error 的字典
+        """
         import typing
 
         fields = {}
@@ -94,7 +151,18 @@ class PydanticProgram:
 
 
 class TextToJsonExtractor:
+    """
+    文本到 JSON 提取器
+    
+    简化版提取器，直接指定要提取的字段列表。
+    
+    Attributes:
+        _llm: LLM 实例
+        _extractor: 底层提取器
+    """
+    
     def __init__(self, llm: Optional[Any] = None):
+        """初始化提取器"""
         self._llm = llm
         self._extractor = StructuredExtractor(llm=llm)
 
@@ -104,6 +172,17 @@ class TextToJsonExtractor:
         fields: List[str],
         prompt_template: Optional[str] = None,
     ) -> Dict[str, Any]:
+        """
+        从文本提取指定字段
+        
+        Args:
+            text: 源文本
+            fields: 要提取的字段列表
+            prompt_template: 自定义 prompt
+        
+        Returns:
+            字段到值的字典
+        """
         schema = {
             "type": "object",
             "properties": {f: {"type": "string"} for f in fields},
@@ -122,6 +201,7 @@ _extractor_instance: Optional[StructuredExtractor] = None
 
 
 def get_extractor() -> StructuredExtractor:
+    """获取全局 StructuredExtractor 实例（单例模式）"""
     global _extractor_instance
     if _extractor_instance is None:
         _extractor_instance = StructuredExtractor()
