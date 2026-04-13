@@ -67,10 +67,9 @@ logs/
 
 # test or other data
 .llamaindex/
-.api.pid/
+.api.pid
 .sysphus/
 .test_llamaindex/
-.frontend.pid
 .frontend.pid
 
 .sisyphus/
