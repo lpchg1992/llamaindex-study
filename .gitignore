@@ -71,3 +71,6 @@ logs/
 .sysphus/
 .test_llamaindex/
 .frontend.pid
+.frontend.pid
+
+.sisyphus/
