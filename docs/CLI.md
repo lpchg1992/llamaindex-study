@@ -1163,32 +1163,6 @@ uv run llamaindex-study task show abc12345
 
 ---
 
-## 独立导入脚本
-
-除了 `llamaindex-study` CLI，项目还提供独立的导入脚本，用于特定场景的批量导入。
-
-### Obsidian 批量导入
-
-```bash
-uv run python -m kb.ingest                    # 导入所有知识库
-uv run python -m kb.ingest --list           # 列出所有知识库状态
-uv run python -m kb.ingest --kb tech_tools   # 只导入指定知识库
-uv run python -m kb.ingest --rebuild         # 重建所有知识库
-```
-
-> 该脚本为统一导入编排链路的专用入口。
-
-### Zotero 导入（特定收藏）
-
-```bash
-uv run python -m kb.ingest_zotero --kb-id zotero_nutrition --collection-name "营养饲料理论"
-uv run python -m kb.ingest_zotero --kb-id zotero_nutrition --collection-id 12345 --rebuild
-uv run python -m kb.ingest_zotero --kb-id zotero_nutrition --status
-```
-
-> ⚠️ 注意：以上脚本和 `llamaindex-study ingest` 使用同一套导入编排服务，语义一致。  
-> 对于任意非 Obsidian / Zotero 的业务导入，统一使用 `ingest file` 或 `ingest batch`。
-
 ---
 
 ## 环境变量

@@ -14,7 +14,7 @@ import sys
 # 添加项目路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from llamaindex_study.config import get_settings
+from rag.config import get_settings
 
 
 async def check_endpoint(name: str, url: str) -> dict:

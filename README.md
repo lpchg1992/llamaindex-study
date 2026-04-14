@@ -107,13 +107,13 @@ uv run llamaindex-study kb consistency <kb_id> --repair  # 校验并修复
 ### Python API
 
 ```python
-from kb.services import SearchService, KnowledgeBaseService
+from kb_core.services import SearchService, KnowledgeBaseService
 
 # 创建知识库
 KnowledgeBaseService.create("my_kb", name="我的知识库")
 
 # 导入文档（异步）
-from kb.services import ObsidianService
+from kb_core.services import ObsidianService
 ObsidianService.import_vault("my_kb", folder_path="技术")
 
 # RAG 问答
@@ -121,7 +121,7 @@ result = SearchService.query("my_kb", "如何优化代码性能", top_k=5)
 print(result)
 
 # 自动路由（根据问题内容选择知识库）
-from kb.services import QueryRouter
+from kb_core.services import QueryRouter
 result = QueryRouter.query("Python 异步编程最佳实践")
 ```
 
@@ -163,16 +163,20 @@ curl -X POST http://localhost:37241/kbs/HTE_history/topics/refresh \
 ```
 llamaindex-study/
 ├── api.py                    # FastAPI 服务入口
-├── main.py                   # CLI 入口
-├── src/llamaindex_study/     # 核心库
+├── kb_cli/                   # CLI 入口模块
+├── rag/                      # 核心库
 │   ├── config.py             # 配置管理
 │   ├── vector_store.py       # 向量数据库
 │   ├── query_engine.py       # 查询引擎
 │   └── node_parser.py        # 节点解析器
-├── kb/                       # 知识库模块
-│   ├── services.py           # 统一服务层
-│   ├── task_queue.py        # 任务队列
-│   └── obsidian_processor.py # Obsidian 导入
+├── kb_core/                  # 核心服务
+├── kb_storage/               # 存储服务
+├── kb_processing/            # 处理服务
+├── kb_analysis/              # 分析服务
+├── kb_utils/                 # 工具函数
+├── kb_obsidian/              # Obsidian 集成
+├── kb_zotero/                # Zotero 集成
+├── kb/                       # 兼容包（空）
 └── docs/                     # 文档
     ├── API.md
     ├── CLI.md

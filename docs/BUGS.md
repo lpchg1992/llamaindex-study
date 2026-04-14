@@ -17,12 +17,12 @@
 A lone surrogate character (U+DC88 high surrogate) exists in the query string or in one of the retrieved document texts. Python's UTF-8 encoder cannot encode surrogate characters, which are only valid in UTF-16 encoding.
 
 **Likely Locations:**
-1. `kb/services.py` - `_query_across_kbs()` at line ~1320 - prompt construction with user query
-2. `src/llamaindex_study/reranker.py` - `SiliconFlowReranker._postprocess_nodes()` - sends query/documents to API
-3. `src/llamaindex_study/embedding_service.py` - `OllamaEmbeddingService._embed_single()` - sends text to Ollama
+1. `kb_core/services.py` - `_query_across_kbs()` at line ~1320 - prompt construction with user query
+2. `rag/reranker.py` - `SiliconFlowReranker._postprocess_nodes()` - sends query/documents to API
+3. `rag/embedding_service.py` - `OllamaEmbeddingService._embed_single()` - sends text to Ollama
 
 **Debugging Steps:**
-1. Add `traceback.print_exc()` to the exception handler in `main.py:235-236`
+1. Add `traceback.print_exc()` to the exception handler in `kb_cli/__main__.py:235-236`
 2. Check logs in `~/.llamaindex/logs/`
 3. Verify if the error occurs in reranker or embedding service
 
@@ -30,7 +30,7 @@ A lone surrogate character (U+DC88 high surrogate) exists in the query string or
 Disable reranker temporarily to isolate the issue.
 
 **Status:** Fixed (2026-04-08) - Added `_remove_surrogates()` sanitization in:
-- `src/llamaindex_study/reranker.py` - `_postprocess_nodes()`, `rerank()`, `EmbeddingSimilarityReranker._get_embedding()`
-- `src/llamaindex_study/embedding_service.py` - `OllamaEmbeddingService._embed_single()`, `SiliconFlowEmbedding.get_text_embeddings()`
-- `kb/keyword_extractor.py` - `_extract_with_llm()`
-- `kb/topic_analyzer.py` - `_llm_extract_topics()`
+- `rag/reranker.py` - `_postprocess_nodes()`, `rerank()`, `EmbeddingSimilarityReranker._get_embedding()`
+- `rag/embedding_service.py` - `OllamaEmbeddingService._embed_single()`, `SiliconFlowEmbedding.get_text_embeddings()`
+- `kb_analysis/keyword_extractor.py` - `_extract_with_llm()`
+- `kb_analysis/topic_analyzer.py` - `_llm_extract_topics()`

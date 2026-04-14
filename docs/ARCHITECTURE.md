@@ -162,7 +162,7 @@ TaskScheduler.run()
 ┌─────────────────────────────────────────────────────────────┐
 │                     核心库 (Core)                          │
 ├─────────────────────────────────────────────────────────────┤
-│  src/llamaindex_study/                                    │
+│  rag/                                                    │
 │  ├── config.py              # 配置管理                     │
 │  ├── logger.py              # 日志工具                     │
 │  ├── ollama_utils.py        # Ollama 工具                  │
@@ -194,7 +194,6 @@ TaskScheduler.run()
 - 当前入口映射：
   - CLI：`llamaindex-study ingest ...` → `ImportApplicationService`
   - API：`/kbs/{kb_id}/ingest*`、`/obsidian/import-all` → `ImportApplicationService`
-  - 脚本：`python -m kb.ingest*` → `ImportApplicationService`
 
 ### 1. 任务执行流程
 
@@ -247,8 +246,8 @@ class ParallelEmbeddingProcessor:
 
     def _load_embedding_endpoints(self) -> List[EmbeddingEndpoint]:
         """从数据库加载 embedding 端点（带健康检查）"""
-        from llamaindex_study.config import get_model_registry
-        from kb.database import init_vendor_db
+        from rag.config import get_model_registry
+        from kb_core.database import init_vendor_db
 
         registry = get_model_registry()
         vendor_db = init_vendor_db()
@@ -405,9 +404,9 @@ class LanceDBWriteQueue:
 ### 5. 节点解析器（统一分块策略）
 
 ```python
-# src/llamaindex_study/node_parser.py
+# rag/node_parser.py
 
-from llamaindex_study.node_parser import get_node_parser, get_hierarchical_node_parser
+from rag.node_parser import get_node_parser, get_hierarchical_node_parser
 
 # 普通分块（SentenceSplitter 或 SemanticChunker）
 parser = get_node_parser(chunk_size=512, chunk_overlap=50)
@@ -491,8 +490,8 @@ parser = get_hierarchical_node_parser()
 |------|------|------|
 | `VendorDB` | `kb/database.py` | 供应商数据库操作 |
 | `ModelDB` | `kb/database.py` | 模型数据库操作 |
-| `ModelRegistry` | `src/llamaindex_study/config.py` | 模型注册表（单例） |
-| `ollama_utils` | `src/llamaindex_study/ollama_utils.py` | LLM 和 Embedding 创建配置 |
+| `ModelRegistry` | `rag/config.py` | 模型注册表（单例） |
+| `ollama_utils` | `rag/ollama_utils.py` | LLM 和 Embedding 创建配置 |
 
 #### ID规范
 
@@ -534,14 +533,14 @@ models 表 (embedding 类型):
 - `delete()`: 删除模型
 - `set_default()`: 设置默认模型
 
-**ModelRegistry** (`src/llamaindex_study/config.py`):
+**ModelRegistry** (`rag/config.py`):
 - `get_model()`: 获取指定模型
 - `list_models()`: 列出所有模型
 - `get_by_type()`: 按类型获取
 - `get_default()`: 获取默认模型
 - `reload()`: 重新从数据库加载
 
-**ollama_utils** (`src/llamaindex_study/ollama_utils.py`):
+**ollama_utils** (`rag/ollama_utils.py`):
 - `OllamaEmbedder`: Ollama Embedding 封装类，继承自 `OllamaEmbedding`，内置 503 重试（指数退避）
 - `create_ollama_embedding()`: 工厂函数，创建配置好重试参数的 `OllamaEmbedder`
 - `create_llm()`: 创建 LLM 实例（支持 model_id 参数，自动从供应商获取配置）
@@ -590,8 +589,8 @@ models 表 (embedding 类型):
 
 | 组件 | 文件 | 说明 |
 |------|------|------|
-| `RetryableSiliconFlowLLM` | `src/llamaindex_study/ollama_utils.py` | SiliconFlow LLM 封装，支持 503 时自动降级到 Ollama |
-| `OllamaWithSiliconFlowFallback` | `src/llamaindex_study/ollama_utils.py` | Ollama LLM 封装，支持失败时回退到 SiliconFlow |
+| `RetryableSiliconFlowLLM` | `rag/ollama_utils.py` | SiliconFlow LLM 封装，支持 503 时自动降级到 Ollama |
+| `OllamaWithSiliconFlowFallback` | `rag/ollama_utils.py` | Ollama LLM 封装，支持失败时回退到 SiliconFlow |
 
 **降级场景**：
 
@@ -650,7 +649,7 @@ llamaindex-study model set-default ollama/bge-m3:latest
 #### 使用示例
 
 ```python
-from llamaindex_study.ollama_utils import create_llm, configure_llm_by_model_id
+from rag.ollama_utils import create_llm, configure_llm_by_model_id
 
 # 方式1: 创建时指定模型（自动使用供应商配置）
 llm = create_llm(model_id="ollama/lfm2.5-thinking:latest")
@@ -1269,7 +1268,7 @@ def ingest_notion(kb_id: str, page_id: str):
 # 测试并行 Embedding（自适应负载均衡）
 uv run python -c "
 import asyncio
-from kb.parallel_embedding import get_parallel_processor
+from kb_core.parallel_embedding import get_parallel_processor
 
 async def test():
     p = get_parallel_processor()
@@ -1282,7 +1281,7 @@ asyncio.run(test())
 
 # 测试任务执行器
 uv run python -c "
-from kb.task_executor import TaskExecutor
+from kb_core.task_executor import TaskExecutor
 executor = TaskExecutor()
 print(f'任务队列: {executor.queue}')
 "

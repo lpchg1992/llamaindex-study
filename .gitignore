@@ -68,6 +68,8 @@ logs/
 # test or other data
 .llamaindex/
 .api.pid
+.api.lock
+.api_restart_required
 .sysphus/
 .test_llamaindex/
 .frontend.pid

@@ -27,7 +27,7 @@ import argparse
 import json
 from typing import Optional
 
-from kb.lance_crud import LanceCRUDService
+from kb_storage.lance_crud import LanceCRUDService
 
 
 def cmd_list():

@@ -85,12 +85,12 @@ env_path = Path(__file__).parent / ".env"
 if env_path.exists():
     load_dotenv(env_path)
 
-from llamaindex_study.logger import get_logger
+from rag.logger import get_logger
 
 logger = get_logger(__name__)
 
 # 导入服务层
-from kb.services import (
+from kb_core.services import (
     VectorStoreService,
     ObsidianService,
     ZoteroService,
@@ -98,8 +98,8 @@ from kb.services import (
     SearchService,
     TaskService,
 )
-from kb.import_service import ImportApplicationService, ImportRequest
-from llamaindex_study.rag_evaluator import RAGEvaluator, RAGMetrics
+from kb_core.import_service import ImportApplicationService, ImportRequest
+from rag.rag_evaluator import RAGEvaluator, RAGMetrics
 
 
 # ============== Lifespan 和调度器 ==============
@@ -112,7 +112,7 @@ _scheduler_ref = None
 async def start_scheduler():
     """启动任务调度器"""
     global _scheduler_ref
-    from kb.task_executor import TaskScheduler
+    from kb_core.task_executor import TaskScheduler
 
     scheduler = TaskScheduler()
     _scheduler_ref = asyncio.create_task(scheduler.run())
@@ -124,8 +124,8 @@ async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     logger.info("应用启动中...")
 
-    from llamaindex_study.callbacks import setup_callbacks
-    from llamaindex_study.token_stats_db import init_token_stats_db
+    from rag.callbacks import setup_callbacks
+    from rag.token_stats_db import init_token_stats_db
 
     setup_callbacks()
     init_token_stats_db()
@@ -709,7 +709,7 @@ def api_docs_page(doc: str = None):
 @app.post("/tasks", response_model=TaskResponse)
 def create_task(req: dict):
     """创建任务"""
-    from kb.task_queue import task_queue
+    from kb_core.task_queue import task_queue
 
     task_id = task_queue.submit_task(
         task_type=req.get("task_type", "generic"),
@@ -729,7 +729,7 @@ def create_task(req: dict):
 @app.get("/tasks", response_model=List[TaskResponse])
 def list_tasks(kb_id: str = None, status: str = None, limit: int = 50):
     """列出任务"""
-    from kb.task_queue import task_queue
+    from kb_core.task_queue import task_queue
 
     tasks = task_queue.list_tasks(kb_id=kb_id, status=status, limit=limit)
     return [
@@ -747,7 +747,7 @@ def list_tasks(kb_id: str = None, status: str = None, limit: int = 50):
 @app.get("/tasks/{task_id}", response_model=TaskResponse)
 def get_task(task_id: str):
     """获取任务详情"""
-    from kb.task_queue import task_queue
+    from kb_core.task_queue import task_queue
 
     task = task_queue.get_task(task_id)
     if not task:
@@ -771,7 +771,7 @@ def get_task(task_id: str):
 @app.delete("/tasks/{task_id}")
 def cancel_task(task_id: str):
     """取消任务"""
-    from kb.services import TaskService
+    from kb_core.services import TaskService
 
     try:
         result = TaskService.cancel(task_id)
@@ -783,7 +783,7 @@ def cancel_task(task_id: str):
 @app.post("/tasks/{task_id}/pause")
 def pause_task(task_id: str):
     """暂停任务"""
-    from kb.services import TaskService
+    from kb_core.services import TaskService
 
     try:
         result = TaskService.pause(task_id)
@@ -795,7 +795,7 @@ def pause_task(task_id: str):
 @app.post("/tasks/{task_id}/resume")
 def resume_task(task_id: str):
     """恢复任务"""
-    from kb.services import TaskService
+    from kb_core.services import TaskService
 
     try:
         result = TaskService.resume(task_id)
@@ -807,7 +807,7 @@ def resume_task(task_id: str):
 @app.delete("/tasks/{task_id}/files/{file_id}")
 def cancel_file_in_task(task_id: str, file_id: str):
     """取消任务中的单个文件"""
-    from kb.task_queue import task_queue
+    from kb_core.task_queue import task_queue
 
     success = task_queue.cancel_file(task_id, file_id)
     if not success:
@@ -824,7 +824,7 @@ def delete_task(task_id: str, cleanup: bool = False):
     Args:
         cleanup: 是否清理关联的知识库数据（仅对 failed/cancelled 任务有效）
     """
-    from kb.services import TaskService
+    from kb_core.services import TaskService
 
     try:
         return TaskService.delete(task_id, cleanup=cleanup)
@@ -835,7 +835,7 @@ def delete_task(task_id: str, cleanup: bool = False):
 @app.post("/tasks/pause-all")
 def pause_all_tasks(status: str = "running"):
     """暂停所有运行中的任务"""
-    from kb.services import TaskService
+    from kb_core.services import TaskService
 
     return TaskService.pause_all(status)
 
@@ -843,7 +843,7 @@ def pause_all_tasks(status: str = "running"):
 @app.post("/tasks/resume-all")
 def resume_all_tasks():
     """恢复所有已暂停的任务"""
-    from kb.services import TaskService
+    from kb_core.services import TaskService
 
     return TaskService.resume_all()
 
@@ -851,7 +851,7 @@ def resume_all_tasks():
 @app.delete("/tasks/delete-all")
 def delete_all_tasks(status: str = "completed", cleanup: bool = False):
     """删除所有任务"""
-    from kb.services import TaskService
+    from kb_core.services import TaskService
 
     return TaskService.delete_all(status, cleanup)
 
@@ -859,7 +859,7 @@ def delete_all_tasks(status: str = "completed", cleanup: bool = False):
 @app.post("/tasks/cleanup")
 def cleanup_orphan_tasks():
     """清理孤儿任务（执行进程已终止的任务）"""
-    from kb.services import TaskService
+    from kb_core.services import TaskService
 
     return TaskService.cleanup_orphan_tasks()
 
@@ -981,7 +981,7 @@ class ModelCreateRequest(BaseModel):
 @app.get("/vendors", response_model=List[VendorInfo])
 def list_vendors():
     """获取所有供应商"""
-    from kb.database import init_vendor_db
+    from kb_core.database import init_vendor_db
 
     db = init_vendor_db()
     vendors = db.get_all(active_only=False)
@@ -991,8 +991,8 @@ def list_vendors():
 @app.post("/vendors", response_model=VendorInfo)
 def create_vendor(req: VendorCreateRequest):
     """创建或更新供应商"""
-    from kb.database import init_vendor_db
-    from kb.parallel_embedding import get_parallel_processor
+    from kb_core.database import init_vendor_db
+    from kb_processing.parallel_embedding import get_parallel_processor
 
     db = init_vendor_db()
     db.upsert(
@@ -1014,7 +1014,7 @@ def create_vendor(req: VendorCreateRequest):
 @app.get("/vendors/{vendor_id}", response_model=VendorInfo)
 def get_vendor(vendor_id: str):
     """获取指定供应商"""
-    from kb.database import init_vendor_db
+    from kb_core.database import init_vendor_db
 
     db = init_vendor_db()
     vendor = db.get(vendor_id)
@@ -1026,8 +1026,8 @@ def get_vendor(vendor_id: str):
 @app.delete("/vendors/{vendor_id}")
 def delete_vendor(vendor_id: str):
     """删除供应商"""
-    from kb.database import init_vendor_db
-    from kb.parallel_embedding import get_parallel_processor
+    from kb_core.database import init_vendor_db
+    from kb_processing.parallel_embedding import get_parallel_processor
 
     db = init_vendor_db()
     if not db.get(vendor_id):
@@ -1045,8 +1045,8 @@ def delete_vendor(vendor_id: str):
 @app.put("/vendors/{vendor_id}", response_model=VendorInfo)
 def update_vendor(vendor_id: str, req: VendorCreateRequest):
     """更新供应商"""
-    from kb.database import init_vendor_db
-    from kb.parallel_embedding import get_parallel_processor
+    from kb_core.database import init_vendor_db
+    from kb_processing.parallel_embedding import get_parallel_processor
 
     db = init_vendor_db()
     if not db.get(vendor_id):
@@ -1073,7 +1073,7 @@ def update_vendor(vendor_id: str, req: VendorCreateRequest):
 @app.get("/models", response_model=List[ModelInfo])
 def list_models(type: Optional[str] = None):
     """获取所有模型，或按类型筛选"""
-    from llamaindex_study.config import get_model_registry
+    from rag.config import get_model_registry
 
     registry = get_model_registry()
     if type:
@@ -1086,8 +1086,8 @@ def list_models(type: Optional[str] = None):
 @app.post("/models", response_model=ModelInfo)
 def create_model(req: ModelCreateRequest):
     """创建或更新模型"""
-    from kb.database import init_model_db, init_vendor_db
-    from kb.parallel_embedding import get_parallel_processor
+    from kb_core.database import init_model_db, init_vendor_db
+    from kb_processing.parallel_embedding import get_parallel_processor
 
     vendor_db = init_vendor_db()
     if not vendor_db.get(req.vendor_id):
@@ -1110,7 +1110,7 @@ def create_model(req: ModelCreateRequest):
     )
     if req.is_default:
         model_db.set_default(req.id)
-    from llamaindex_study.config import get_model_registry
+    from rag.config import get_model_registry
 
     get_model_registry().reload()
     try:
@@ -1125,7 +1125,7 @@ def create_model(req: ModelCreateRequest):
 @app.get("/models/{model_id}", response_model=ModelInfo)
 def get_model(model_id: str):
     """获取指定模型"""
-    from llamaindex_study.config import get_model_registry
+    from rag.config import get_model_registry
 
     registry = get_model_registry()
     model = registry.get_model(model_id)
@@ -1137,9 +1137,9 @@ def get_model(model_id: str):
 @app.delete("/models/{model_id}")
 def delete_model(model_id: str):
     """删除模型"""
-    from kb.database import init_model_db
-    from llamaindex_study.config import get_model_registry
-    from kb.parallel_embedding import get_parallel_processor
+    from kb_core.database import init_model_db
+    from rag.config import get_model_registry
+    from kb_processing.parallel_embedding import get_parallel_processor
 
     db = init_model_db()
     if not db.get(model_id):
@@ -1158,9 +1158,9 @@ def delete_model(model_id: str):
 @app.put("/models/{model_id}", response_model=ModelInfo)
 def update_model(model_id: str, req: ModelCreateRequest):
     """更新模型"""
-    from kb.database import init_model_db
-    from llamaindex_study.config import get_model_registry
-    from kb.parallel_embedding import get_parallel_processor
+    from kb_core.database import init_model_db
+    from rag.config import get_model_registry
+    from kb_processing.parallel_embedding import get_parallel_processor
 
     db = init_model_db()
     if not db.get(model_id):
@@ -1189,9 +1189,9 @@ def update_model(model_id: str, req: ModelCreateRequest):
 @app.put("/models/{model_id}/default")
 def set_default_model(model_id: str):
     """设置默认模型"""
-    from kb.database import init_model_db
-    from llamaindex_study.config import get_model_registry
-    from kb.parallel_embedding import get_parallel_processor
+    from kb_core.database import init_model_db
+    from rag.config import get_model_registry
+    from kb_processing.parallel_embedding import get_parallel_processor
 
     db = init_model_db()
     if not db.get(model_id):
@@ -1212,7 +1212,7 @@ def set_default_model(model_id: str):
 
 @app.post("/search", response_model=List[SearchResult])
 def search(req: SearchRequest):
-    from kb.services import QueryRouter
+    from kb_core.services import QueryRouter
 
     if req.route_mode == "general" and req.exclude:
         raise HTTPException(
@@ -1248,7 +1248,7 @@ def search(req: SearchRequest):
 
 @app.post("/query", response_model=QueryResponse)
 def query(req: QueryRequest):
-    from kb.services import QueryRouter
+    from kb_core.services import QueryRouter
 
     logger.info(
         f"[QUERY] route_mode={req.route_mode}, kb_ids={req.kb_ids}, retrieval_mode={req.retrieval_mode}, query={req.query[:50]}..."
@@ -1263,7 +1263,7 @@ def query(req: QueryRequest):
 
         model_id = req.model_id
         if not model_id and req.llm_mode:
-            from llamaindex_study.config import get_model_registry
+            from rag.config import get_model_registry
 
             registry = get_model_registry()
             default_llm = registry.get_default("llm")
@@ -1371,7 +1371,7 @@ def ingest(kb_id: str, req: IngestRequest):
     if not path.exists():
         raise HTTPException(status_code=400, detail=f"路径不存在: {req.path}")
 
-    from kb.generic_processor import GenericImporter
+    from kb_processing.generic_processor import GenericImporter
 
     all_files: List[Path] = []
     if path.is_file():
@@ -1558,9 +1558,9 @@ def preview_zotero_import(req: ZoteroPreviewRequest):
     - mddocs 缓存是否存在
     - 是否已导入（去重，通过 document 表查询）
     """
-    from kb.zotero_processor import ZoteroImporter
-    from kb.database import init_document_db
-    from kb.services import KnowledgeBaseService
+    from kb_zotero.processor import ZoteroImporter
+    from kb_core.database import init_document_db
+    from kb_core.services import KnowledgeBaseService
     from pathlib import Path
 
     importer = ZoteroImporter()
@@ -1730,7 +1730,7 @@ def preview_obsidian_import(req: ObsidianPreviewRequest):
 @app.post("/file/preview", response_model=FilePreviewResponse)
 def preview_file_import(req: FilePreviewRequest):
     from pathlib import Path
-    from kb.generic_processor import GenericImporter
+    from kb_processing.generic_processor import GenericImporter
 
     importer = GenericImporter()
     filtering_rules = []
@@ -1784,7 +1784,7 @@ def preview_file_import(req: FilePreviewRequest):
 @app.post("/kbs/{kb_id}/ingest/zotero", response_model=IngestResponse)
 def ingest_zotero(kb_id: str, req: ZoteroIngestRequest):
     """Zotero 收藏夹导入"""
-    from kb.zotero_processor import ZoteroImporter
+    from kb_zotero.processor import ZoteroImporter
 
     # 先验证收藏夹是否存在
     importer = ZoteroImporter()
@@ -1984,7 +1984,7 @@ def ingest_obsidian(kb_id: str, req: ObsidianIngestRequest):
 @app.post("/kbs/{kb_id}/ingest/selective", response_model=IngestResponse)
 def ingest_selective(kb_id: str, req: SelectiveImportRequest):
     """选择性导入 - 导入指定的文献/笔记/文件"""
-    from kb.import_service import SelectiveImportItem
+    from kb_core.import_service import SelectiveImportItem
 
     items = [
         SelectiveImportItem(
@@ -1996,7 +1996,7 @@ def ingest_selective(kb_id: str, req: SelectiveImportRequest):
         for item in req.items
     ]
 
-    from kb.import_service import SelectiveImportRequest as ServiceSelectiveRequest
+    from kb_core.import_service import SelectiveImportRequest as ServiceSelectiveRequest
 
     service_req = ServiceSelectiveRequest(
         source_type=req.source_type,
@@ -2031,7 +2031,7 @@ def ingest_files(kb_id: str, req: FilesImportRequest):
         raise HTTPException(status_code=400, detail="没有提供有效的文件路径")
 
     if not req.async_mode:
-        from kb.services import GenericService
+        from kb_core.services import GenericService
 
         merged = {"files": 0, "nodes": 0, "failed": 0}
         for path in validated_paths:
@@ -2048,7 +2048,7 @@ def ingest_files(kb_id: str, req: FilesImportRequest):
                 merged["failed"] += 1
                 logger.error(f"导入文件失败 {path}: {e}")
 
-        from kb.services import KnowledgeBaseService
+        from kb_core.services import KnowledgeBaseService
 
         if req.refresh_topics and merged["files"] > 0:
             KnowledgeBaseService.refresh_topics(kb_id, has_new_docs=True)
@@ -2126,7 +2126,7 @@ class RepairMode(str):
 @app.get("/kbs/{kb_id}/consistency")
 def check_consistency(kb_id: str):
     """统一的知识库一致性检查"""
-    from kb.services import ConsistencyService
+    from kb_core.services import ConsistencyService
 
     info = KnowledgeBaseService.get_info(kb_id)
     if not info:
@@ -2139,7 +2139,7 @@ def check_consistency(kb_id: str):
 @app.post("/kbs/{kb_id}/consistency/repair")
 def repair_consistency(kb_id: str):
     """修复知识库一致性（修正文档统计）"""
-    from kb.services import ConsistencyService
+    from kb_core.services import ConsistencyService
 
     info = KnowledgeBaseService.get_info(kb_id)
     if not info:
@@ -2152,7 +2152,7 @@ def repair_consistency(kb_id: str):
 @app.post("/consistency/repair-all")
 def repair_all_consistency():
     """修复所有知识库的一致性"""
-    from kb.services import ConsistencyService
+    from kb_core.services import ConsistencyService
 
     result = ConsistencyService.repair_all()
     return result
@@ -2161,7 +2161,7 @@ def repair_all_consistency():
 @app.get("/kbs/{kb_id}/consistency/doc-stats")
 def get_doc_embedding_stats(kb_id: str):
     """获取每个文档的向量统计（实际检查 LanceDB）"""
-    from kb.services import ConsistencyService
+    from kb_core.services import ConsistencyService
 
     info = KnowledgeBaseService.get_info(kb_id)
     if not info:
@@ -2177,7 +2177,7 @@ def get_doc_embedding_stats(kb_id: str):
 @app.post("/kbs/{kb_id}/consistency/check-and-mark-failed")
 def check_and_mark_failed_chunks(kb_id: str, limit: int = 200000):
     """提交检查并标记缺失向量任务到任务调度器"""
-    from kb.task_queue import task_queue
+    from kb_core.task_queue import task_queue
 
     info = KnowledgeBaseService.get_info(kb_id)
     if not info:
@@ -2203,7 +2203,7 @@ def check_and_mark_failed_chunks(kb_id: str, limit: int = 200000):
 @app.get("/obsidian/mappings")
 def list_obsidian_mappings():
     """列出 Obsidian 知识库映射配置"""
-    from kb.obsidian_config import OBSIDIAN_KB_MAPPINGS
+    from kb_obsidian.config import OBSIDIAN_KB_MAPPINGS
 
     return {
         "mappings": [
@@ -2221,8 +2221,8 @@ def list_obsidian_mappings():
 @app.post("/obsidian/import-all")
 def import_obsidian_all():
     """Obsidian 全库分类导入"""
-    from kb.obsidian_config import OBSIDIAN_KB_MAPPINGS
-    from kb.registry import get_vault_root
+    from kb_obsidian.config import OBSIDIAN_KB_MAPPINGS
+    from kb_core.registry import get_vault_root
 
     task_ids = []
     vault_root = get_vault_root()
@@ -2266,7 +2266,7 @@ def import_obsidian_all():
 @app.get("/category/rules")
 def list_category_rules():
     """列出所有分类规则"""
-    from kb.database import init_category_rule_db
+    from kb_core.database import init_category_rule_db
 
     rule_db = init_category_rule_db()
     rules = rule_db.get_all_rules()
@@ -2280,7 +2280,7 @@ def list_category_rules():
 @app.post("/category/rules/sync")
 def sync_category_rules():
     """同步分类规则到数据库"""
-    from kb.obsidian_config import seed_mappings_to_db
+    from kb_obsidian.config import seed_mappings_to_db
 
     count = seed_mappings_to_db()
 
@@ -2313,8 +2313,8 @@ def classify_folder_llm(
 
     if not folder_path:
         return {"error": "folder_path is required"}
-    from kb.obsidian_config import find_kb_by_path
-    from kb.category_classifier import CategoryClassifier
+    from kb_obsidian.config import find_kb_by_path
+    from kb_analysis.category_classifier import CategoryClassifier
 
     # 1. 先用规则匹配
     matched_kbs = find_kb_by_path(folder_path)
@@ -2367,7 +2367,7 @@ def add_category_rule(
     priority: int = 0,
 ):
     """添加分类规则"""
-    from kb.database import init_category_rule_db
+    from kb_core.database import init_category_rule_db
 
     rule_db = init_category_rule_db()
     success = rule_db.add_rule(
@@ -2389,8 +2389,8 @@ def initialize_kb(
     kb_id: str, req: DangerousOperationRequest = Body(...), async_mode: bool = True
 ):
     """初始化知识库（清空所有数据）"""
-    from kb.task_queue import task_queue
-    from kb.task_executor import task_executor
+    from kb_core.task_queue import task_queue
+    from kb_core.task_executor import task_executor
 
     info = KnowledgeBaseService.get_info(kb_id)
     if not info:
@@ -2476,7 +2476,7 @@ def restart_scheduler():
         logger.info("调度器任务已取消")
 
     async def start_new_scheduler():
-        from kb.task_executor import TaskScheduler
+        from kb_core.task_executor import TaskScheduler
 
         scheduler = TaskScheduler()
         return asyncio.create_task(scheduler.run())
@@ -2520,7 +2520,7 @@ def restart_api():
 @app.post("/admin/reload-config")
 def reload_config():
     """重新加载配置（使部分设置生效）"""
-    from llamaindex_study.config import get_model_registry, get_settings
+    from rag.config import get_model_registry, get_settings
 
     try:
         registry = get_model_registry()
@@ -2571,7 +2571,7 @@ class ChunkResponse(BaseModel):
 @app.get("/kbs/{kb_id}/documents", response_model=List[DocumentResponse])
 def list_documents(kb_id: str):
     """获取知识库的所有文档"""
-    from kb.database import init_document_db
+    from kb_core.database import init_document_db
 
     docs = init_document_db().get_by_kb(kb_id)
     return docs
@@ -2580,7 +2580,7 @@ def list_documents(kb_id: str):
 @app.get("/kbs/{kb_id}/documents/{doc_id}", response_model=DocumentResponse)
 def get_document(kb_id: str, doc_id: str):
     """获取文档详情"""
-    from kb.database import init_document_db
+    from kb_core.database import init_document_db
 
     doc = init_document_db().get(doc_id)
     if not doc:
@@ -2593,8 +2593,8 @@ def get_document(kb_id: str, doc_id: str):
 @app.delete("/kbs/{kb_id}/documents/{doc_id}")
 def delete_document(kb_id: str, doc_id: str):
     """删除文档及其所有分块（级联删除 LanceDB 和 Dedup）"""
-    from kb.document_chunk_service import get_document_chunk_service
-    from kb.registry import registry
+    from kb_core.document_chunk_service import get_document_chunk_service
+    from kb_core.registry import registry
 
     kb = registry.get(kb_id)
     persist_dir = kb.persist_dir if kb else None
@@ -2621,7 +2621,7 @@ def list_document_chunks(
     Args:
         embedding_status: 可选，按 embedding 状态过滤 (0=pending, 1=success, 2=failed)
     """
-    from kb.database import init_document_db, init_chunk_db
+    from kb_core.database import init_document_db, init_chunk_db
 
     doc_db = init_document_db()
     doc = doc_db.get(doc_id)
@@ -2656,7 +2656,7 @@ def list_document_chunks(
 @app.get("/kbs/{kb_id}/chunks/failed")
 def list_failed_chunks(kb_id: str, limit: int = 1000):
     """获取所有 embedding 失败的 chunks"""
-    from kb.database import init_chunk_db
+    from kb_core.database import init_chunk_db
 
     chunk_db = init_chunk_db()
     failed_chunks = chunk_db.get_failed_chunks(kb_id, limit=limit)
@@ -2671,7 +2671,7 @@ def list_failed_chunks(kb_id: str, limit: int = 1000):
 @app.get("/kbs/{kb_id}/chunks/{chunk_id}", response_model=ChunkResponse)
 def get_chunk(kb_id: str, chunk_id: str):
     """获取分块详情"""
-    from kb.database import init_chunk_db
+    from kb_core.database import init_chunk_db
 
     chunk = init_chunk_db().get(chunk_id)
     if not chunk:
@@ -2684,7 +2684,7 @@ def get_chunk(kb_id: str, chunk_id: str):
 @app.put("/kbs/{kb_id}/chunks/{chunk_id}", response_model=ChunkResponse)
 def update_chunk_text(kb_id: str, chunk_id: str, req: Dict[str, str]):
     """更新分块文本内容"""
-    from kb.database import init_chunk_db
+    from kb_core.database import init_chunk_db
 
     if "text" not in req:
         raise HTTPException(status_code=400, detail="需要提供 text 字段")
@@ -2703,9 +2703,9 @@ def update_chunk_text(kb_id: str, chunk_id: str, req: Dict[str, str]):
 @app.post("/kbs/{kb_id}/chunks/{chunk_id}/reembed")
 def reembed_chunk(kb_id: str, chunk_id: str):
     """重新生成分块的 embedding"""
-    from kb.database import init_chunk_db
-    from kb.lance_crud import LanceCRUDService
-    from kb.parallel_embedding import get_parallel_processor
+    from kb_core.database import init_chunk_db
+    from kb_storage.lance_crud import LanceCRUDService
+    from kb_processing.parallel_embedding import get_parallel_processor
 
     chunk_db = init_chunk_db()
     chunk = chunk_db.get(chunk_id)
@@ -2756,9 +2756,9 @@ def reembed_chunk(kb_id: str, chunk_id: str):
 @app.post("/kbs/{kb_id}/chunks/reembed-failed")
 def reembed_failed_chunks(kb_id: str, batch_size: int = 50):
     """批量重新 embedding 所有失败的 chunks"""
-    from kb.database import init_chunk_db
-    from kb.lance_crud import LanceCRUDService
-    from kb.parallel_embedding import get_parallel_processor
+    from kb_core.database import init_chunk_db
+    from kb_storage.lance_crud import LanceCRUDService
+    from kb_processing.parallel_embedding import get_parallel_processor
 
     chunk_db = init_chunk_db()
     failed_chunks = chunk_db.get_failed_chunks(kb_id, limit=10000)
@@ -2828,8 +2828,8 @@ def submit_revector_task(
     limit: int = 50000,
 ):
     """提交重新向量化任务到任务调度器（处理 pending、failed 和 orphaned success chunks）"""
-    from kb.task_queue import task_queue
-    from kb.database import init_chunk_db
+    from kb_core.task_queue import task_queue
+    from kb_core.database import init_chunk_db
 
     chunk_db = init_chunk_db()
 
@@ -2884,7 +2884,7 @@ def delete_chunk(kb_id: str, chunk_id: str, cascade: bool = True):
         chunk_id: 分块 ID
         cascade: 是否级联删除子分块，默认为 True
     """
-    from kb.database import init_chunk_db
+    from kb_core.database import init_chunk_db
 
     chunk_db = init_chunk_db()
     chunk = chunk_db.get(chunk_id)
@@ -2893,7 +2893,7 @@ def delete_chunk(kb_id: str, chunk_id: str, cascade: bool = True):
     if chunk["kb_id"] != kb_id:
         raise HTTPException(status_code=404, detail=f"分块不属于知识库 {kb_id}")
 
-    from kb.document_chunk_service import get_document_chunk_service
+    from kb_core.document_chunk_service import get_document_chunk_service
 
     service = get_document_chunk_service(kb_id)
     result = service.delete_chunk_cascade(chunk_id, cascade_children=cascade)
@@ -2911,7 +2911,7 @@ def delete_chunk(kb_id: str, chunk_id: str, cascade: bool = True):
 @app.get("/kbs/{kb_id}/chunks/{chunk_id}/children")
 def get_chunk_children(kb_id: str, chunk_id: str):
     """获取分块的子分块列表"""
-    from kb.database import init_chunk_db
+    from kb_core.database import init_chunk_db
 
     chunk_db = init_chunk_db()
     chunk = chunk_db.get(chunk_id)
@@ -2920,7 +2920,7 @@ def get_chunk_children(kb_id: str, chunk_id: str):
     if chunk["kb_id"] != kb_id:
         raise HTTPException(status_code=404, detail=f"分块不属于知识库 {kb_id}")
 
-    from kb.document_chunk_service import get_document_chunk_service
+    from kb_core.document_chunk_service import get_document_chunk_service
 
     service = get_document_chunk_service(kb_id)
     children = service.get_chunk_children(chunk_id)
@@ -2930,7 +2930,7 @@ def get_chunk_children(kb_id: str, chunk_id: str):
 @app.get("/lance/tables")
 def lance_list_tables():
     """列出所有知识库的 LanceDB 表"""
-    from kb.lance_crud import LanceCRUDService
+    from kb_storage.lance_crud import LanceCRUDService
 
     return {"tables": LanceCRUDService.list_all_tables()}
 
@@ -2938,7 +2938,7 @@ def lance_list_tables():
 @app.get("/lance/{kb_id}/stats")
 def lance_get_stats(kb_id: str, table_name: Optional[str] = None):
     """获取 LanceDB 表统计信息"""
-    from kb.lance_crud import LanceCRUDService
+    from kb_storage.lance_crud import LanceCRUDService
 
     try:
         stats = LanceCRUDService.get_table_stats(kb_id, table_name)
@@ -2950,7 +2950,7 @@ def lance_get_stats(kb_id: str, table_name: Optional[str] = None):
 @app.get("/lance/{kb_id}/schema")
 def lance_get_schema(kb_id: str, table_name: Optional[str] = None):
     """获取 LanceDB 表结构"""
-    from kb.lance_crud import LanceCRUDService
+    from kb_storage.lance_crud import LanceCRUDService
 
     try:
         return LanceCRUDService.get_schema(kb_id, table_name)
@@ -2961,7 +2961,7 @@ def lance_get_schema(kb_id: str, table_name: Optional[str] = None):
 @app.get("/lance/{kb_id}/docs")
 def lance_get_doc_summary(kb_id: str, table_name: Optional[str] = None):
     """获取文档摘要（按 doc_id 聚合）"""
-    from kb.lance_crud import LanceCRUDService
+    from kb_storage.lance_crud import LanceCRUDService
 
     try:
         docs = LanceCRUDService.get_doc_summary(kb_id, table_name)
@@ -2979,7 +2979,7 @@ def lance_query_nodes(
     offset: int = 0,
 ):
     """查询节点"""
-    from kb.lance_crud import LanceCRUDService
+    from kb_storage.lance_crud import LanceCRUDService
 
     try:
         nodes = LanceCRUDService.query_nodes(kb_id, table_name, doc_id, limit, offset)
@@ -2991,7 +2991,7 @@ def lance_query_nodes(
 @app.get("/lance/{kb_id}/duplicates")
 def lance_find_duplicates(kb_id: str, table_name: Optional[str] = None):
     """查找重复的源文件（同一路径有多个 doc_id）"""
-    from kb.lance_crud import LanceCRUDService
+    from kb_storage.lance_crud import LanceCRUDService
 
     try:
         duplicates = LanceCRUDService.find_duplicate_sources(kb_id, table_name)
@@ -3009,7 +3009,7 @@ def lance_delete_by_doc_ids(kb_id: str, doc_ids: str, table_name: Optional[str] 
         doc_ids: 逗号分隔的 doc_id 列表
         table_name: 表名
     """
-    from kb.lance_crud import LanceCRUDService
+    from kb_storage.lance_crud import LanceCRUDService
 
     doc_id_list = [d.strip() for d in doc_ids.split(",") if d.strip()]
     if not doc_id_list:
@@ -3030,7 +3030,7 @@ def lance_delete_by_source(kb_id: str, source: str, table_name: Optional[str] = 
         source: 源文件路径或文件名
         table_name: 表名
     """
-    from kb.lance_crud import LanceCRUDService
+    from kb_storage.lance_crud import LanceCRUDService
 
     if not source:
         raise HTTPException(status_code=400, detail="source 不能为空")
@@ -3050,7 +3050,7 @@ def lance_delete_by_nodes(kb_id: str, node_ids: str, table_name: Optional[str] =
         node_ids: 逗号分隔的节点 ID 列表
         table_name: 表名
     """
-    from kb.lance_crud import LanceCRUDService
+    from kb_storage.lance_crud import LanceCRUDService
 
     node_id_list = [n.strip() for n in node_ids.split(",") if n.strip()]
     if not node_id_list:
@@ -3071,7 +3071,7 @@ def lance_export(kb_id: str, output_path: str, table_name: Optional[str] = None)
         output_path: 输出文件路径
         table_name: 表名
     """
-    from kb.lance_crud import LanceCRUDService
+    from kb_storage.lance_crud import LanceCRUDService
 
     try:
         count = LanceCRUDService.export_to_jsonl(kb_id, output_path, table_name)
@@ -3088,7 +3088,7 @@ def lance_export(kb_id: str, output_path: str, table_name: Optional[str] = None)
 @app.websocket("/ws/tasks")
 async def ws_tasks(websocket):
     """WebSocket 任务状态推送"""
-    from kb.websocket_manager import ws_manager
+    from kb_core.websocket_manager import ws_manager
 
     await ws_manager.connect(websocket)
     try:
@@ -3131,8 +3131,8 @@ class ChatHistoryRequest(BaseModel):
 
 @app.post("/chat/{kb_id}", response_model=ChatResponse)
 def chat(kb_id: str, req: ChatRequest):
-    from llamaindex_study.chat_engine import get_chat_service
-    from kb.services import SearchService
+    from rag.chat_engine import get_chat_service
+    from kb_core.services import SearchService
 
     chat_service = get_chat_service()
 
@@ -3158,7 +3158,7 @@ def chat(kb_id: str, req: ChatRequest):
 
 @app.get("/chat/{kb_id}/sessions")
 def list_chat_sessions(kb_id: str):
-    from llamaindex_study.chat_engine import get_chat_service
+    from rag.chat_engine import get_chat_service
 
     chat_service = get_chat_service()
     sessions = chat_service._chat_store.list_sessions(kb_id=kb_id)
@@ -3177,7 +3177,7 @@ def list_chat_sessions(kb_id: str):
 
 @app.get("/chat/{kb_id}/history/{session_id}")
 def get_chat_history(kb_id: str, session_id: str, limit: int = 10):
-    from llamaindex_study.chat_engine import get_chat_service
+    from rag.chat_engine import get_chat_service
 
     chat_service = get_chat_service()
     history = chat_service.get_session_history(session_id, limit)
@@ -3186,7 +3186,7 @@ def get_chat_history(kb_id: str, session_id: str, limit: int = 10):
 
 @app.delete("/chat/{kb_id}/sessions/{session_id}")
 def delete_chat_session(kb_id: str, session_id: str):
-    from llamaindex_study.chat_engine import get_chat_service
+    from rag.chat_engine import get_chat_service
 
     chat_service = get_chat_service()
     success = chat_service.delete_session(session_id)
@@ -3198,8 +3198,8 @@ def get_observability_stats(
     start_date: Optional[str] = Query(None, description="开始日期 (YYYY-MM-DD)"),
     end_date: Optional[str] = Query(None, description="结束日期 (YYYY-MM-DD)"),
 ):
-    from llamaindex_study.callbacks import setup_callbacks
-    from llamaindex_study.token_stats_db import get_token_stats_db
+    from rag.callbacks import setup_callbacks
+    from rag.token_stats_db import get_token_stats_db
 
     setup_callbacks()
 
@@ -3221,7 +3221,7 @@ def get_observability_stats(
 
 @app.post("/observability/reset")
 def reset_observability():
-    from llamaindex_study.callbacks import (
+    from rag.callbacks import (
         reset_callbacks,
         setup_callbacks,
         reset_model_call_stats,
@@ -3239,8 +3239,8 @@ def get_traces(
     start_date: Optional[str] = Query(None, description="开始日期 (YYYY-MM-DD)"),
     end_date: Optional[str] = Query(None, description="结束日期 (YYYY-MM-DD)"),
 ):
-    from llamaindex_study.callbacks import setup_callbacks, get_rag_stats
-    from llamaindex_study.token_stats_db import get_token_stats_db
+    from rag.callbacks import setup_callbacks, get_rag_stats
+    from rag.token_stats_db import get_token_stats_db
 
     setup_callbacks()
 
@@ -3265,7 +3265,7 @@ def get_traces(
 
 @app.get("/observability/dates")
 def get_observability_dates():
-    from llamaindex_study.token_stats_db import get_token_stats_db
+    from rag.token_stats_db import get_token_stats_db
 
     db = get_token_stats_db()
     dates = db.get_daily_dates()
@@ -3285,7 +3285,7 @@ class ExtractResponse(BaseModel):
 
 @app.post("/extract", response_model=ExtractResponse)
 def extract_structured(req: ExtractRequest):
-    from llamaindex_study.structured_extractor import get_extractor
+    from rag.structured_extractor import get_extractor
 
     extractor = get_extractor()
 
@@ -3396,12 +3396,12 @@ class SettingsUpdateRequest(BaseModel):
 @app.get("/settings", response_model=SystemSettings)
 def get_settings():
     """获取系统设置"""
-    from llamaindex_study.config import get_settings
+    from rag.config import get_settings
 
     s = get_settings()
     registry = None
     try:
-        from llamaindex_study.config import get_model_registry
+        from rag.config import get_model_registry
 
         registry = get_model_registry()
         registry._ensure_loaded()
@@ -3439,7 +3439,7 @@ def get_settings():
 def update_settings(req: SettingsUpdateRequest):
     """更新系统设置（仅更新提供的字段）"""
     from pathlib import Path
-    from llamaindex_study.config import get_settings
+    from rag.config import get_settings
 
     s = get_settings()
     updates = req.model_dump(exclude_unset=True)
@@ -3554,7 +3554,7 @@ def update_settings(req: SettingsUpdateRequest):
 
 
 def _get_default_llm_model_id() -> Optional[str]:
-    from llamaindex_study.config import get_model_registry
+    from rag.config import get_model_registry
 
     registry = get_model_registry()
     default_llm = registry.get_default("llm")
@@ -3564,11 +3564,11 @@ def _get_default_llm_model_id() -> Optional[str]:
 def _set_default_llm_model(model_id: Optional[str]) -> None:
     if not model_id:
         return
-    from kb.database import init_model_db
+    from kb_core.database import init_model_db
 
     model_db = init_model_db()
     model_db.set_default(model_id)
-    from llamaindex_study.config import get_model_registry
+    from rag.config import get_model_registry
 
     get_model_registry().reload()
 
@@ -3598,7 +3598,7 @@ def _update_env_file(updates: Dict[str, str]) -> None:
 
 @app.post("/extract/fields", response_model=Dict[str, Any])
 def extract_fields(req: TextToJsonRequest):
-    from llamaindex_study.structured_extractor import TextToJsonExtractor
+    from rag.structured_extractor import TextToJsonExtractor
 
     extractor = TextToJsonExtractor()
 
@@ -3616,7 +3616,7 @@ if __name__ == "__main__":
     import uvicorn
     import os
 
-    from llamaindex_study.logger import LOG_LEVEL
+    from rag.logger import LOG_LEVEL
 
     port = int(os.getenv("API_PORT", "37241"))
     uvicorn.run(app, host="0.0.0.0", port=port, log_config=None, log_level="info")

@@ -56,4 +56,4 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project.scripts]
-llamaindex-study = "llamaindex_study.main:main"
+llamaindex-study = "kb_cli.__main__:main"
