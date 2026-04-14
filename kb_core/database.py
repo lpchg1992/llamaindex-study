@@ -1985,13 +1985,13 @@ class ChunkDB:
 
         docs = []
         with self.db.session_scope() as session:
-            rows = session.scalars(
+            result = session.execute(
                 select(ChunkModel.doc_id, func.count(ChunkModel.id).label("total"))
                 .where(ChunkModel.kb_id == kb_id)
                 .group_by(ChunkModel.doc_id)
             ).all()
-            for row in rows:
-                docs.append({"doc_id": row.doc_id, "total": row.total})
+            for row in result:
+                docs.append({"doc_id": row[0], "total": row[1]})
 
         try:
             vs = VectorStoreService.get_vector_store(kb_id)
