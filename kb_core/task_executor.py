@@ -977,6 +977,9 @@ class TaskExecutor:
         remaining_failed = len(chunk_db.get_failed_chunks(kb_id, limit=1))
         remaining_embedded = len(chunk_db.get_embedded(kb_id, limit=1))
 
+        skipped = stats["skipped"]
+        error_msg = f"{skipped} chunks failed to embed" if skipped > 0 else None
+
         self.queue.complete_task(
             task_id,
             result={
@@ -986,13 +989,12 @@ class TaskExecutor:
                 "failed": stats["failed"],
                 "embedded": stats["embedded"],
                 "success": stats["success"],
-                "skipped": stats["skipped"],
+                "skipped": skipped,
                 "remaining_pending": remaining_pending,
                 "remaining_failed": remaining_failed,
                 "remaining_embedded": remaining_embedded,
-                "message": f"完成: {stats['success']} 成功, {stats['skipped']} 失败. "
-                f"剩余: pending={remaining_pending}, failed={remaining_failed}, embedded={remaining_embedded}",
             },
+            error=error_msg,
         )
 
     async def _execute_check_mark_failed(self, task: "Task") -> None:

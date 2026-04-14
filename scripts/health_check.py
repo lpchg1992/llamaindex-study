@@ -84,22 +84,25 @@ async def main():
     settings = get_settings()
     endpoints = settings.get_ollama_endpoints()
     if not endpoints:
-        endpoints = [("本地", settings.ollama_base_url)]
-    
-    # 检查所有端点
+        print("\n⚠️  未配置 Ollama 供应商。请先运行: uv run llamaindex-study vendor add ollama --url=YOUR_OLLAMA_URL")
+        return
+
+    from rag.config import get_model_registry
+    registry = get_model_registry()
+    embed_models = [m for m in registry.get_by_type("embedding") if m.get("vendor_id", "").startswith("ollama")]
+    embed_model_name = embed_models[0]["name"] if embed_models else "bge-m3"
+
     results = []
     for name, url in endpoints:
         print(f"\n检查 {name} ({url})...")
-        
-        # HTTP 检查
+
         http_result = await check_endpoint(name, url)
-        
+
         if http_result["available"]:
             print(f"  ✅ HTTP 可用 (延迟: {http_result['latency_ms']:.0f}ms)")
             print(f"  📦 模型: {', '.join(http_result.get('models', []))}")
-            
-            # Embedding 测试
-            emb_result = await check_embedding(name, url, model=settings.ollama_embed_model)
+
+            emb_result = await check_embedding(name, url, model=embed_model_name)
             if emb_result["embedding_working"]:
                 print(f"  ✅ Embedding 正常 (延迟: {emb_result['embedding_latency_ms']:.0f}ms)")
                 results.append((name, emb_result["embedding_latency_ms"]))

@@ -2,14 +2,12 @@
 配置管理模块
 
 负责从 .env 文件加载配置，提供统一的配置访问接口。
-支持：
-  - LLM：硅基流动（SiliconFlow，OpenAI 兼容格式）
-  - Embedding：本地 Ollama（bge-m3）
+仅保留与模型无关的全局设置（重试机制、功能开关、存储路径等）。
+模型配置（供应商、API密钥、模型名称等）全部从数据库获取。
 
-运行时设置持久化：
-  - 运行时可更改的设置（top_k, use_hybrid_search 等）保存到 .runtime_settings.json
-  - LLM/Embedding 设置保存到 .env 文件
-  - default_llm_model 通过模型数据库的 is_default 字段管理
+模型配置请通过 CLI 管理:
+    uv run llamaindex-study vendor add --help
+    uv run llamaindex-study model add --help
 """
 
 import json
@@ -22,7 +20,7 @@ from dotenv import load_dotenv
 from rag.logger import get_logger
 
 logger = get_logger(__name__)
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 RUNTIME_SETTINGS_FILE = PROJECT_ROOT / ".runtime_settings.json"
 
 
@@ -31,66 +29,29 @@ class Settings:
     应用程序配置类
 
     提供类型安全的配置访问接口，自动从环境变量加载配置。
+    注意：模型相关配置（供应商、API密钥、模型名称）全部从数据库获取，
+    此处仅保留与模型无关的全局设置。
     """
 
-    # 类级别的环境变量默认值
-    _DEFAULT_SILICONFLOW_BASE_URL: ClassVar[str] = "https://api.siliconflow.cn/v1"
-    _DEFAULT_SILICONFLOW_MODEL: ClassVar[str] = "Pro/deepseek-ai/DeepSeek-V3.2"
-    _DEFAULT_OLLAMA_BASE_URL: ClassVar[str] = "http://localhost:11434"
-    _DEFAULT_OLLAMA_EMBED_MODEL: ClassVar[str] = "bge-m3"
-    _DEFAULT_OLLAMA_LLM_MODEL: ClassVar[str] = "tomng/lfm2.5-instruct:1.2b"
-    _DEFAULT_LLM_MODE: ClassVar[str] = "ollama"
-    _DEFAULT_OLLAMA_REMOTE_URL: ClassVar[str] = ""
     _DEFAULT_PERSIST_DIR: ClassVar[str] = str(PROJECT_ROOT / ".llamaindex" / "storage")
     _DEFAULT_ZOTERO_PERSIST_DIR: ClassVar[str] = str(
         PROJECT_ROOT / ".llamaindex" / "storage" / "zotero"
     )
     _DEFAULT_DATA_DIR: ClassVar[str] = str(Path.home() / ".llamaindex")
     _DEFAULT_TOP_K: ClassVar[int] = 5
-    _DEFAULT_RERANK_MODEL: ClassVar[str] = "Pro/BAAI/bge-reranker-v2-m3"
     _DEFAULT_USE_RERANKER: ClassVar[bool] = False
     _DEFAULT_VECTOR_STORE_TYPE: ClassVar[str] = "lancedb"
     _DEFAULT_VECTOR_TABLE_NAME: ClassVar[str] = "llamaindex"
     _DEFAULT_QDRANT_URL: ClassVar[str] = "http://localhost:6333"
 
     def __init__(self) -> None:
-        """初始化配置，从环境变量加载所有配置项"""
-        # 加载 .env 文件
-        env_path: Path = Path(__file__).parent.parent.parent / ".env"
+        env_path = PROJECT_ROOT / ".env"
         if env_path.exists():
             load_dotenv(env_path)
 
-        # ========== LLM 配置（硅基流动）==========
-        self.siliconflow_base_url: str = os.getenv(
-            "SILICONFLOW_BASE_URL", self._DEFAULT_SILICONFLOW_BASE_URL
-        )
-        self.siliconflow_api_key: Optional[str] = os.getenv("SILICONFLOW_API_KEY")
-        self.siliconflow_model: str = os.getenv(
-            "SILICONFLOW_MODEL", self._DEFAULT_SILICONFLOW_MODEL
-        )
-
-        # ========== LLM 模式选择 ==========
-        self.llm_mode: str = os.getenv("LLM_MODE", self._DEFAULT_LLM_MODE)
-        self.ollama_llm_model: str = os.getenv(
-            "OLLAMA_LLM_MODEL", self._DEFAULT_OLLAMA_LLM_MODEL
-        )
-
-        # ========== Embedding 配置（Ollama 多端点）==========
-        base_url = os.getenv("OLLAMA_BASE_URL")
-        self.ollama_local_url: str = os.getenv(
-            "OLLAMA_LOCAL_URL",
-            base_url or self._DEFAULT_OLLAMA_BASE_URL,
-        )
-        self.ollama_remote_url: str = os.getenv(
-            "OLLAMA_REMOTE_URL",
-            self._DEFAULT_OLLAMA_REMOTE_URL,
-        ).strip()
-        self.ollama_base_url: str = base_url or self.ollama_local_url
-        self.ollama_embed_model: str = os.getenv(
-            "OLLAMA_EMBED_MODEL", self._DEFAULT_OLLAMA_EMBED_MODEL
-        )
-        self.ollama_max_retries: int = int(os.getenv("MAX_RETRIES", "5"))
-        self.ollama_retry_delay: float = float(os.getenv("RETRY_DELAY", "2.0"))
+        # ========== 重试机制 ==========
+        self.max_retries: int = int(os.getenv("MAX_RETRIES", "5"))
+        self.retry_delay: float = float(os.getenv("RETRY_DELAY", "2.0"))
         self.ollama_short_text_threshold: int = int(
             os.getenv("OLLAMA_SHORT_TEXT_THRESHOLD", "600")
         )
@@ -103,14 +64,10 @@ class Settings:
             os.getenv("PERSIST_DIR", self._DEFAULT_PERSIST_DIR),
             self._DEFAULT_PERSIST_DIR,
         )
-
-        # Zotero 向量数据存储目录
         self.zotero_persist_dir: str = self._resolve_dir(
             os.getenv("ZOTERO_PERSIST_DIR", self._DEFAULT_ZOTERO_PERSIST_DIR),
             self._DEFAULT_ZOTERO_PERSIST_DIR,
         )
-
-        # 任务队列数据目录
         self.data_dir: str = self._resolve_dir(
             os.getenv("DATA_DIR", self._DEFAULT_DATA_DIR),
             self._DEFAULT_DATA_DIR,
@@ -158,7 +115,6 @@ class Settings:
         self.response_mode: str = os.getenv("RESPONSE_MODE", "compact")
 
         # ========== Reranker 配置 ==========
-        self.rerank_model: str = os.getenv("RERANK_MODEL", self._DEFAULT_RERANK_MODEL)
         self.use_reranker: bool = os.getenv("USE_RERANKER", "true").lower() == "true"
 
         # ========== 向量数据库配置 ==========
@@ -169,43 +125,33 @@ class Settings:
         self.vector_table_name: str = os.getenv(
             "VECTOR_TABLE_NAME", self._DEFAULT_VECTOR_TABLE_NAME
         )
-
-        # Qdrant 专用配置
         self.qdrant_url: str = os.getenv("QDRANT_URL", self._DEFAULT_QDRANT_URL)
         self.qdrant_api_key: Optional[str] = os.getenv("QDRANT_API_KEY")
 
-        # Doc2x 配置
+        # ========== OCR 配置 ==========
         self.doc2x_api_key: Optional[str] = os.getenv("DOC2X_API_KEY")
-
-        # MinerU 配置
         self.mineru_api_key: Optional[str] = os.getenv("MINERU_API_KEY")
         self.mineru_pipeline_id: Optional[str] = os.getenv("MINERU_PIPELINE_ID")
 
     def __repr__(self) -> str:
-        """返回配置的字符串表示"""
-        return (
-            f"Settings("
-            f"llm=siliconflow:{self.siliconflow_model}, "
-            f"embed=ollama:{self.ollama_embed_model}, "
-            f"top_k={self.top_k})"
-        )
+        return f"Settings(top_k={self.top_k})"
 
     def get_ollama_endpoints(self) -> list[tuple[str, str]]:
-        """返回去重后的 Ollama 端点列表"""
-        endpoints = [("本地", self.ollama_local_url)]
-        if self.ollama_remote_url:
-            endpoints.append(("远程", self.ollama_remote_url))
+        """从数据库加载 Ollama 端点列表（不再从环境变量读取）"""
+        from kb_core.database import init_vendor_db
 
-        unique_endpoints: list[tuple[str, str]] = []
-        seen_urls: set[str] = set()
-        for name, url in endpoints:
-            normalized_url = url.strip()
-            if not normalized_url or normalized_url in seen_urls:
-                continue
-            seen_urls.add(normalized_url)
-            unique_endpoints.append((name, normalized_url))
-
-        return unique_endpoints
+        vendor_db = init_vendor_db()
+        vendors = vendor_db.get_all(active_only=True)
+        endpoints = []
+        seen_urls = set()
+        for v in vendors:
+            vid = v.get("id", "")
+            if vid.startswith("ollama"):
+                base_url = v.get("api_base", "")
+                if base_url and base_url not in seen_urls:
+                    seen_urls.add(base_url)
+                    endpoints.append((v.get("name", vid), base_url))
+        return endpoints
 
     def _resolve_dir(self, configured_dir: str, fallback_dir: str) -> str:
         candidate = Path(configured_dir).expanduser()
@@ -266,7 +212,7 @@ class Settings:
 
 
 class ModelRegistry:
-    """模型注册表 - 从数据库加载模型配置，支持配置回退"""
+    """模型注册表 - 从数据库加载模型配置"""
 
     _instance: Optional["ModelRegistry"] = None
 
@@ -292,7 +238,7 @@ class ModelRegistry:
 
             vendor_db = init_vendor_db()
             if not vendor_db.get_all(active_only=False):
-                self._seed_default_vendors(vendor_db)
+                self._seed_siliconflow_vendor(vendor_db)
 
             model_db = init_model_db()
             rows = model_db.get_all(active_only=False)
@@ -300,126 +246,21 @@ class ModelRegistry:
                 for row in rows:
                     self._models[row["id"]] = row
                 logger.debug(f"从数据库加载了 {len(self._models)} 个模型")
-                if "siliconflow/bge-m3" not in self._models:
-                    self._models["siliconflow/bge-m3"] = {
-                        "id": "siliconflow/bge-m3",
-                        "vendor_id": "siliconflow",
-                        "name": "bge-m3",
-                        "type": "embedding",
-                        "is_active": True,
-                        "is_default": False,
-                        "config": {},
-                    }
             else:
-                logger.debug("数据库为空，使用配置默认值并填充模型")
-                self._load_defaults_from_config()
-                self._seed_default_models(model_db)
+                logger.warning("模型数据库为空，请通过 CLI 添加模型: uv run llamaindex-study model add")
         except Exception as e:
-            logger.warning(f"模型数据库加载失败，使用配置默认值: {e}")
-            self._load_defaults_from_config()
+            logger.error(f"模型数据库加载失败: {e}")
         self._loaded = True
 
-    def _seed_default_models(self, model_db) -> None:
-        """将默认 embedding 模型填充到数据库"""
-        for model in self._models.values():
-            if model["type"] == "embedding":
-                model_db.upsert(**model)
-        logger.debug(
-            f"已填充 {len([m for m in self._models.values() if m['type'] == 'embedding'])} 个 embedding 模型"
-        )
-
-    def _seed_default_vendors(self, vendor_db):
-        """填充默认供应商（仅 SiliconFlow，Ollama 需通过 CLI/API 管理）"""
-        settings = get_settings()
-
-        # SiliconFlow 是必须的（用于 reranker 和 fallback embedding）
+    def _seed_siliconflow_vendor(self, vendor_db):
+        """创建 SiliconFlow 供应商占位符（API密钥需通过 CLI 配置）"""
         vendor_db.upsert(
             vendor_id="siliconflow",
             name="SiliconFlow",
-            api_base=settings.siliconflow_base_url,
-            api_key=settings.siliconflow_api_key,
+            api_base="https://api.siliconflow.cn/v1",
+            api_key=None,
         )
-
-        logger.debug("已填充默认供应商: [siliconflow]")
-        logger.debug(
-            "注意: Ollama 供应商需通过 CLI 'vendor add' 或 API POST /vendors 添加"
-        )
-
-    def _load_defaults_from_config(self):
-        """从配置加载默认模型（支持多端点 embedding）"""
-        settings = get_settings()
-        defaults = [
-            {
-                "id": f"siliconflow/{settings.siliconflow_model.split('/')[-1]}",
-                "vendor_id": "siliconflow",
-                "name": settings.siliconflow_model.split("/")[-1],
-                "type": "llm",
-                "is_active": True,
-                "is_default": settings.llm_mode == "siliconflow",
-                "config": {},
-            },
-            {
-                "id": f"ollama/{settings.ollama_llm_model}",
-                "vendor_id": "ollama",
-                "name": settings.ollama_llm_model,
-                "type": "llm",
-                "is_active": True,
-                "is_default": settings.llm_mode == "ollama",
-                "config": {},
-            },
-            {
-                "id": f"siliconflow/{settings.rerank_model.split('/')[-1]}",
-                "vendor_id": "siliconflow",
-                "name": settings.rerank_model.split("/")[-1],
-                "type": "reranker",
-                "is_active": True,
-                "is_default": True,
-                "config": {},
-            },
-        ]
-
-        # Ollama embedding 模型：为每个端点创建独立记录
-        embed_model_name = settings.ollama_embed_model
-        vendor_ids = []
-        if settings.ollama_local_url:
-            vendor_ids.append("ollama")
-        if (
-            settings.ollama_remote_url
-            and settings.ollama_remote_url != settings.ollama_local_url
-        ):
-            vendor_ids.append("ollama_home")
-        if not vendor_ids:
-            vendor_ids = ["ollama"]
-
-        for i, vendor_id in enumerate(vendor_ids):
-            model_id = f"{vendor_id}/{embed_model_name}"
-            defaults.append(
-                {
-                    "id": model_id,
-                    "vendor_id": vendor_id,
-                    "name": embed_model_name,
-                    "type": "embedding",
-                    "is_active": True,
-                    "is_default": i == 0,
-                    "config": {},
-                }
-            )
-
-        # SiliconFlow embedding 模型
-        defaults.append(
-            {
-                "id": "siliconflow/bge-m3",
-                "vendor_id": "siliconflow",
-                "name": "bge-m3",
-                "type": "embedding",
-                "is_active": True,
-                "is_default": False,
-                "config": {},
-            }
-        )
-
-        for model in defaults:
-            self._models[model["id"]] = model
+        logger.info("已创建 SiliconFlow 供应商占位符，请通过 CLI 配置 API 密钥: uv run llamaindex-study vendor update siliconflow --api-key=YOUR_KEY")
 
     def get_model(self, model_id: str) -> Optional[dict]:
         self._ensure_loaded()

@@ -60,12 +60,12 @@ class CategoryClassifier:
 
         try:
             from rag.ollama_utils import create_llm
-            from rag.config import get_settings
+            from kb_core.database import init_vendor_db
 
-            settings = get_settings()
-
-            if not settings.siliconflow_api_key:
-                print("   ⚠️  LLM 分类不可用: SILICONFLOW_API_KEY 未设置")
+            vendor_db = init_vendor_db()
+            vendor = vendor_db.get("siliconflow")
+            if not vendor or not vendor.get("api_key"):
+                print("   ⚠️  LLM 分类不可用: SiliconFlow API key 未配置。请运行: uv run llamaindex-study vendor update siliconflow --api-key=YOUR_KEY")
                 self._llm_available = False
                 return False
 

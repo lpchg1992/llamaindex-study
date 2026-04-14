@@ -216,6 +216,28 @@ function ModelDialog({
       : { id: '', vendor_id: '', name: '', type: 'llm', is_active: true, is_default: false, config: getDefaultModelConfig('llm') }
   )
 
+  const autoGenerateModelId = (vendorId: string, name: string): string => {
+    if (!vendorId || !name) return ''
+    const safeName = name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')
+    return `${vendorId}/${safeName}`
+  }
+
+  const handleVendorChange = (vendorId: string) => {
+    if (mode === 'create') {
+      setFormData(prev => ({ ...prev, vendor_id: vendorId, id: autoGenerateModelId(vendorId, prev.name) }))
+    } else {
+      setFormData(prev => ({ ...prev, vendor_id: vendorId }))
+    }
+  }
+
+  const handleNameChange = (name: string) => {
+    if (mode === 'create') {
+      setFormData(prev => ({ ...prev, name, id: autoGenerateModelId(prev.vendor_id, name) }))
+    } else {
+      setFormData(prev => ({ ...prev, name }))
+    }
+  }
+
   useEffect(() => {
     if (model) {
       setFormData({
@@ -240,8 +262,10 @@ function ModelDialog({
   }
 
   const handleSave = () => {
-    if (!formData.id || !formData.vendor_id || !formData.type) return
-    onSave({ modelId: model?.id || formData.id, data: formData })
+    if (!formData.name || !formData.vendor_id || !formData.type) return
+    const finalId = mode === 'create' ? formData.id : (model?.id || formData.id)
+    if (!finalId) return
+    onSave({ modelId: finalId, data: formData })
     onOpenChange(false)
   }
 
@@ -407,15 +431,19 @@ function ModelDialog({
             <Label htmlFor="model-id">Model ID</Label>
             <Input
               id="model-id"
-              placeholder="siliconflow/DeepSeek-V3.2"
               value={formData.id}
-              onChange={(e) => setFormData({ ...formData, id: e.target.value })}
-              disabled={mode === 'edit'}
+              readOnly
+              disabled={mode === 'create'}
+              placeholder={mode === 'create' ? 'Auto-generated from vendor and name...' : formData.id}
+              className={mode === 'create' ? 'bg-muted' : ''}
             />
+            {mode === 'create' && formData.id && (
+              <p className="text-xs text-muted-foreground">ID: {formData.id}</p>
+            )}
           </div>
           <div className="space-y-2">
             <Label htmlFor="model-vendor">Vendor</Label>
-            <Select value={formData.vendor_id} onValueChange={(v) => setFormData({ ...formData, vendor_id: v })}>
+            <Select value={formData.vendor_id} onValueChange={handleVendorChange}>
               <SelectTrigger>
                 <SelectValue placeholder="Select vendor..." />
               </SelectTrigger>
@@ -432,7 +460,7 @@ function ModelDialog({
               id="model-name"
               placeholder="DeepSeek V3.2"
               value={formData.name || ''}
-              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+              onChange={(e) => handleNameChange(e.target.value)}
             />
           </div>
           <div className="space-y-2">

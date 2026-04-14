@@ -190,19 +190,29 @@ class ParallelEmbeddingProcessor:
             endpoints.append(ep)
 
         # 添加 SiliconFlow 端点（跳过健康检查，始终可用）
-        sf_model_info = registry.get_model("siliconflow/bge-m3")
+        sf_models = [m for m in registry.get_by_type("embedding") if m.get("vendor_id") == "siliconflow"]
+        sf_model_info = None
+        for m in sf_models:
+            if m.get("is_default"):
+                sf_model_info = m
+                break
+        if not sf_model_info and sf_models:
+            sf_model_info = sf_models[0]
+
         if sf_model_info:
             vendor_info = vendor_db.get("siliconflow")
             if vendor_info and vendor_info.get("api_base"):
+                model_id = sf_model_info["id"]
+                api_model = sf_model_info.get("config", {}).get("api_model") or f"Pro/BAAI/{sf_model_info['name']}"
                 sf_ep = EmbeddingEndpoint(
-                    name="SiliconFlow(siliconflow/bge-m3)",
+                    name=f"SiliconFlow({model_id})",
                     url="siliconflow://",
-                    model_id="siliconflow/bge-m3",
-                    model_name="Pro/BAAI/bge-m3",
+                    model_id=model_id,
+                    model_name=api_model,
                 )
                 sf_ep.is_healthy = True
                 endpoints.append(sf_ep)
-                logger.info("SiliconFlow embedding 端点已添加（跳过健康检查）")
+                logger.info(f"SiliconFlow embedding 端点已添加: {model_id}（跳过健康检查）")
 
         healthy_count = sum(1 for ep in endpoints if ep.is_healthy)
         logger.info(
@@ -328,9 +338,9 @@ class ParallelEmbeddingProcessor:
         vendor_db = init_vendor_db()
         vendor_info = vendor_db.get(vendor_id) if vendor_id else None
 
-        base_url = (
-            vendor_info.get("api_base") if vendor_info else None
-        ) or settings.ollama_base_url
+        if not vendor_info or not vendor_info.get("api_base"):
+            raise ValueError(f"Vendor {vendor_id} not configured. Run: uv run llamaindex-study vendor add --help")
+        base_url = vendor_info["api_base"]
 
         model_name = model_info["name"]
         if not model_name.endswith(":latest"):
@@ -344,7 +354,7 @@ class ParallelEmbeddingProcessor:
 
         if needs_update:
             self.endpoints = [
-                EmbeddingEndpoint(f"{ep.name}({model_id})", base_url)
+                EmbeddingEndpoint(f"{ep.name}({model_id})", base_url, model_id=model_id, model_name=model_name)
                 for ep in self.endpoints
             ]
             logger.info(f"端点已更新为: {base_url}")
@@ -367,11 +377,14 @@ class ParallelEmbeddingProcessor:
                 from rag.ollama_utils import create_siliconflow_embedding
 
                 self._models[cache_key] = create_siliconflow_embedding(
-                    model=ep.model_name or "Pro/BAAI/bge-m3"
+                    model=ep.model_name or "Pro/BAAI/bge-m3",
+                    internal_model_id=ep.model_id,
                 )
             else:
                 self._models[cache_key] = create_ollama_embedding(
-                    model=ep.model_name or self._model_name, base_url=ep.url
+                    model=ep.model_name or self._model_name,
+                    base_url=ep.url,
+                    model_id=ep.model_id,
                 )
         return self._models[cache_key]
 
@@ -392,7 +405,8 @@ class ParallelEmbeddingProcessor:
                 vendor_id = ep.model_id.split("/")[0]
             else:
                 vendor_id = "ollama"
-            _record_embedding_call(vendor_id, ep.model_id, token_count, error)
+            model_id_for_record = ep.model_id if ep.model_id else f"{vendor_id}/unknown"
+            _record_embedding_call(vendor_id, model_id_for_record, token_count, error)
         except Exception:
             pass
 

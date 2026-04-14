@@ -1122,7 +1122,7 @@ def create_model(req: ModelCreateRequest):
     return ModelInfo(**model_db.get(req.id))
 
 
-@app.get("/models/{model_id}", response_model=ModelInfo)
+@app.get("/models/{model_id:path}", response_model=ModelInfo)
 def get_model(model_id: str):
     """获取指定模型"""
     from rag.config import get_model_registry
@@ -1134,7 +1134,7 @@ def get_model(model_id: str):
     return ModelInfo(**model)
 
 
-@app.delete("/models/{model_id}")
+@app.delete("/models/{model_id:path}")
 def delete_model(model_id: str):
     """删除模型"""
     from kb_core.database import init_model_db
@@ -1155,7 +1155,7 @@ def delete_model(model_id: str):
     return {"status": "deleted", "model_id": model_id}
 
 
-@app.put("/models/{model_id}", response_model=ModelInfo)
+@app.put("/models/{model_id:path}", response_model=ModelInfo)
 def update_model(model_id: str, req: ModelCreateRequest):
     """更新模型"""
     from kb_core.database import init_model_db
@@ -1186,7 +1186,7 @@ def update_model(model_id: str, req: ModelCreateRequest):
     return ModelInfo(**db.get(model_id))
 
 
-@app.put("/models/{model_id}/default")
+@app.put("/models/{model_id:path}/default")
 def set_default_model(model_id: str):
     """设置默认模型"""
     from kb_core.database import init_model_db
@@ -3409,16 +3409,26 @@ def get_settings():
         pass
 
     default_llm = None
+    default_embed = None
+    default_rerank = None
     if registry:
         default_llm_model = registry.get_default("llm")
         if default_llm_model:
             default_llm = default_llm_model["id"]
 
+        default_embed_model = registry.get_default("embedding")
+        if default_embed_model:
+            default_embed = f"{default_embed_model.get('vendor_id')}/{default_embed_model.get('name')}"
+
+        default_rerank_model = registry.get_default("reranker")
+        if default_rerank_model:
+            default_rerank = f"{default_rerank_model.get('vendor_id')}/{default_rerank_model.get('name')}"
+
     return SystemSettings(
-        llm_mode=s.llm_mode,
+        llm_mode="ollama" if default_llm and default_llm.startswith("ollama") else "siliconflow",
         default_llm_model=default_llm,
-        ollama_embed_model=s.ollama_embed_model,
-        ollama_base_url=s.ollama_base_url,
+        ollama_embed_model=default_embed or "ollama/bge-m3",
+        ollama_base_url="http://localhost:11434",
         top_k=s.top_k,
         use_hybrid_search=s.use_hybrid_search,
         use_auto_merging=s.use_auto_merging,
@@ -3430,7 +3440,7 @@ def get_settings():
         chunk_size=s.chunk_size,
         chunk_overlap=s.chunk_overlap,
         use_reranker=s.use_reranker,
-        rerank_model=s.rerank_model,
+        rerank_model=default_rerank or "siliconflow/bge-reranker-v2-m3",
         response_mode=s.response_mode,
     )
 
@@ -3509,14 +3519,7 @@ def update_settings(req: SettingsUpdateRequest):
             "ollama_base_url",
             "rerank_model",
         ):
-            env_var_map = {
-                "llm_mode": "LLM_MODE",
-                "ollama_embed_model": "OLLAMA_EMBED_MODEL",
-                "ollama_base_url": "OLLAMA_BASE_URL",
-                "rerank_model": "RERANK_MODEL",
-            }
-            env_updates[env_var_map[key]] = value
-            applied.append(f"{key} (重启服务生效)")
+            skipped.append(f"{key} (请使用模型管理 API: /models, /vendors)")
         else:
             skipped.append(key)
 

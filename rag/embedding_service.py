@@ -31,11 +31,7 @@ def _remove_surrogates(text: str) -> str:
 
 
 def get_default_embedding_from_registry() -> tuple[str, str]:
-    """Get default embedding model name and URL from the model registry.
-
-    Returns:
-        (model_name, base_url) - raw model name for Ollama API and base URL
-    """
+    """Get default embedding model name and URL from the model registry."""
     from kb_core.database import init_vendor_db
 
     registry = get_model_registry()
@@ -43,38 +39,47 @@ def get_default_embedding_from_registry() -> tuple[str, str]:
     if not model:
         raise RuntimeError(
             "No default embedding model found in registry. "
-            "Please add an embedding model via CLI: python -m kb.cli model add --name bge-m3 --vendor ollama --type embedding"
+            "Please add an embedding model via CLI: uv run llamaindex-study model add --help"
         )
 
     vendor_db = init_vendor_db()
     vendor_info = vendor_db.get(model["vendor_id"])
-    base_url = (
-        vendor_info["api_base"]
-        if vendor_info and vendor_info.get("api_base")
-        else get_settings().ollama_base_url
-    )
+    if not vendor_info or not vendor_info.get("api_base"):
+        raise RuntimeError(
+            f"Vendor {model['vendor_id']} not configured. "
+            f"Please add vendor via CLI: uv run llamaindex-study vendor add --help"
+        )
 
-    return model["name"], base_url
+    return model["name"], vendor_info["api_base"]
 
 
 class SiliconFlowEmbedding:
-    """
-    SiliconFlow 云端 Embedding（默认备用）
-
-    调用 SiliconFlow 的 /v1/embeddings 接口，
-    使用 Pro/BAAI/bge-m3 模型。
-    """
+    """SiliconFlow 云端 Embedding"""
 
     def __init__(
         self,
-        model: str = "Pro/BAAI/bge-m3",
+        model: str,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
+        internal_model_id: Optional[str] = None,
     ):
-        settings = get_settings()
+        if not api_key or not base_url:
+            from kb_core.database import init_vendor_db
+            vendor_db = init_vendor_db()
+            vendor = vendor_db.get("siliconflow")
+            if vendor:
+                api_key = api_key or vendor.get("api_key")
+                base_url = base_url or vendor.get("api_base")
+
+        if not api_key:
+            raise ValueError("SiliconFlow API key not configured. Run: uv run llamaindex-study vendor update siliconflow --api-key=YOUR_KEY")
+        if not base_url:
+            raise ValueError("SiliconFlow base_url not configured.")
+
         self.model = model
-        self.api_key = api_key or settings.siliconflow_api_key
-        self.base_url = base_url or settings.siliconflow_base_url
+        self.api_key = api_key
+        self.base_url = base_url
+        self._internal_model_id = internal_model_id or f"siliconflow/{model.split('/')[-1]}"
         self._client = None
 
     def _get_client(self):
@@ -95,7 +100,7 @@ class SiliconFlowEmbedding:
             record_model_call(
                 vendor_id="siliconflow",
                 model_type="embedding",
-                model_id=self.model,
+                model_id=self._internal_model_id,
                 prompt_tokens=token_count,
                 completion_tokens=0,
                 error=error,

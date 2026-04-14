@@ -431,29 +431,28 @@ class TaskQueue:
             row = session.get(TaskRecord, task_id)
             if not row:
                 return
-            row.status = (
-                TaskStatus.FAILED.value if error else TaskStatus.COMPLETED.value
-            )
+
+            if result is None:
+                result = {}
+
+            skipped = result.get("skipped", 0)
+            has_failure = bool(error) or skipped > 0
+
+            row.status = TaskStatus.FAILED.value if has_failure else TaskStatus.COMPLETED.value
             row.completed_at = time.time()
 
             last_message = row.message
 
-            if result is None:
-                result = {}
-            result["last_message"] = last_message
-
             if error:
                 row.message = f"失败: {error}"
             else:
-                msg = "已完成"
-                if result:
-                    pc = result.get("processed_chunks", 0)
-                    tc = result.get("total_chunks", 0)
-                    if tc > 0:
-                        msg = f"已完成 ({pc}/{tc} chunks)"
-                    elif pc > 0:
-                        msg = f"部分完成 ({pc} chunks)"
-                row.message = msg
+                success = result.get("success", 0)
+                if skipped > 0:
+                    row.message = f"部分完成: {success} 成功, {skipped} 失败"
+                else:
+                    row.message = "已完成"
+
+            result["last_message"] = last_message
 
             row.result = json.dumps(result, ensure_ascii=False) if result else None
             row.error = error

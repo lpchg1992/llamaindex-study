@@ -729,8 +729,10 @@ export function useCreateVendor() {
       const { data } = await apiClient.post(`${API_BASE}/vendors`, req)
       return data
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['vendors'] })
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['vendors'] })
+      const { data } = await apiClient.get(`${API_BASE}/vendors`)
+      queryClient.setQueryData(['vendors'], data)
     },
   })
 }
@@ -739,11 +741,13 @@ export function useDeleteVendor() {
   const queryClient = useQueryClient()
   return useMutation<{ status: string; vendor_id: string }, Error, string>({
     mutationFn: async (vendorId) => {
-      const { data } = await apiClient.delete(`${API_BASE}/vendors/${vendorId}`)
+      const { data } = await apiClient.delete(`${API_BASE}/vendors/${encodeURIComponent(vendorId)}`)
       return data
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['vendors'] })
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['vendors'] })
+      const { data } = await apiClient.get(`${API_BASE}/vendors`)
+      queryClient.setQueryData(['vendors'], data)
     },
   })
 }
@@ -752,11 +756,13 @@ export function useUpdateVendor() {
   const queryClient = useQueryClient()
   return useMutation<VendorInfo, Error, VendorCreateRequest>({
     mutationFn: async (req) => {
-      const { data } = await apiClient.put<VendorInfo>(`${API_BASE}/vendors/${req.id}`, req)
+      const { data } = await apiClient.put<VendorInfo>(`${API_BASE}/vendors/${encodeURIComponent(req.id)}`, req)
       return data
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['vendors'] })
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['vendors'] })
+      const { data } = await apiClient.get(`${API_BASE}/vendors`)
+      queryClient.setQueryData(['vendors'], data)
     },
   })
 }
@@ -768,8 +774,17 @@ export function useCreateModel() {
       const { data } = await apiClient.post(`${API_BASE}/models`, req)
       return data
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['models'] })
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['models'] })
+      const types = ['llm', 'embedding', 'reranker']
+      await Promise.all(
+        types.map(async (type) => {
+          const { data } = await apiClient.get(`${API_BASE}/models?type=${type}`)
+          queryClient.setQueryData(['models', type], data)
+        })
+      )
+      const { data: allModels } = await apiClient.get(`${API_BASE}/models`)
+      queryClient.setQueryData(['models', undefined], allModels)
     },
   })
 }
@@ -778,11 +793,20 @@ export function useDeleteModel() {
   const queryClient = useQueryClient()
   return useMutation<{ status: string; model_id: string }, Error, string>({
     mutationFn: async (modelId) => {
-      const { data } = await apiClient.delete(`${API_BASE}/models/${modelId}`)
+      const { data } = await apiClient.delete(`${API_BASE}/models/${encodeURIComponent(modelId)}`)
       return data
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['models'] })
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['models'] })
+      const types = ['llm', 'embedding', 'reranker']
+      await Promise.all(
+        types.map(async (type) => {
+          const { data } = await apiClient.get(`${API_BASE}/models?type=${type}`)
+          queryClient.setQueryData(['models', type], data)
+        })
+      )
+      const { data: allModels } = await apiClient.get(`${API_BASE}/models`)
+      queryClient.setQueryData(['models', undefined], allModels)
     },
   })
 }
@@ -791,11 +815,20 @@ export function useUpdateModel() {
   const queryClient = useQueryClient()
   return useMutation<ModelInfo, Error, { modelId: string; data: ModelCreateRequest }>({
     mutationFn: async ({ modelId, data }) => {
-      const { data: result } = await apiClient.put<ModelInfo>(`${API_BASE}/models/${modelId}`, data)
+      const { data: result } = await apiClient.put<ModelInfo>(`${API_BASE}/models/${encodeURIComponent(modelId)}`, data)
       return result
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['models'] })
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['models'] })
+      const types = ['llm', 'embedding', 'reranker']
+      await Promise.all(
+        types.map(async (type) => {
+          const { data } = await apiClient.get(`${API_BASE}/models?type=${type}`)
+          queryClient.setQueryData(['models', type], data)
+        })
+      )
+      const { data: allModels } = await apiClient.get(`${API_BASE}/models`)
+      queryClient.setQueryData(['models', undefined], allModels)
     },
   })
 }
@@ -804,11 +837,20 @@ export function useSetDefaultModel() {
   const queryClient = useQueryClient()
   return useMutation<{ status: string; model_id: string }, Error, string>({
     mutationFn: async (modelId) => {
-      const { data } = await apiClient.put(`${API_BASE}/models/${modelId}/default`)
+      const { data } = await apiClient.put(`${API_BASE}/models/${encodeURIComponent(modelId)}/default`)
       return data
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['models'] })
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['models'] })
+      const types = ['llm', 'embedding', 'reranker']
+      await Promise.all(
+        types.map(async (type) => {
+          const { data } = await apiClient.get(`${API_BASE}/models?type=${type}`)
+          queryClient.setQueryData(['models', type], data)
+        })
+      )
+      const { data: allModels } = await apiClient.get(`${API_BASE}/models`)
+      queryClient.setQueryData(['models', undefined], allModels)
     },
   })
 }

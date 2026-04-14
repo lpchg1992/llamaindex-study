@@ -148,11 +148,22 @@ def load_documents(data_dir: Path) -> list:
 
 def run_interactive() -> int:
     from kb_core.services import KnowledgeBaseService, QueryRouter, SearchService
+    from rag.config import get_model_registry
 
     settings = get_settings()
     print(f"🔧 使用配置: {settings}")
-    print(f"   LLM: SiliconFlow ({settings.siliconflow_model})")
-    print(f"   Embedding: Ollama ({settings.ollama_embed_model})")
+
+    registry = get_model_registry()
+    default_llm = registry.get_default("llm")
+    default_embed = registry.get_default("embedding")
+    if default_llm:
+        print(f"   LLM: {default_llm.get('vendor_id', '?')}/{default_llm.get('name', '?')}")
+    else:
+        print("   LLM: 未配置")
+    if default_embed:
+        print(f"   Embedding: {default_embed.get('vendor_id', '?')}/{default_embed.get('name', '?')}")
+    else:
+        print("   Embedding: 未配置")
 
     kbs = KnowledgeBaseService.list_all()
     print(f"📚 已加载 {len(kbs)} 个知识库")

@@ -78,14 +78,31 @@ class QueryEngineWrapper:
         self.model_id = model_id
 
         if rerank_model or rerank_api_key or rerank_base_url:
-            self._rerank_model = rerank_model or self.settings.rerank_model
-            self._rerank_api_key = rerank_api_key or self.settings.siliconflow_api_key
-            self._rerank_base_url = (
-                rerank_base_url or self.settings.siliconflow_base_url
-            )
+            if rerank_model:
+                self._rerank_model = rerank_model
+                if not rerank_api_key or not rerank_base_url:
+                    from rag.config import get_model_registry
+                    registry = get_model_registry()
+                    model_info = registry.get_model(rerank_model)
+                    if model_info:
+                        from kb_core.database import init_vendor_db
+                        vendor_db = init_vendor_db()
+                        vendor = vendor_db.get(model_info.get("vendor_id", "siliconflow"))
+                        if vendor:
+                            rerank_api_key = rerank_api_key or vendor.get("api_key")
+                            rerank_base_url = rerank_base_url or vendor.get("api_base")
+            else:
+                from rag.reranker import get_default_reranker_from_registry
+                self._rerank_model, default_key, default_url = get_default_reranker_from_registry()
+                rerank_api_key = rerank_api_key or default_key
+                rerank_base_url = rerank_base_url or default_url
+
+            if not rerank_api_key:
+                raise ValueError("Reranker API key not configured. Run: uv run llamaindex-study vendor update siliconflow --api-key=YOUR_KEY")
+            self._rerank_api_key = rerank_api_key
+            self._rerank_base_url = rerank_base_url or "https://api.siliconflow.cn/v1"
         else:
             from rag.reranker import get_default_reranker_from_registry
-
             self._rerank_model, self._rerank_api_key, self._rerank_base_url = (
                 get_default_reranker_from_registry()
             )

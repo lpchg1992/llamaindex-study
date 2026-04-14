@@ -364,16 +364,24 @@ class OllamaEmbedder(OllamaEmbedding):
         self,
         model_name: str,
         base_url: str,
+        model_id: Optional[str] = None,
         max_retries: int = 5,
         initial_delay: float = 2.0,
         backoff_factor: float = 1.5,
     ):
         super().__init__(model_name=model_name, base_url=base_url)
         self._base_url = base_url
+        self._model_id = model_id
         self._max_retries = max_retries
         self._initial_delay = initial_delay
         self._backoff_factor = backoff_factor
         self._queue = get_ollama_request_queue()
+
+    def _get_full_model_id(self) -> str:
+        if self._model_id:
+            return self._model_id
+        vendor = self._get_vendor_id()
+        return f"{vendor}/{self.model_name}"
 
     def _call_with_queue(self, method, *args, **kwargs):
         try:
@@ -458,13 +466,13 @@ class OllamaEmbedder(OllamaEmbedding):
             result = self._sync_call_with_retry(super().get_text_embedding, text)
             _record_embedding_call(
                 self._get_vendor_id(),
-                self.model_name,
+                self._get_full_model_id(),
                 self._estimate_tokens(text),
                 False,
             )
             return result
         except Exception as e:
-            _record_embedding_call(self._get_vendor_id(), self.model_name, 0, True)
+            _record_embedding_call(self._get_vendor_id(), self._get_full_model_id(), 0, True)
             raise
 
     async def aget_text_embedding(self, text: str) -> List[float]:
@@ -474,13 +482,13 @@ class OllamaEmbedder(OllamaEmbedding):
             )
             _record_embedding_call(
                 self._get_vendor_id(),
-                self.model_name,
+                self._get_full_model_id(),
                 self._estimate_tokens(text),
                 False,
             )
             return result
         except Exception as e:
-            _record_embedding_call(self._get_vendor_id(), self.model_name, 0, True)
+            _record_embedding_call(self._get_vendor_id(), self._get_full_model_id(), 0, True)
             raise
 
     def get_text_embeddings(self, texts: List[str]) -> List[List[float]]:
@@ -490,13 +498,13 @@ class OllamaEmbedder(OllamaEmbedding):
                 result = self._sync_call_with_retry(super().get_text_embedding, text)
                 _record_embedding_call(
                     self._get_vendor_id(),
-                    self.model_name,
+                    self._get_full_model_id(),
                     self._estimate_tokens(text),
                     False,
                 )
                 results.append(result)
             except Exception as e:
-                _record_embedding_call(self._get_vendor_id(), self.model_name, 0, True)
+                _record_embedding_call(self._get_vendor_id(), self._get_full_model_id(), 0, True)
                 raise
         return results
 
@@ -509,7 +517,7 @@ class OllamaEmbedder(OllamaEmbedding):
                 )
                 _record_embedding_call(
                     self._get_vendor_id(),
-                    self.model_name,
+                    self._get_full_model_id(),
                     self._estimate_tokens(text),
                     False,
                 )
@@ -528,18 +536,44 @@ from rag.config import get_settings
 def create_ollama_embedding(
     model: Optional[str] = None,
     base_url: Optional[str] = None,
+    model_id: Optional[str] = None,
 ) -> OllamaEmbedder:
     from rag.embedding_service import get_default_embedding_from_registry
+    from rag.config import get_model_registry
+    from kb_core.database import init_vendor_db
 
     settings = get_settings()
     if model is None:
-        model, resolved_url = get_default_embedding_from_registry()
+        model_name, resolved_url = get_default_embedding_from_registry()
         base_url = base_url or resolved_url
+        model = model_name
+        if model_id is None:
+            registry = get_model_registry()
+            for mid, minfo in registry._models.items():
+                if minfo.get("name") == model_name and minfo.get("type") == "embedding":
+                    model_id = mid
+                    break
+    elif model_id is None:
+        model_id = model
+
+    if not base_url:
+        if model_id:
+            registry = get_model_registry()
+            model_info = registry.get_model(model_id)
+            if model_info:
+                vendor_db = init_vendor_db()
+                vendor = vendor_db.get(model_info.get("vendor_id") or "")
+                if vendor:
+                    base_url = vendor.get("api_base")
+        if not base_url:
+            raise ValueError(f"Cannot determine base_url for model {model_id}. Please configure vendor or pass base_url explicitly.")
+
     return OllamaEmbedder(
         model_name=model,
-        base_url=base_url or settings.ollama_base_url,
-        max_retries=settings.ollama_max_retries,
-        initial_delay=settings.ollama_retry_delay,
+        base_url=base_url,
+        model_id=model_id,
+        max_retries=settings.max_retries,
+        initial_delay=settings.retry_delay,
         backoff_factor=1.5,
     )
 
@@ -549,18 +583,44 @@ def configure_global_embed_model(
     base_url: Optional[str] = None,
     chunk_size: int = 512,
     embed_batch_size: int = 10,
+    model_id: Optional[str] = None,
 ) -> OllamaEmbedder:
     from rag.embedding_service import get_default_embedding_from_registry
+    from rag.config import get_model_registry
+    from kb_core.database import init_vendor_db
 
     settings = get_settings()
     if model is None:
-        model, resolved_url = get_default_embedding_from_registry()
+        model_name, resolved_url = get_default_embedding_from_registry()
         base_url = base_url or resolved_url
+        model = model_name
+        if model_id is None:
+            registry = get_model_registry()
+            for mid, minfo in registry._models.items():
+                if minfo.get("name") == model_name and minfo.get("type") == "embedding":
+                    model_id = mid
+                    break
+    elif model_id is None:
+        model_id = model
+
+    if not base_url:
+        if model_id:
+            registry = get_model_registry()
+            model_info = registry.get_model(model_id)
+            if model_info:
+                vendor_db = init_vendor_db()
+                vendor = vendor_db.get(model_info.get("vendor_id") or "")
+                if vendor:
+                    base_url = vendor.get("api_base")
+        if not base_url:
+            raise ValueError(f"Cannot determine base_url for model {model_id}. Please configure vendor or pass base_url explicitly.")
+
     embed_model = OllamaEmbedder(
         model_name=model,
-        base_url=base_url or settings.ollama_base_url,
-        max_retries=settings.ollama_max_retries,
-        initial_delay=settings.ollama_retry_delay,
+        base_url=base_url,
+        model_id=model_id,
+        max_retries=settings.max_retries,
+        initial_delay=settings.retry_delay,
         backoff_factor=1.5,
     )
 
@@ -610,17 +670,31 @@ def _configure_siliconflow_llm(
 
 
 def configure_llamaindex_for_siliconflow() -> None:
-    """
-    配置 LlamaIndex 使用 SiliconFlow LLM（使用默认配置）
+    """配置 LlamaIndex 使用 SiliconFlow LLM（从注册表获取默认 LLM）"""
+    from rag.config import get_model_registry
+    from kb_core.database import init_vendor_db
 
-    注册 DeepSeek-V3.2 模型的上下文窗口和 tokenizer，
-    使 LlamaIndex 能正确处理该模型。
-    """
-    settings = get_settings()
+    registry = get_model_registry()
+    model = registry.get_default("llm")
+    if not model:
+        raise ValueError("No default LLM configured. Please add a model via CLI: uv run llamaindex-study model add --help")
+
+    vendor_db = init_vendor_db()
+    vendor = vendor_db.get(model.get("vendor_id") or "")
+    if not vendor:
+        raise ValueError(f"Vendor {model.get('vendor_id')} not found. Please configure via CLI.")
+
+    api_key = vendor.get("api_key")
+    api_base = vendor.get("api_base")
+    if not api_key:
+        raise ValueError(f"API key not configured for vendor {model.get('vendor_id')}. Run: uv run llamaindex-study vendor update {model.get('vendor_id')} --api-key=YOUR_KEY")
+    if not api_base:
+        raise ValueError(f"API base not configured for vendor {model.get('vendor_id')}.")
+
     _configure_siliconflow_llm(
-        model=settings.siliconflow_model,
-        api_key=settings.siliconflow_api_key,
-        api_base=settings.siliconflow_base_url,
+        model=model["name"],
+        api_key=api_key,
+        api_base=api_base,
     )
 
 
@@ -970,9 +1044,9 @@ class OllamaWithSiliconFlowFallback:
 
     def _get_fallback_llm(self) -> Any:
         if self._fallback_llm is None:
-            settings = get_settings()
             from llama_index.llms.openai import OpenAI
             from llama_index.llms.openai.utils import ALL_AVAILABLE_MODELS
+            from kb_core.database import init_vendor_db
 
             model_name = FALLBACK_SILICONFLOW_MODEL
             if model_name not in ALL_AVAILABLE_MODELS:
@@ -986,10 +1060,18 @@ class OllamaWithSiliconFlowFallback:
 
                 tm.MODEL_TO_ENCODING[model_name] = "cl100k_base"
 
+            vendor_db = init_vendor_db()
+            vendor = vendor_db.get("siliconflow")
+            api_key = vendor.get("api_key") if vendor else None
+            api_base = vendor.get("api_base") if vendor else "https://api.siliconflow.cn/v1"
+
+            if not api_key:
+                raise ValueError("SiliconFlow API key not configured for fallback. Run: uv run llamaindex-study vendor update siliconflow --api-key=YOUR_KEY")
+
             self._fallback_llm = OpenAI(
                 model=model_name,
-                api_key=settings.siliconflow_api_key or "",
-                api_base=settings.siliconflow_base_url,
+                api_key=api_key,
+                api_base=api_base,
             )
         return self._fallback_llm
 
@@ -1152,10 +1234,14 @@ class RetryableSiliconFlowLLM:
     def _get_fallback_llm(self) -> Any:
         """获取降级用的 Ollama LLM"""
         if self._fallback_llm is None:
-            settings = get_settings()
+            from kb_core.database import init_vendor_db
+            vendor_db = init_vendor_db()
+            vendor = vendor_db.get("ollama")
+            if not vendor or not vendor.get("api_base"):
+                raise ValueError("Ollama vendor not configured for fallback. Run: uv run llamaindex-study vendor add ollama --url=YOUR_OLLAMA_URL")
             self._fallback_llm = RetryableOllama(
                 model=self._fallback_model,
-                base_url=settings.ollama_base_url,
+                base_url=vendor["api_base"],
                 max_retries=5,
                 initial_delay=2.0,
                 backoff_factor=1.5,
@@ -1431,9 +1517,9 @@ def create_llm(
         vendor_info = vendor_db.get(vendor_id) if vendor_id else None
 
         if vendor_id.startswith("ollama"):
-            base_url = (
-                vendor_info.get("api_base") if vendor_info else None
-            ) or get_settings().ollama_base_url
+            if not vendor_info or not vendor_info.get("api_base"):
+                raise ValueError(f"Ollama vendor {vendor_id} not configured. Run: uv run llamaindex-study vendor add --help")
+            base_url = vendor_info["api_base"]
             primary_llm = RetryableOllama(
                 model=model_info["name"],
                 base_url=base_url,
@@ -1443,17 +1529,19 @@ def create_llm(
             )
             return OllamaWithSiliconFlowFallback(primary_llm)
         else:
-            api_key = (
-                vendor_info.get("api_key") if vendor_info else None
-            ) or get_settings().siliconflow_api_key
-            api_base = (
-                vendor_info.get("api_base") if vendor_info else None
-            ) or get_settings().siliconflow_base_url
+            if not vendor_info:
+                raise ValueError(f"Vendor {vendor_id} not configured. Run: uv run llamaindex-study vendor add --help")
+            api_key = vendor_info.get("api_key")
+            api_base = vendor_info.get("api_base")
+            if not api_key:
+                raise ValueError(f"API key not configured for vendor {vendor_id}. Run: uv run llamaindex-study vendor update {vendor_id} --api-key=YOUR_KEY")
+            if not api_base:
+                raise ValueError(f"API base not configured for vendor {vendor_id}.")
 
             return RetryableSiliconFlowLLM(
                 model=model_info["name"],
-                api_key=api_key or "",
-                api_base=api_base or "",
+                api_key=api_key,
+                api_base=api_base,
                 max_retries=3,
                 initial_delay=2.0,
                 backoff_factor=1.5,
@@ -1505,9 +1593,9 @@ def configure_embed_model_by_model_id(model_id: str) -> OllamaEmbedding:
     vendor_db = init_vendor_db()
     vendor_info = vendor_db.get(vendor_id) if vendor_id else None
 
-    base_url = (
-        vendor_info.get("api_base") if vendor_info else None
-    ) or get_settings().ollama_base_url
+    if not vendor_info or not vendor_info.get("api_base"):
+        raise ValueError(f"Vendor {vendor_id} not configured. Run: uv run llamaindex-study vendor add --help")
+    base_url = vendor_info["api_base"]
 
     settings = get_settings()
     is_ollama = vendor_id.startswith("ollama") or model_id.startswith("ollama")
@@ -1516,8 +1604,8 @@ def configure_embed_model_by_model_id(model_id: str) -> OllamaEmbedding:
         embed_model = OllamaEmbedder(
             model_name=model_info["name"],
             base_url=base_url,
-            max_retries=settings.ollama_max_retries,
-            initial_delay=settings.ollama_retry_delay,
+            max_retries=settings.max_retries,
+            initial_delay=settings.retry_delay,
             backoff_factor=1.5,
         )
     else:
@@ -1675,6 +1763,7 @@ def create_siliconflow_embedding(
     model: str = "Pro/BAAI/bge-m3",
     api_key: Optional[str] = None,
     base_url: Optional[str] = None,
+    internal_model_id: Optional[str] = None,
 ):
     """创建 SiliconFlow embedding 模型"""
     from rag.embedding_service import SiliconFlowEmbedding
@@ -1683,6 +1772,7 @@ def create_siliconflow_embedding(
         model=model,
         api_key=api_key,
         base_url=base_url,
+        internal_model_id=internal_model_id,
     )
 
 
