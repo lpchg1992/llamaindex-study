@@ -70,8 +70,6 @@ logs/
 .api.pid
 .api.lock
 .api_restart_required
-.sysphus/
+.sisyphus/
 .test_llamaindex/
 .frontend.pid
-
-.sisyphus/
