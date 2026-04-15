@@ -1703,7 +1703,7 @@ class ChunkDB:
             "parent_chunk_id": row.parent_chunk_id,
             "hierarchy_level": row.hierarchy_level,
             "metadata": _json_load(row.metadata_json, {}),
-            "embedding_generated": bool(row.embedding_generated),
+            "embedding_generated": row.embedding_generated,
             "created_at": row.created_at,
             "updated_at": row.updated_at,
         }

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useKBs, useLanceStats, useLanceDuplicates, useDocuments, useDocumentChunks, useDeleteDocument, useUpdateChunk, useReembedChunk, useDeleteChunk, useChunkChildren, useDocEmbeddingStats } from '@/api/hooks'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -150,11 +151,13 @@ function DocumentManagementTab({ kbId }: { kbId: string }) {
   const [chunkPageSize] = useState(20)
   const [chunkPageInput, setChunkPageInput] = useState('')
   const [chunkFilter, setChunkFilter] = useState<number | null>(null)
+  const [reembeddingChunkId, setReembeddingChunkId] = useState<string | null>(null)
   const { data: chunksData, isLoading: chunksLoading, refetch: refetchChunks } = useDocumentChunks(kbId, expandedDoc || '', chunkPage, chunkPageSize, chunkFilter)
   const { data: childrenData, isLoading: childrenLoading } = useChunkChildren(kbId, deletingChunk?.id || '')
   const updateChunk = useUpdateChunk()
   const reembedChunk = useReembedChunk()
   const deleteChunk = useDeleteChunk()
+  const queryClient = useQueryClient()
 
   const docStatsMap = docStats?.docs?.reduce((acc, d) => {
     acc[d.doc_id] = d
@@ -180,12 +183,19 @@ function DocumentManagementTab({ kbId }: { kbId: string }) {
   }
 
   const handleReembed = async (chunk: ChunkInfo) => {
-    const result = await reembedChunk.mutateAsync({ kbId, chunkId: chunk.id })
-    if (result.status === 'success') {
-      toast.success('Chunk reembedded successfully')
-      refetchChunks()
-    } else {
-      toast.error(result.message || 'Reembed failed')
+    setReembeddingChunkId(chunk.id)
+    try {
+      const result = await reembedChunk.mutateAsync({ kbId, chunkId: chunk.id })
+      if (result.status === 'success') {
+        toast.success('Chunk reembedded successfully')
+        refetchChunks()
+        queryClient.invalidateQueries({ queryKey: ['doc-embedding-stats', kbId] })
+        queryClient.invalidateQueries({ queryKey: ['documents', kbId] })
+      } else {
+        toast.error(result.message || 'Reembed failed')
+      }
+    } finally {
+      setReembeddingChunkId(null)
     }
   }
 
@@ -402,10 +412,10 @@ function DocumentManagementTab({ kbId }: { kbId: string }) {
                             variant="ghost"
                             size="icon"
                             onClick={() => handleReembed(chunk)}
-                            disabled={reembedChunk.isPending}
+                            disabled={reembeddingChunkId !== null}
                             title="Reembed"
                           >
-                            <RefreshCw className={`h-4 w-4 ${reembedChunk.isPending ? 'animate-spin' : ''}`} />
+                            <RefreshCw className={`h-4 w-4 ${reembeddingChunkId === chunk.id ? 'animate-spin' : ''}`} />
                           </Button>
                         )}
                         <Button
@@ -424,7 +434,17 @@ function DocumentManagementTab({ kbId }: { kbId: string }) {
                         </Button>
                       </div>
                     </div>
-                    <p className="text-sm whitespace-pre-wrap break-words">{chunk.text}</p>
+                    <p className="text-sm whitespace-pre-wrap break-words">
+                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs mb-2 ${
+                          chunk.embedding_generated === 1 ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' :
+                          chunk.embedding_generated === 0 ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400' :
+                          'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
+                        }`}>
+                          {chunk.embedding_generated === 1 ? '✓ Embedded' :
+                           chunk.embedding_generated === 0 ? '○ Pending' : '✗ Failed'}
+                        </span>
+                        {' '}{chunk.text}
+                      </p>
                     {chunk.parent_chunk_id && (
                       <p className="text-xs text-muted-foreground mt-2">
                         Parent: <code className="font-mono">{chunk.parent_chunk_id}</code>
