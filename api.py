@@ -91,12 +91,10 @@ logger = get_logger(__name__)
 
 # 导入服务层
 from kb_core.services import (
-    VectorStoreService,
     ObsidianService,
     ZoteroService,
     KnowledgeBaseService,
     SearchService,
-    TaskService,
 )
 from kb_core.import_service import ImportApplicationService, ImportRequest
 from rag.rag_evaluator import RAGEvaluator, RAGMetrics
@@ -2742,7 +2740,15 @@ def reembed_chunk(kb_id: str, chunk_id: str):
         LanceCRUDService.upsert_vector(
             chunk_id, chunk["doc_id"], embedding, kb_id=kb_id
         )
-        chunk_db.mark_embedded(chunk_id)
+        try:
+            chunk_db.mark_embedded(chunk_id)
+        except Exception as mark_err:
+            # Compensation: delete vector from LanceDB since DB update failed
+            try:
+                LanceCRUDService.delete_by_chunk_ids(kb_id, [chunk_id])
+            except Exception:
+                pass  # Best effort compensation
+            raise Exception(f"DB update failed after vector write: {mark_err}")
         return {
             "status": "success",
             "chunk_id": chunk_id,
@@ -2751,71 +2757,6 @@ def reembed_chunk(kb_id: str, chunk_id: str):
     except Exception as e:
         chunk_db.mark_failed_bulk([chunk_id])
         return {"status": "error", "chunk_id": chunk_id, "message": str(e)}
-
-
-@app.post("/kbs/{kb_id}/chunks/reembed-failed")
-def reembed_failed_chunks(kb_id: str, batch_size: int = 50):
-    """批量重新 embedding 所有失败的 chunks"""
-    from kb_core.database import init_chunk_db
-    from kb_storage.lance_crud import LanceCRUDService
-    from kb_processing.parallel_embedding import get_parallel_processor
-
-    chunk_db = init_chunk_db()
-    failed_chunks = chunk_db.get_failed_chunks(kb_id, limit=10000)
-
-    if not failed_chunks:
-        return {
-            "status": "success",
-            "message": "没有需要重新 embedding 的 chunks",
-            "processed": 0,
-            "failed": 0,
-        }
-
-    processor = get_parallel_processor()
-    if not processor.endpoints:
-        return {
-            "status": "error",
-            "message": "没有可用的 embedding 端点",
-            "processed": 0,
-            "failed": len(failed_chunks),
-        }
-
-    processed = 0
-    failed = 0
-    failed_ids = []
-
-    for chunk in failed_chunks:
-        try:
-            import asyncio
-
-            ep_name = processor.endpoints[0].name
-            ep_name, embedding, error = asyncio.run(
-                processor.get_embedding(chunk["text"], ep_name)
-            )
-            if error:
-                raise Exception(error)
-            LanceCRUDService.upsert_vector(
-                chunk["id"], chunk["doc_id"], embedding, kb_id=kb_id
-            )
-            chunk_db.mark_embedded(chunk["id"])
-            processed += 1
-        except Exception as e:
-            logger.warning(f"Re-embed chunk {chunk['id']} failed: {e}")
-            failed_ids.append(chunk["id"])
-            failed += 1
-
-        if processed % batch_size == 0:
-            logger.info(f"Re-embedded {processed}/{len(failed_chunks)} chunks")
-
-    if failed_ids:
-        chunk_db.mark_failed_bulk(failed_ids)
-
-    return {
-        "status": "success",
-        "processed": processed,
-        "failed": failed,
-        "message": f"处理完成: {processed} 成功, {failed} 失败",
-    }
 
 
 @app.post("/kbs/{kb_id}/chunks/revector")

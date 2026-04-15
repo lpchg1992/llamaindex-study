@@ -949,7 +949,14 @@ class TaskExecutor:
                     LanceCRUDService.upsert_vector(
                         chunk_id, doc_ids[idx], embedding, kb_id=kb_id
                     )
-                    chunk_db.mark_embedded(chunk_id)
+                    try:
+                        chunk_db.mark_embedded(chunk_id)
+                    except Exception as mark_err:
+                        try:
+                            LanceCRUDService.delete_by_chunk_ids(kb_id, [chunk_id])
+                        except Exception:
+                            pass
+                        raise Exception(f"DB update failed after vector write: {mark_err}")
                     stats["success"] += 1
 
                 except Exception as e:
