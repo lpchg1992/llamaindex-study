@@ -16,7 +16,6 @@ from sqlalchemy import (
     delete,
     event,
     func,
-    inspect,
     select,
     update,
 )
@@ -219,10 +218,27 @@ def _json_load(data: Optional[str], default: Any) -> Any:
 
 
 class DatabaseManager:
+    """
+    SQLite 数据库管理器（单例模式）
+
+    初始化流程:
+        get_db() → __new__() → __init__() → _register_sqlite_pragmas() → _init_database()
+                                                               ↓
+                                                    scripts/migrate.run_all_migrations()
+
+    数据流:
+        调用方 → session_scope() → Session → CRUD → commit/rollback → close()
+
+    self vs cls:
+        cls._instance: 类属性，所有实例共享（单例标志）
+        self._initialized: 实例属性，首次初始化后防止重复执行
+        hasattr(self, "_initialized"): 先查实例属性，再查类属性，所以能检测到
+    """
     _instance: Optional["DatabaseManager"] = None
     _lock = threading.Lock()
 
     def __new__(cls):
+        """线程安全的单例实现（双检锁）"""
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
@@ -230,6 +246,10 @@ class DatabaseManager:
         return cls._instance
 
     def __init__(self):
+        """
+        初始化数据库连接池和迁移（仅执行一次）
+        首次调用 get_db() 时触发，后续调用因 _initialized 存在而直接返回
+        """
         if hasattr(self, "_initialized"):
             return
         self._initialized = True
@@ -239,6 +259,10 @@ class DatabaseManager:
             future=True,
             connect_args={"timeout": 30, "check_same_thread": False},
         )
+        # scoped_session: 线程本地存储，同线程多次调用获同一 Session
+        # autoflush=False: 手动 flush，避免隐式 SQL
+        # autocommit=False: 手动提交
+        # expire_on_commit=False: 提交后不 expire 对象
         self._session_factory = scoped_session(
             sessionmaker(
                 bind=self.engine,
@@ -248,9 +272,15 @@ class DatabaseManager:
             )
         )
         self._register_sqlite_pragmas()
-        self._init_database()
+        # 新建不存在的表
+        Base.metadata.create_all(self.engine)
 
     def _register_sqlite_pragmas(self) -> None:
+        """
+        每次建立新连接时自动设置 SQLite PRAGMA
+        - journal_mode=WAL: 支持并发读写
+        - busy_timeout=30000: 30秒，避免数据库忙时直接报错
+        """
         @event.listens_for(self.engine, "connect")
         def _set_sqlite_pragmas(dbapi_connection, connection_record):
             cursor = dbapi_connection.cursor()
@@ -258,87 +288,16 @@ class DatabaseManager:
             cursor.execute("PRAGMA busy_timeout=30000")
             cursor.close()
 
-    def _init_database(self) -> None:
-        Base.metadata.create_all(self.engine)
-        self._migrate_legacy_models_table()
-        self._migrate_documents_zotero_doc_id()
-
-    def _migrate_documents_zotero_doc_id(self) -> None:
-        insp = inspect(self.engine)
-        if "documents" not in insp.get_table_names():
-            return
-        columns = {c["name"] for c in insp.get_columns("documents")}
-        if "zotero_doc_id" not in columns:
-            logger.info("迁移 documents 表：添加 zotero_doc_id 列")
-            with self.engine.begin() as conn:
-                conn.exec_driver_sql(
-                    "ALTER TABLE documents ADD COLUMN zotero_doc_id TEXT"
-                )
-                conn.exec_driver_sql(
-                    "CREATE INDEX IF NOT EXISTS idx_documents_zotero_doc_id ON documents(zotero_doc_id)"
-                )
-            self._backfill_zotero_doc_id()
-
-    def _backfill_zotero_doc_id(self) -> None:
-        import re
-
-        with self.engine.begin() as conn:
-            result = conn.exec_driver_sql(
-                "SELECT id FROM documents WHERE zotero_doc_id IS NULL AND id LIKE 'zotero_%'"
-            )
-            rows = result.fetchall()
-        if not rows:
-            return
-        updated = 0
-        for row in rows:
-            doc_id = row[0]
-            m = re.match(r"^zotero_(\d+)", doc_id)
-            if m:
-                zotero_doc_id = m.group(1)
-                with self.engine.begin() as conn:
-                    conn.exec_driver_sql(
-                        "UPDATE documents SET zotero_doc_id = ? WHERE id = ?",
-                        (zotero_doc_id, doc_id),
-                    )
-                updated += 1
-        logger.info(f"回填 zotero_doc_id 完成，共更新 {updated} 条记录")
-
-    def _migrate_legacy_models_table(self) -> None:
-        insp = inspect(self.engine)
-        if "models" not in insp.get_table_names():
-            return
-        columns = {c["name"] for c in insp.get_columns("models")}
-        if "vendor" not in columns or "vendor_id" in columns:
-            return
-        logger.warning("检测到旧版 models 表，正在迁移数据...")
-        with self.engine.begin() as conn:
-            conn.exec_driver_sql("ALTER TABLE models RENAME TO models_old")
-            conn.exec_driver_sql(
-                """
-                CREATE TABLE IF NOT EXISTS models (
-                    id TEXT PRIMARY KEY,
-                    vendor_id TEXT NOT NULL,
-                    name TEXT NOT NULL,
-                    type TEXT NOT NULL,
-                    is_active INTEGER DEFAULT 1,
-                    is_default INTEGER DEFAULT 0,
-                    config TEXT DEFAULT '{}',
-                    created_at REAL NOT NULL,
-                    updated_at REAL NOT NULL
-                )
-                """
-            )
-            conn.exec_driver_sql(
-                """
-                INSERT INTO models (id, vendor_id, name, type, is_active, is_default, config, created_at, updated_at)
-                SELECT id, vendor, name, type, is_active, is_default, config, created_at, updated_at FROM models_old
-                """
-            )
-            conn.exec_driver_sql("DROP TABLE models_old")
-        logger.warning("models 表迁移完成")
-
+    # Session 生命周期管理器：自动 commit/rollback，线程安全
+    # 用法: with db.session_scope() as session: session.execute(...)
     @contextmanager
     def session_scope(self) -> Generator[Session, None, None]:
+        """
+        获取线程安全的 Session，自动管理事务
+        用法: with db.session_scope() as session: session.execute(...)
+        成功: 自动 commit 并 close
+        异常: 自动 rollback 并 close
+        """
         session = self._session_factory()
         try:
             yield session
@@ -351,14 +310,28 @@ class DatabaseManager:
 
     @contextmanager
     def get_connection(self):
+        """
+        获取原始数据库连接（engine.begin()，自动管理事务）
+        与 session_scope 的区别: 无 Session 包装，直接使用 SQLAlchemy Connection 对象
+        应用场景: 执行原生 SQL、DDL、批量写入等不需要 ORM 的场景
+        """
         with self.engine.begin() as conn:
             yield conn
 
     def execute(self, sql: str, params: tuple | dict = ()):
+        """
+        执行单条原生 SQL（自动事务）
+        应用场景: 快速执行 DDL、count 查询等简单操作
+        """
         with self.engine.begin() as conn:
             return conn.exec_driver_sql(sql, params)
 
     def executemany(self, sql: str, params_list: List[tuple]):
+        """
+        批量执行同一 SQL（自动事务）
+        应用场景: 批量插入、批量更新
+        注意: 非真正的 executemany，手动循环执行每条
+        """
         with self.engine.begin() as conn:
             cursor = None
             for params in params_list:
@@ -366,9 +339,15 @@ class DatabaseManager:
             return cursor
 
     def commit(self):
+        """空实现（兼容旧代码）"""
         return None
 
     def vacuum(self):
+        """
+        压缩 SQLite 数据库文件（回收删除记录占用的空间）
+        应用场景: 大量删除数据后执行，减小数据库文件体积
+        注意: VACUUM 在单独的事务中执行，较慢
+        """
         with self.engine.begin() as conn:
             conn.exec_driver_sql("VACUUM")
 

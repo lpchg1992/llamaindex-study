@@ -259,36 +259,11 @@ class TaskQueue:
             cursor.execute("PRAGMA busy_timeout=30000")
             cursor.close()
 
-        self._init_db()
+        TaskBase.metadata.create_all(self.engine)
 
         # 活跃任务锁
         self._active_tasks: Dict[str, asyncio.Task] = {}
         self._task_events: Dict[str, asyncio.Event] = {}
-
-    def _init_db(self):
-        TaskBase.metadata.create_all(self.engine)
-        self._migrate_add_last_heartbeat()
-        self._migrate_add_file_progress()
-
-    def _migrate_add_last_heartbeat(self):
-        """迁移：添加 last_heartbeat 列（如果不存在）"""
-        from sqlalchemy import inspect
-
-        inspector = inspect(self.engine)
-        columns = [c["name"] for c in inspector.get_columns("tasks")]
-        if "last_heartbeat" not in columns:
-            with self.engine.begin() as conn:
-                conn.exec_driver_sql("ALTER TABLE tasks ADD COLUMN last_heartbeat REAL")
-
-    def _migrate_add_file_progress(self):
-        """迁移：添加 file_progress 列（如果不存在）"""
-        from sqlalchemy import inspect
-
-        inspector = inspect(self.engine)
-        columns = [c["name"] for c in inspector.get_columns("tasks")]
-        if "file_progress" not in columns:
-            with self.engine.begin() as conn:
-                conn.exec_driver_sql("ALTER TABLE tasks ADD COLUMN file_progress TEXT")
 
     @contextmanager
     def _session_scope(self) -> Session:
@@ -706,5 +681,5 @@ class TaskQueue:
         return processed_chunks, total_chunks
 
 
-# 全局实例
+# 全局实例，进程结束时释放
 task_queue = TaskQueue()
