@@ -11,7 +11,7 @@
 
 ## 当前状态（导入链路）
 
-- CLI / API / 脚本导入入口已统一到 `kb/import_service.py`
+- CLI / API / 脚本导入入口已统一到 `kb_core/import_service.py`
 - 导入类型统一为 `generic`、`obsidian`、`zotero`
 - 导入语义统一：
   - `async_mode`：控制同步/异步执行

@@ -163,22 +163,31 @@ curl -X POST http://localhost:37241/kbs/HTE_history/topics/refresh \
 ```
 llamaindex-study/
 ├── api.py                    # FastAPI 服务入口
-├── kb_cli/                   # CLI 入口模块
-├── rag/                      # 核心库
+├── kb_cli/                   # CLI 命令实现
+├── rag/                      # 核心库（RAG 组件）
 │   ├── config.py             # 配置管理
-│   ├── vector_store.py       # 向量数据库
+│   ├── vector_store.py       # 向量数据库（ LanceDB）
 │   ├── query_engine.py       # 查询引擎
-│   └── node_parser.py        # 节点解析器
-├── kb_core/                  # 核心服务
+│   ├── node_parser.py        # 节点解析器
+│   ├── embedding_service.py  # Embedding 服务
+│   ├── reranker.py           # 重排序
+│   └── rag_evaluator.py      # RAG 评估
+├── kb_core/                  # 核心服务（业务逻辑）
+│   ├── services.py           # 核心服务类
+│   ├── scheduler.py          # 调度器入口（独立进程）
+│   ├── task_executor.py      # 任务执行器
+│   └── import_service.py     # 导入服务（统一入口）
 ├── kb_storage/               # 存储服务
-├── kb_processing/            # 处理服务
-├── kb_analysis/              # 分析服务
-├── kb_utils/                 # 工具函数
+├── kb_processing/            # 处理服务（Embedding 等）
+│   └── parallel_embedding.py # 并行 Embedding 处理器
+├── kb_analysis/              # 分析服务（topics、keywords）
 ├── kb_obsidian/              # Obsidian 集成
 ├── kb_zotero/                # Zotero 集成
-├── kb/                       # 兼容包（空）
+├── scripts/                  # 工具脚本
+├── webui/                    # Web UI (React)
 └── docs/                     # 文档
     ├── API.md
     ├── CLI.md
-    └── ARCHITECTURE.md
+    ├── ARCHITECTURE.md
+    └── README.md
 ```

@@ -12,7 +12,7 @@
 
 基于 FastAPI 的 RAG（检索增强生成）API 服务，支持：
 
-- **并行多端点 Ollama** - 本地 + 远程自适应负载均衡，快的多处理，慢的少处理
+- **并行多端点 Ollama** - 多端点自适应负载均衡（inflight 最少优先），Ollama 全部失败时自动切换 SiliconFlow
 - **失败重试机制** - 每个端点最多重试 3 次
 - **任务队列** - 异步提交，随时查询状态
 - **增量同步** - 基于文件哈希检测变更
@@ -38,19 +38,19 @@ uv run python api.py
 
 ### 并行多端点 Ollama（自适应负载均衡）
 
-导入任务使用**本地 + 远程 Ollama 自适应分配**：
+导入任务使用**多 Ollama 端点自适应分配**：
 
 - **队列机制**：所有 chunk 进入共享队列
-- **自动均衡**：每个端点处理完一个后自动取下一个
-- **速度自适应**：处理快的端点分配更多任务，处理慢的少分配
+- **负载均衡**：选择 inflight 最少的端点，避免过载
+- **自动恢复**：Ollama 端点失败时会重试健康检查，恢复后自动重新启用
 
 ```
 Chunk 队列：
 [Chunk 1] [Chunk 2] [Chunk 3] [Chunk 4] [Chunk 5] ...
 
-端点分配（快的多处理）：
-本地 Ollama  ──→ Chunk 1, Chunk 3, Chunk 5 ...  （假设处理快）
-远程 Ollama  ──→ Chunk 2, Chunk 4 ...          （处理较慢）
+端点分配（inflight 最少优先）：
+Ollama-PC     ──→ Chunk 1, Chunk 3, Chunk 5 ...
+Ollama-Server ──→ Chunk 2, Chunk 4 ...
 ```
 
 端点配置基于数据库中的 `vendor` 和 `model` 表，通过健康检查动态选择。所有 Ollama 端点均通过健康检查调度，全部失败时自动 fallback 到 SiliconFlow。
@@ -81,8 +81,8 @@ curl "http://localhost:37241/tasks/abc12345"
     "files": 26,
     "nodes": 248,
     "endpoint_stats": {
-      "本地": 124,
-      "远程": 124
+      "Ollama-PC": 124,
+      "Ollama-Server": 124
     }
   }
 }
@@ -432,8 +432,8 @@ curl http://localhost:37241/tasks/abc12345
     "files": 26,
     "nodes": 248,
     "endpoint_stats": {
-      "本地": 124,
-      "远程": 124
+      "Ollama-PC": 124,
+      "Ollama-Server": 124
     }
   },
   "error": null
@@ -517,7 +517,7 @@ curl -X POST "http://localhost:37241/kbs/my_kb/ingest" \
 
 #### POST /kbs/{kb_id}/ingest/obsidian
 
-Obsidian vault 导入（本地+远程并行处理）：
+Obsidian vault 导入（多端点并行处理）：
 
 ```bash
 curl -X POST "http://localhost:37241/kbs/tech_tools/ingest/obsidian" \
@@ -1567,8 +1567,8 @@ while True:
 
 # 3. 查看端点统计
 if r["result"]:
-    print(f"本地: {r['result']['endpoint_stats']['本地']}")
-    print(f"远程: {r['result']['endpoint_stats']['远程']}")
+    print(f"Ollama-PC: {r['result']['endpoint_stats']['Ollama-PC']}")
+    print(f"Ollama-Server: {r['result']['endpoint_stats']['Ollama-Server']}")
 
 # 4. 搜索
 r = requests.post(f"{BASE}/search",
@@ -1618,8 +1618,8 @@ curl -X POST "http://localhost:37241/search" \
   "nodes": 248,
   "sources": ["/path/to/file1.md", "/path/to/file2.md"],
   "endpoint_stats": {
-    "本地": 124,
-    "远程": 124
+    "Ollama-PC": 124,
+    "Ollama-Server": 124
   },
   "chunk_strategy": "hierarchical"
 }

@@ -8,26 +8,48 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        任务执行流程                               │
+│                     任务执行流程（独立进程模式）                   │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
-│   任务提交 ──→ 调度器 ──→ documents 表（串行访问）              │
-│       │                    │                                   │
-│       │                    ▼                                   │
-│       │              Embedding 处理                             │
-│       │              ┌──────────┬──────────┐                  │
-│       │              │ 本地     │ 远程     │ ← 自适应均衡      │
-│       │              │ Ollama   │ Ollama   │                  │
-│       │              └──────────┴──────────┘                  │
-│       │                    │                                   │
-│       │                    ▼                                   │
-│       │              LanceDBWriteQueue ──→ LanceDB（串行写入） │
-│       │                                                        │
-│       ▼                                                        │
-│   任务状态更新（可随时查询）                                    │
+│   API/CLI ──→ TaskQueue ──→ Scheduler ──→ TaskExecutor        │
+│     │                           │              │                 │
+│     │                           │              ▼                 │
+│     │                           │        documents 表            │
+│     │                           │              │                 │
+│     │                           │              ▼                 │
+│     │                           │        Embedding 处理          │
+│     │                           │        ┌─────────────────┐    │
+│     │                           │        │ Ollama 端点 1   │    │
+│     │                           │        │ Ollama 端点 2   │    │ ← 从 DB 加载
+│     │                           │        │ ...            │    │
+│     │                           │        │ SiliconFlow    │    │ ← 自动 fallback
+│     │                           │        └─────────────────┘    │
+│     │                           │              │                 │
+│     │                           │              ▼                 │
+│     │                           │      LanceDBWriteQueue        │
+│     │                           │              │                 │
+│     ▼                           ▼              ▼                 │
+│   WebSocket 推送 ←──────── 任务状态更新                          │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
+
+进程关系：
+┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+│   API 进程   │────▶│ TaskQueue    │◀────│ Scheduler    │
+│  (FastAPI)   │     │  (SQLite)    │     │  (独立进程)   │
+└──────────────┘     └──────────────┘     └──────┬───────┘
+                                                   │
+                     ┌──────────────┐              │
+                     │ TaskExecutor │◀─────────────┘
+                     │  (调度器子逻辑) │
+                     └──────────────┘
 ```
+
+**说明：**
+- **TaskQueue**：SQLite 持久化队列，API 将任务放入队列
+- **Scheduler**：独立进程（`kb_core/scheduler.py`），定时轮询 TaskQueue，分发任务给 TaskExecutor
+- **TaskExecutor**：执行具体任务（文档解析、Embedding、写入 LanceDB）
+- **WebSocket**：任务状态实时推送
 
 ## 关键设计决策
 
@@ -35,7 +57,7 @@
 
 | 层级 | 组件 | 并行/串行 | 原因 |
 |------|------|----------|------|
-| 计算层 | Embedding | **自适应负载均衡** | 快的端点多分配，慢的端点少分配 |
+| 计算层 | Embedding | **自适应负载均衡** | inflight 最少的端点优先分配 |
 | 存储层 | documents 表 | 串行 | SQLite 不支持高并发 |
 | 存储层 | LanceDB | 串行 | WriteQueue 避免锁定 |
 
@@ -70,7 +92,7 @@ class LanceDBWriteQueue:
 ### 3. 并行 Embedding 处理器（自适应负载均衡 + 动态健康检查）
 
 ```python
-# kb/parallel_embedding.py
+# kb_processing/parallel_embedding.py
 class ParallelEmbeddingProcessor:
     def __init__(self):
         self.endpoints = self._load_embedding_endpoints()
@@ -104,15 +126,25 @@ class ParallelEmbeddingProcessor:
             await asyncio.sleep(self._health_check_interval)
 
     def _get_best_endpoint(self) -> EmbeddingEndpoint:
-        """选择健康且负载最低的端点"""
-        healthy_eps = [ep for ep in self.endpoints if ep.is_healthy]
-        if not healthy_eps:
-            # 积极恢复：复活所有端点
-            for ep in self.endpoints:
-                ep.is_healthy = True
-                self._consecutive_failures[ep.name] = 0
-            healthy_eps = self.endpoints.copy()
-        return min(healthy_eps, key=lambda ep: ep.avg_latency)
+        """选择当前最优的端点（基于健康状态、速度和负载）
+
+        规则：
+        - 只从 is_healthy=True 的 Ollama 端点中选择
+        - SiliconFlow 作为 fallback 始终可用
+        - 选择 inflight 最少的端点，避免过载
+        - 所有 Ollama 不健康时自动切换 SiliconFlow
+        """
+        with self._lock:
+            healthy_eps = [
+                ep for ep in self.endpoints
+                if ep.is_healthy and ep.url != "siliconflow://"
+            ]
+            if healthy_eps:
+                # 选择 inflight 最少的端点
+                best_ep = min(healthy_eps, key=lambda ep: ep.inflight)
+                return best_ep
+            # 所有 Ollama 不健康，尝试重新检查
+            # ... (fallback to SiliconFlow)
 ```
 
 **端点发现流程**：
@@ -235,7 +267,7 @@ async def _execute_obsidian(self, task):
 ### 2. 并行 Embedding 处理器（自适应负载均衡 + 数据库驱动）
 
 ```python
-# kb/parallel_embedding.py
+# kb_processing/parallel_embedding.py
 
 class ParallelEmbeddingProcessor:
     """并行 Embedding 处理器（自适应负载均衡 + DB 驱动端点发现）"""
@@ -283,15 +315,23 @@ class ParallelEmbeddingProcessor:
             return False
 
     def _get_best_endpoint(self) -> EmbeddingEndpoint:
-        """选择健康且负载最低的端点，无健康端点时尝试复活"""
-        healthy = [ep for ep in self.endpoints if ep.is_healthy]
-        if not healthy:
-            # 积极恢复：复活所有端点
-            for ep in self.endpoints:
-                ep.is_healthy = True
-                self._consecutive_failures[ep.name] = 0
-            healthy = self.endpoints.copy()
-        return min(healthy, key=lambda ep: ep.avg_latency)
+        """选择当前最优的端点（基于健康状态、速度和负载）
+
+        规则：
+        - 只从 is_healthy=True 的 Ollama 端点中选择
+        - SiliconFlow 作为 fallback 始终可用
+        - 选择 inflight 最少的端点，避免过载
+        - 所有 Ollama 不健康时自动切换 SiliconFlow
+        """
+        with self._lock:
+            healthy_eps = [
+                ep for ep in self.endpoints
+                if ep.is_healthy and ep.url != "siliconflow://"
+            ]
+            if healthy_eps:
+                return min(healthy_eps, key=lambda ep: ep.inflight)
+            # 所有 Ollama 不健康，尝试重新检查后 fallback 到 SiliconFlow
+            # ...
 ```
 
 **端点发现流程**：
@@ -663,7 +703,7 @@ configure_llm_by_model_id("ollama/lfm2.5-thinking:latest")
 ## 任务队列系统
 
 ```
-API 提交任务
+API/CLI 提交任务
     │
     ▼
 ┌─────────────────────┐
@@ -675,8 +715,8 @@ API 提交任务
           │
           ▼
 ┌─────────────────────┐
-│   TaskScheduler     │  # 调度器（asyncio）
-│  - 定时检查待处理任务│
+│   TaskScheduler     │  # 独立进程（asyncio）
+│  - 定时检查待处理任务│     kb_core/scheduler.py
 │  - 分配执行器       │
 │  - 并发控制         │
 └─────────┬───────────┘
@@ -693,6 +733,11 @@ API 提交任务
           ▼
     WebSocket 推送
 ```
+
+**进程架构：**
+- **API 进程**：FastAPI 服务，接收请求，操作 TaskQueue
+- **Scheduler 进程**：独立运行（`python -m kb_core.scheduler`），通过 PID file 管理，与 API 解耦
+- **TaskExecutor**：运行在 Scheduler 进程内，执行具体任务
 
 ## 数据流
 
@@ -724,7 +769,7 @@ API 提交任务
 
 5. 任务完成
    └── TaskQueue.complete_task()
-       └── {"files": 26, "nodes": 248, "endpoint_stats": {"本地": 124, "远程": 124}}
+       └── {"files": 26, "nodes": 248, "endpoint_stats": {"Ollama-PC": 124, "Ollama-Server": 124}}
 ```
 
 ### 自动路由机制
@@ -1218,20 +1263,20 @@ RETRY_DELAY=1.0
 ### 配置常量（代码中）
 
 ```python
-# kb/registry.py
+# rag/config.py
 # 注意：实际路径由环境变量 PERSIST_DIR 和 ZOTERO_PERSIST_DIR 配置
 # 通用 KB: PERSIST_DIR/{kb_id}/
 # Zotero KB: ZOTERO_PERSIST_DIR/{kb_id}/
 DEFAULT_STORAGE_ROOT = Path.home() / ".llamaindex" / "storage"  # 仅作默认值参考
 DEFAULT_VAULT_ROOT = Path.home() / "Documents" / "Obsidian Vault"
 
-# kb/parallel_embedding.py
+# kb_processing/parallel_embedding.py
 EMBEDDING_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "bge-m3")
 EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "1024"))
 MAX_RETRIES = 5
 RETRY_DELAY = 2.0
 
-# kb/task_executor.py
+# kb_core/task_executor.py
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "512"))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "50"))
 PROGRESS_UPDATE_INTERVAL = int(os.getenv("PROGRESS_UPDATE_INTERVAL", "10"))
