@@ -4,6 +4,116 @@
 使用 asyncio + ThreadPoolExecutor 实现真正的并行处理
 支持多端点（本地+远程）同时工作
 采用队列机制 + 自适应负载均衡：处理快的端点分配更多任务
+
+================================================================================
+架构概览 (Architecture Overview)
+================================================================================
+
+  ParallelEmbeddingProcessor (单例)
+      │
+      ├─ endpoints: List[EmbeddingEndpoint]    ← 从 DB 加载 (ModelRegistry + VendorDB)
+      │       ├─ Ollama endpoints (本地/远程)
+      │       └─ SiliconFlow endpoint (云端 fallback)
+      │
+      ├─ _models: Dict[str, OllamaEmbedder]   ← 缓存的 Embedder 实例
+      │
+      └─ 健康检查循环 (background asyncio task)
+
+================================================================================
+端点加载流程 (Endpoint Loading Flow)
+================================================================================
+
+  _load_embedding_endpoints()
+      │
+      ├─ ModelRegistry.get_by_type("embedding")  ← 从 model DB 加载
+      ├─ VendorDB.get(vendor_id)                  ← 获取 api_base
+      │
+      ├─ 遍历创建 EmbeddingEndpoint:
+      │       ├─ name = "{vendor_name}({model_id})"
+      │       ├─ url = vendor.api_base
+      │       ├─ model_name = "{model_name}:latest"
+      │       └─ is_healthy = _health_check(url, model_name)
+      │
+      └─ 添加 SiliconFlow fallback endpoint (跳过健康检查)
+
+================================================================================
+端点分配策略 (Per-Chunk Execution-Time Allocation)
+================================================================================
+
+  两种处理方法的端点分配对比：
+
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │ process_batch_streaming()                                                    │
+  │                                                                               │
+  │   1. 提交任务时不预分配端点                                                   │
+  │   2. embedding_worker() 在实际执行时调用 _get_best_endpoint()                │
+  │   3. 此时能看到实时的 inflight 计数                                           │
+  │   4. 快的端点自然被分配更多任务                                               │
+  │                                                                               │
+  │   时序:                                                                       │
+  │   Submit → Task[N] waits → Task[N-1 completes → inflight-- → Task[N] starts │
+  │                              → _get_best_endpoint() sees real-time load       │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │ process_batch()                                                              │
+  │                                                                               │
+  │   1. 每个 worker thread 处理完一个 chunk 后，从队列取下一个                    │
+  │   2. 取下一个时调用 _get_best_endpoint()                                      │
+  │   3. 同样是执行时分配                                                        │
+  │                                                                               │
+  │   时序:                                                                       │
+  │   Worker[0] takes chunk[0] → Worker[1] takes chunk[1] → ...                   │
+  │   Worker[0] finishes → Worker[0] takes chunk[N] → _get_best_endpoint() sees   │
+  │                          real-time load                                       │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+  _get_best_endpoint() 选择规则：
+      ├─ 只从 is_healthy=True 的端点选择
+      ├─ inflight >= 3 的端点跳过（避免过载）
+      ├─ 按吞吐量 (chunks_completed/total_time) 评分
+      └─ Ollama 全不健康 → SiliconFlow fallback
+
+================================================================================
+健康检查机制 (Health Check Mechanism)
+================================================================================
+
+  _health_check_loop() (background task, 每30秒)
+      │
+      └─ 遍历所有 Ollama endpoints:
+              ├─ _sync_health_check_with_retry(ep)
+              │       └─ GET /api/tags (3次重试, 指数退避)
+              │
+              └─ 更新状态:
+                      ├─ 成功 → is_healthy=True, consecutive_failures=0
+                      └─ 失败 → consecutive_failures++, ≥3 → is_healthy=False
+
+  SiliconFlow 端点: 跳过健康检查，始终视为 healthy
+
+================================================================================
+调用统计 (Call Statistics)
+================================================================================
+
+  _record_embedding(ep, token_count, error)
+      │
+      └─ rag.ollama_utils._record_embedding_call()
+              └─ rag.callbacks.record_model_call()
+
+  统计维度:
+      ├─ _stats[ep.name]        ← 成功次数
+      ├─ _failures[ep.name]     ← 失败次数
+      ├─ ep.avg_latency         ← 平均延迟 (EMA)
+      └─ ep.chunks_completed    ← 完成 chunks 数
+
+================================================================================
+依赖关系 (Dependencies)
+================================================================================
+
+  rag.config.get_settings()           ← MAX_RETRIES, RETRY_DELAY
+  rag.config.get_model_registry()      ← 模型配置
+  kb_core.database.init_vendor_db()   ← Vendor 配置
+  rag.ollama_utils.OllamaEmbedder     ← Ollama 调用封装
+  rag.ollama_utils.create_siliconflow_embedding()  ← 云端 fallback
 """
 
 import asyncio
@@ -23,8 +133,6 @@ from rag.ollama_utils import OllamaEmbedder, create_ollama_embedding
 logger = get_logger(__name__)
 
 settings = get_settings()
-EMBEDDING_DIM = 1024
-
 
 def _get_default_embedding_model_name() -> str:
     from rag.embedding_service import get_default_embedding_from_registry
@@ -38,7 +146,7 @@ EmbeddingResult = Tuple[str, List[float], Optional[str]]
 
 
 class EmbeddingEndpoint:
-    """Embedding 端点配置（包含模型信息）"""
+    """Embedding 端点配置（包含模型信息和维度）"""
 
     def __init__(
         self,
@@ -46,11 +154,13 @@ class EmbeddingEndpoint:
         url: str,
         model_id: Optional[str] = None,
         model_name: Optional[str] = None,
+        dimensions: int = 1024,
     ) -> None:
         self.name = name
         self.url = url
         self.model_id = model_id
         self.model_name = model_name
+        self.dimensions = dimensions
         self.is_healthy = True
         self.avg_latency = 0.0
         self.inflight = 0
@@ -170,11 +280,15 @@ class ParallelEmbeddingProcessor:
             if not model_name.endswith(":latest"):
                 model_name = f"{model_name}:latest"
 
+            # 从模型配置读取 dimensions
+            model_dim = model_info.get("config", {}).get("dimensions", 1024)
+
             ep = EmbeddingEndpoint(
                 name=f"{vendor_info['name']}({model_info['id']})",
                 url=base_url,
                 model_id=model_info["id"],
                 model_name=model_name,
+                dimensions=model_dim,
             )
 
             is_healthy = self._health_check(base_url, model_name)
@@ -204,11 +318,13 @@ class ParallelEmbeddingProcessor:
             if vendor_info and vendor_info.get("api_base"):
                 model_id = sf_model_info["id"]
                 api_model = sf_model_info.get("config", {}).get("api_model") or f"Pro/BAAI/{sf_model_info['name']}"
+                sf_dim = sf_model_info.get("config", {}).get("dimensions", 1024)
                 sf_ep = EmbeddingEndpoint(
                     name=f"SiliconFlow({model_id})",
                     url="siliconflow://",
                     model_id=model_id,
                     model_name=api_model,
+                    dimensions=sf_dim,
                 )
                 sf_ep.is_healthy = True
                 endpoints.append(sf_ep)
@@ -430,7 +546,7 @@ class ParallelEmbeddingProcessor:
                 logger.error(
                     f"[Fallback] SiliconFlow 端点未配置，embedding 失败 (text_len={text_len})"
                 )
-                return (ep.name, [0.0] * EMBEDDING_DIM, "SiliconFlow 端点不可用")
+                return (ep.name, [0.0] * ep.dimensions, "SiliconFlow 端点不可用")
             model = self._get_model(sf_ep)
             try:
                 emb = model.get_text_embedding(text[:8192])
@@ -445,7 +561,7 @@ class ParallelEmbeddingProcessor:
                     f"[{sf_ep.name}] SiliconFlow fallback 失败 (text_len={text_len}): {type(sf_err).__name__}: {sf_err}"
                 )
                 self._record_embedding(sf_ep, 0, True)
-                return (sf_ep.name, [0.0] * EMBEDDING_DIM, str(sf_err))
+                return (sf_ep.name, [0.0] * sf_ep.dimensions, str(sf_err))
 
         if ep.url == "siliconflow://":
             return call_sf()
@@ -582,6 +698,14 @@ class ParallelEmbeddingProcessor:
         与 process_batch 不同，这个方法会在每个 embedding 完成后立即 yield，
         而不是等待所有完成。适合需要边处理边写入的场景。
 
+        端点分配策略：per-chunk execution-time allocation
+        - 每个 chunk 在实际执行时才选择端点（不是提交时预分配）
+        - _get_best_endpoint() 看到的是实时 inflight 计数
+        - 快的端点自然被分配更多任务
+        - unhealthy 的端点会被及时跳过
+
+        这与 process_batch() 的动态分配行为一致。
+
         Args:
             texts: 文本列表
             base_idx: 起始索引（用于多批次场景）
@@ -592,13 +716,25 @@ class ParallelEmbeddingProcessor:
         if not texts:
             return
 
-        self._chunk_queue = deque(range(len(texts)))
         futures: List[Tuple[int, asyncio.Task]] = []
         task_to_future: Dict[asyncio.Task, int] = {}
 
+        async def embedding_worker(text: str) -> EmbeddingResult:
+            """
+            单个 chunk 的 embedding 工作函数
+
+            关键设计：端点选择在**实际执行时**进行，而非任务提交时。
+            这确保了：
+            1. _get_best_endpoint() 能看到实时的 inflight 计数
+            2. 自适应负载均衡能真正生效
+            3. 动态响应端点健康状态变化
+            """
+            ep = self._get_best_endpoint()  # 执行时选择，而非提交时
+            return await self._run_embedding_in_thread(text, ep)
+
+        # 提交所有任务，端点选择延迟到实际执行时
         for i in range(len(texts)):
-            ep = self._get_best_endpoint()
-            coro = self._run_embedding_in_thread(texts[i], ep)
+            coro = embedding_worker(texts[i])
             task = asyncio.create_task(coro)
             futures.append((i, task))
             task_to_future[task] = i
@@ -612,7 +748,7 @@ class ParallelEmbeddingProcessor:
                 logger.warning(f"Embedding 流式处理失败 idx={idx}: {e}")
                 return (
                     base_idx + idx,
-                    (self.endpoints[0].name, [0.0] * EMBEDDING_DIM, str(e)),
+                    (self.endpoints[0].name, [0.0] * self.endpoints[0].dimensions, str(e)),
                 )
 
         for f in asyncio.as_completed([wait_for(t) for _, t in futures]):
@@ -686,7 +822,7 @@ class ParallelEmbeddingProcessor:
         return [
             r
             if r is not None
-            else (self.endpoints[0].name, [0.0] * EMBEDDING_DIM, "处理超时")
+            else (self.endpoints[0].name, [0.0] * self.endpoints[0].dimensions, "处理超时")
             for r in results
         ]
 
