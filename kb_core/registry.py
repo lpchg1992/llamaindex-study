@@ -9,7 +9,6 @@
 支持从数据库加载分类规则。
 """
 
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Dict, Any

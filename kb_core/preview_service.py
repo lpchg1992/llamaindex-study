@@ -5,7 +5,6 @@
 帮助用户在执行前确认范围是否符合预期。
 """
 
-import sqlite3
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass

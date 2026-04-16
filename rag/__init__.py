@@ -35,7 +35,6 @@ from rag.ollama_utils import (
     create_ollama_embedding,
     configure_global_embed_model,
     configure_embed_model_by_model_id,
-    configure_llamaindex_for_siliconflow,
     BatchEmbeddingHelper,
 )
 from rag.embedding_service import (
@@ -92,7 +91,6 @@ __all__ = [
     "create_ollama_embedding",
     "configure_global_embed_model",
     "configure_embed_model_by_model_id",
-    "configure_llamaindex_for_siliconflow",
     "BatchEmbeddingHelper",
     "OllamaEmbeddingService",
     "OllamaEndpoint",

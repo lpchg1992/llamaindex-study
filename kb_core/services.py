@@ -17,7 +17,6 @@ from rag.vector_store import LanceDBVectorStore
 from rag.ollama_utils import (
     create_parallel_ollama_embedding,
     configure_global_embed_model,
-    configure_llamaindex_for_siliconflow,
 )
 from kb_core.registry import get_storage_root
 from .document_chunk_service import get_document_chunk_service

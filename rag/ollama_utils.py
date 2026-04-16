@@ -669,35 +669,6 @@ def _configure_siliconflow_llm(
     )
 
 
-def configure_llamaindex_for_siliconflow() -> None:
-    """配置 LlamaIndex 使用 SiliconFlow LLM（从注册表获取默认 LLM）"""
-    from rag.config import get_model_registry
-    from kb_core.database import init_vendor_db
-
-    registry = get_model_registry()
-    model = registry.get_default("llm")
-    if not model:
-        raise ValueError("No default LLM configured. Please add a model via CLI: uv run llamaindex-study model add --help")
-
-    vendor_db = init_vendor_db()
-    vendor = vendor_db.get(model.get("vendor_id") or "")
-    if not vendor:
-        raise ValueError(f"Vendor {model.get('vendor_id')} not found. Please configure via CLI.")
-
-    api_key = vendor.get("api_key")
-    api_base = vendor.get("api_base")
-    if not api_key:
-        raise ValueError(f"API key not configured for vendor {model.get('vendor_id')}. Run: uv run llamaindex-study vendor update {model.get('vendor_id')} --api-key=YOUR_KEY")
-    if not api_base:
-        raise ValueError(f"API base not configured for vendor {model.get('vendor_id')}.")
-
-    _configure_siliconflow_llm(
-        model=model["name"],
-        api_key=api_key,
-        api_base=api_base,
-    )
-
-
 class RetryableOllama(Ollama):
     """Ollama LLM 子类，支持 503 错误重试、请求超时和熔断器
 
@@ -1616,12 +1587,6 @@ def configure_embed_model_by_model_id(model_id: str) -> OllamaEmbedding:
 
     LlamaSettings.embed_model = embed_model
     return embed_model
-
-
-def configure_llamaindex(mode: Optional[str] = None) -> None:
-    """配置 LlamaIndex 全局 LLM"""
-    llm = create_llm(model_id=None, mode=mode)
-    LlamaSettings.llm = llm
 
 
 _sf_fallback_count = 0
