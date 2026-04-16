@@ -174,7 +174,7 @@ class SchedulerStarter:
         cmd = [
             sys.executable,
             "-m",
-            "kb_core.scheduler",
+            "kb_core.task_scheduler",
         ]
         try:
             cls._process = subprocess.Popen(
