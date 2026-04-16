@@ -515,6 +515,22 @@ export function SettingsPage() {
                         {localSettings.hybrid_search_alpha < 0.5 ? 'More keyword' : localSettings.hybrid_search_alpha > 0.5 ? 'More vector' : 'Balanced'}
                       </span>
                     </div>
+                    <div className="space-y-2 mt-4">
+                      <Label htmlFor="hybrid-mode">Fusion Mode</Label>
+                      <Select
+                        value={localSettings.hybrid_search_mode}
+                        onValueChange={(v) => updateField('hybrid_search_mode', v)}
+                      >
+                        <SelectTrigger id="hybrid-mode">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="relative_score">Relative Score</SelectItem>
+                          <SelectItem value="dynamic">Dynamic</SelectItem>
+                          <SelectItem value="converage">Converage</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
                   </div>
                 )}
 
@@ -574,6 +590,34 @@ export function SettingsPage() {
                     />
                   </div>
                 )}
+
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label htmlFor="semantic-chunking">Semantic Chunking</Label>
+                    <p className="text-sm text-muted-foreground">
+                      Split documents by semantic similarity
+                    </p>
+                  </div>
+                  <Switch
+                    id="semantic-chunking"
+                    checked={localSettings.use_semantic_chunking}
+                    onCheckedChange={(checked) => updateField('use_semantic_chunking', checked)}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label htmlFor="query-rewrite">Query Rewrite</Label>
+                    <p className="text-sm text-muted-foreground">
+                      Rewrite query for better retrieval
+                    </p>
+                  </div>
+                  <Switch
+                    id="query-rewrite"
+                    checked={localSettings.use_query_rewrite}
+                    onCheckedChange={(checked) => updateField('use_query_rewrite', checked)}
+                  />
+                </div>
               </CardContent>
             </Card>
 
@@ -750,6 +794,21 @@ export function SettingsPage() {
                       Chunk size is a target, not a hard limit.
                     </p>
                   )}
+
+                  <div className="space-y-2">
+                    <Label htmlFor="embed-batch-size">Embedding Batch Size</Label>
+                    <Input
+                      id="embed-batch-size"
+                      type="number"
+                      min={1}
+                      max={256}
+                      value={localSettings.embed_batch_size}
+                      onChange={(e) => updateField('embed_batch_size', parseInt(e.target.value) || 32)}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Number of texts to embed in a single batch
+                    </p>
+                  </div>
                 </div>
               )}
 
@@ -834,6 +893,40 @@ export function SettingsPage() {
                     {reloadConfig.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     Reload
                   </Button>
+                </div>
+              </div>
+
+              <div className="border rounded-lg p-4">
+                <h4 className="font-medium mb-4">Task Processing Settings</h4>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="progress-interval">Progress Update Interval</Label>
+                    <Input
+                      id="progress-interval"
+                      type="number"
+                      min={1}
+                      max={100}
+                      value={localSettings.progress_update_interval}
+                      onChange={(e) => updateField('progress_update_interval', parseInt(e.target.value) || 10)}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Update progress every N files
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="max-concurrent">Max Concurrent Tasks</Label>
+                    <Input
+                      id="max-concurrent"
+                      type="number"
+                      min={1}
+                      max={50}
+                      value={localSettings.max_concurrent_tasks}
+                      onChange={(e) => updateField('max_concurrent_tasks', parseInt(e.target.value) || 10)}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Maximum simultaneous tasks
+                    </p>
+                  </div>
                 </div>
               </div>
 
