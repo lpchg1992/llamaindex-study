@@ -99,7 +99,6 @@ import os
 import queue
 import subprocess
 import sys
-import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
@@ -122,6 +121,35 @@ if TYPE_CHECKING:
     from rag.vector_store import LanceDBVectorStore
     from kb_processing.parallel_embedding import EmbeddingResult
 
+
+# =============================================================================
+# 任务类型处理器注册表
+# =============================================================================
+
+class TaskHandlerRegistry:
+    """任务处理器注册表 - 便于以后拆分为独立文件"""
+
+    _handlers: Dict[str, str] = {
+        "zotero": "_execute_zotero",
+        "obsidian": "_execute_obsidian",
+        "obsidian_folder": "_execute_obsidian",
+        "generic": "_execute_generic",
+        "initialize": "_execute_initialize",
+        "selective": "_execute_selective",
+        "revector": "_execute_revector",
+        "check_mark_failed": "_execute_check_mark_failed",
+    }
+
+    @classmethod
+    def get_handler_method(cls, task_type: str) -> str:
+        if task_type not in cls._handlers:
+            raise ValueError(f"Unknown task type: {task_type}")
+        return cls._handlers[task_type]
+
+
+# =============================================================================
+# TaskExecutor
+# =============================================================================
 
 class TaskExecutor:
     """任务执行器 - 支持本地/远程 Ollama 并行处理"""
@@ -168,22 +196,8 @@ class TaskExecutor:
             await self._update_heartbeat(task_id)
             await self._notify_progress(task_id)
 
-            if task.task_type == "zotero":
-                await self._execute_zotero(task)
-            elif task.task_type in ("obsidian", "obsidian_folder"):
-                await self._execute_obsidian(task)
-            elif task.task_type == "generic":
-                await self._execute_generic(task)
-            elif task.task_type == "initialize":
-                await self._execute_initialize(task)
-            elif task.task_type == "selective":
-                await self._execute_selective(task)
-            elif task.task_type == "revector":
-                await self._execute_revector(task)
-            elif task.task_type == "check_mark_failed":
-                await self._execute_check_mark_failed(task)
-            else:
-                raise ValueError(f"Unknown task type: {task.task_type}")
+            handler_method = TaskHandlerRegistry.get_handler_method(task.task_type)
+            await getattr(self, handler_method)(task)
 
         except asyncio.CancelledError:
             self.queue.complete_task(task_id, error="任务被取消")
