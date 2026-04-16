@@ -104,19 +104,6 @@ from rag.rag_evaluator import RAGEvaluator, RAGMetrics
 
 from contextlib import asynccontextmanager
 
-_scheduler_ref = None
-
-
-async def start_scheduler():
-    """启动任务调度器"""
-    global _scheduler_ref
-    from kb_core.task_executor import TaskScheduler
-
-    scheduler = TaskScheduler()
-    _scheduler_ref = asyncio.create_task(scheduler.run())
-    logger.info("任务调度器已启动")
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
@@ -129,7 +116,6 @@ async def lifespan(app: FastAPI):
     init_token_stats_db()
     logger.info("Token 监控已初始化")
 
-    await start_scheduler()
     logger.info("应用启动完成")
     yield
     logger.info("应用关闭")
@@ -2466,27 +2452,31 @@ def delete_table(kb_id: str):
 
 @app.post("/admin/restart-scheduler")
 def restart_scheduler():
-    """重启任务调度器"""
-    global _scheduler_ref
+    """
+    重启任务调度器（统一调度器管理）
 
-    if _scheduler_ref is not None and not _scheduler_ref.done():
-        _scheduler_ref.cancel()
-        logger.info("调度器任务已取消")
+    使用 SchedulerStarter 确保调度器作为独立进程运行，
+    与 CLI admin restart-scheduler 使用相同的机制。
+    """
+    from kb_core.task_executor import SchedulerStarter, is_scheduler_running, get_scheduler_pid_file
 
-    async def start_new_scheduler():
-        from kb_core.task_executor import TaskScheduler
+    pid_file = get_scheduler_pid_file()
 
-        scheduler = TaskScheduler()
-        return asyncio.create_task(scheduler.run())
+    # 如果调度器正在运行，先停止它
+    if is_scheduler_running():
+        import os
+        import signal
 
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        try:
+            with open(pid_file, "r") as f:
+                old_pid = int(f.read().strip())
+            os.kill(old_pid, signal.SIGTERM)
+            logger.info(f"已发送停止信号到调度器 (PID: {old_pid})")
+        except (ProcessLookupError, OSError, ValueError) as e:
+            logger.warning(f"停止调度器失败或进程不存在: {e}")
 
-    _scheduler_ref = loop.create_task(start_new_scheduler())
-    logger.info("调度器重启任务已提交")
+    # 确保调度器启动（使用与 CLI 相同的机制）
+    SchedulerStarter.ensure_scheduler_running(wait_seconds=5.0)
 
     return {"status": "restarting", "message": "调度器正在重启..."}
 
