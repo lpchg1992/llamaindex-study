@@ -538,24 +538,15 @@ class ParallelEmbeddingProcessor:
 
             if healthy_eps:
                 best_ep = healthy_eps[0]
-                best_score = float("inf")
+                best_inflight = best_ep.inflight
 
                 for ep in healthy_eps:
-                    if ep.inflight >= 3:
-                        continue
-                    if len(healthy_eps) > 1 and ep.total_time > 0:
-                        throughput = ep.chunks_completed / ep.total_time
-                        score = 1.0 / throughput if throughput > 0 else float("inf")
-                        score += ep.inflight * 0.5
-                    else:
-                        score = ep.inflight + ep.chunks_completed * 0.0001
-
-                    if score < best_score or (
-                        score == best_score
-                        and healthy_eps.index(ep) < healthy_eps.index(best_ep)
-                    ):
-                        best_score = score
+                    if ep.inflight < best_inflight:
+                        best_inflight = ep.inflight
                         best_ep = ep
+
+                if best_ep.inflight >= 3:
+                    return best_ep
 
                 return best_ep
 
