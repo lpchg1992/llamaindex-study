@@ -1967,7 +1967,7 @@ class SchedulerStarter:
         cmd = [
             sys.executable,
             "-m",
-            "kb.scheduler",
+            "kb_core.scheduler",
         ]
         try:
             # 显式传递当前环境变量，确保加载了 .env 的配置

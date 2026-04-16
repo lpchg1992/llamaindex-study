@@ -1,18 +1,10 @@
 #!/usr/bin/env python3
-"""
-调度器独立进程
-
-作为独立进程运行任务调度器，确保任务在后台持续执行。
-可以通过 `python -m kb.scheduler` 或 `uv run llamaindex-study scheduler` 运行。
-"""
-
 import asyncio
 import logging
 import os
 import sys
 from pathlib import Path
 
-# 添加项目根目录到 path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from rag.logger import configure_all_loggers, get_log_dir

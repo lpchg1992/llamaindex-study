@@ -1645,7 +1645,7 @@ def handle_scheduler_restart(args: argparse.Namespace) -> int:
     # 启动新的 scheduler
     print("启动新的调度器...")
     subprocess.Popen(
-        ["uv", "run", "python", "-m", "kb.scheduler"],
+        ["uv", "run", "python", "-m", "kb_core.scheduler"],
         cwd=str(PROJECT_ROOT),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -1800,7 +1800,7 @@ def handle_admin_restart_scheduler(args: argparse.Namespace) -> int:
 
     print("启动新的调度器...")
     subprocess.Popen(
-        ["uv", "run", "python", "-m", "kb.scheduler"],
+        ["uv", "run", "python", "-m", "kb_core.scheduler"],
         cwd=str(PROJECT_ROOT),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -1944,7 +1944,7 @@ def _start_scheduler() -> None:
 
     print("启动调度器...")
     subprocess.Popen(
-        ["uv", "run", "python", "-m", "kb.scheduler"],
+        ["uv", "run", "python", "-m", "kb_core.scheduler"],
         cwd=str(PROJECT_ROOT),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
