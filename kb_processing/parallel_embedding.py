@@ -1,8 +1,25 @@
 """
 并行 Embedding 处理器
 
-从数据库加载所有 embedding 模型端点，使用多线程 + 自适应负载均衡并行处理。
-处理快的端点自动分配更多任务，Ollama 全不健康时自动切换到 SiliconFlow。
+从数据库（ModelRegistry + VendorDB）加载所有 embedding 模型端点，
+使用多线程 + 自适应负载均衡并行处理。
+
+端点加载：
+  - registry.get_by_type("embedding") 获取所有 embedding 模型
+  - 根据 vendor_id 从 VendorDB 获取 api_base
+  - 每个模型创建 EmbeddingEndpoint，逐一健康检查
+  - SiliconFlow 作为 fallback 始终可用
+
+负载均衡：
+  - _get_best_endpoint() 选择健康且负载低的端点
+  - inflight >= 3 的端点跳过，避免过载
+  - 按吞吐量 (chunks_completed/total_time) 评分
+  - Ollama 全部不健康 → 自动切换 SiliconFlow
+
+健康检查：
+  - 后台 asyncio 任务每 30 秒检查所有端点
+  - GET /api/tags，3 次重试，指数退避
+  - 连续 3 次失败标记为 unhealthy
 """
 
 import asyncio
