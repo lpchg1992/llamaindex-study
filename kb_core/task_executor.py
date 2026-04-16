@@ -2,6 +2,96 @@
 任务执行器
 
 支持本地和远程 Ollama 并行处理。
+
+================================================================================
+任务执行流程 (Task Execution Flow)
+================================================================================
+
+入口: TaskExecutor.execute_task(task_id)
+    │
+    ├─ 验证任务状态 (必须为 PENDING)
+    ├─ 创建取消/暂停事件
+    └─ 分发到对应处理器:
+
+  ┌──────────────────────────────────────────────────────────────────────────────┐
+  │ task_type          │ 处理器                    │ 用途                      │
+  ├──────────────────────────────────────────────────────────────────────────────┤
+  │ zotero             │ _execute_zotero()         │ Zotero 文献导入            │
+  │ obsidian           │ _execute_obsidian()       │ Obsidian 笔记导入          │
+  │ obsidian_folder    │ _execute_obsidian()       │ Obsidian 文件夹导入        │
+  │ generic            │ _execute_generic()        │ 通用文件导入               │
+  │ selective          │ _execute_selective()      │ 选择性混合导入             │
+  │ initialize         │ _execute_initialize()     │ 知识库初始化               │
+  │ revector           │ _execute_revector()       │ 重新向量化                 │
+  │ check_mark_failed  │ _execute_check_mark_failed() │ 检查缺失向量            │
+  └──────────────────────────────────────────────────────────────────────────────┘
+
+================================================================================
+模型调用链路 (Model Invocation Chain)
+================================================================================
+
+  TaskExecutor._execute_*(task)
+      │
+      ├─ get_parallel_processor()
+      │       │
+      │       └─→ ParallelEmbeddingProcessor (单例, kb_processing/parallel_embedding.py)
+      │               │
+      │               ├─ _load_embedding_endpoints()
+      │               │       ├─ ModelRegistry.get_by_type("embedding")  ← 从DB加载
+      │               │       ├─ VendorDB.get(vendor_id)                  ← 从DB加载
+      │               │       └─ SiliconFlow fallback (云端)
+      │               │
+      │               └─ process_batch_streaming(texts) 或 process_batch(texts)
+      │                       │
+      │                       └─→ 自适应负载均衡
+      │                               ├─ Healthy Ollama endpoints (并行)
+      │                               └─ SiliconFlow fallback (云端)
+      │
+      └─ create_ollama_embedding()  → OllamaEmbedder (rag/ollama_utils.py)
+              ├─ 503 重试 + 指数退避
+              ├─ 熔断器 (CircuitBreaker)
+              └─ 请求队列 (OllamaRequestQueue)
+
+================================================================================
+导入链路 (Import Chain)
+================================================================================
+
+1. Obsidian 导入 (_execute_obsidian):
+   文件扫描 → 读取文本 → LlamaDocument → NodeParser → ParallelEmbedding
+     → LanceDB 写入 → Document DB 记录 → Topics 更新
+
+2. Zotero 导入 (_execute_zotero):
+   线程中运行: ZoteroImporter.import_collection()
+     → PDF/附件下载 → 文本提取 → NodeParser → ParallelEmbedding
+       → LanceDB 写入 → Document DB 记录 → Progress 更新
+
+3. 通用文件导入 (_execute_generic):
+   文件发现 → DocumentProcessor.process_file() → NodeParser → ParallelEmbedding
+     → LanceDB 写入 → Document DB 记录
+
+4. 选择性导入 (_execute_selective):
+   按 item 类型分发:
+   ├─ collection → ZoteroService.import_collection()
+   ├─ item      → ZoteroService.import_item()
+   ├─ folder    → ObsidianService.import_vault()
+   └─ file      → GenericService.import_file()
+
+================================================================================
+环境变量依赖
+================================================================================
+
+直接从 .env 读取 (task_executor.py):
+  CHUNK_SIZE, CHUNK_OVERLAP, PROGRESS_UPDATE_INTERVAL,
+  MAX_CONCURRENT_TASKS, HEARTBEAT_INTERVAL, STALE_TASK_TIMEOUT
+
+通过 Settings 间接读取 (rag/config.py):
+  chunk_strategy, use_hyde, use_auto_merging, hybrid_search_* 等
+
+模型配置 (从数据库读取，CLI 管理):
+  vendor add ollama --api-base=http://localhost:11434
+  model add ollama/bge-m3 --vendor ollama --type embedding
+
+详细配置见: .env.example
 """
 
 import asyncio
@@ -18,13 +108,14 @@ from rag.config import get_settings
 
 logger = get_logger(__name__)
 
-# 配置常量
-CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "512"))
-CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "50"))
-PROGRESS_UPDATE_INTERVAL = int(os.getenv("PROGRESS_UPDATE_INTERVAL", "10"))
-DEFAULT_MAX_CONCURRENT = int(os.getenv("MAX_CONCURRENT_TASKS", "10"))
-HEARTBEAT_INTERVAL = int(os.getenv("HEARTBEAT_INTERVAL", "30"))
-STALE_TASK_TIMEOUT = int(os.getenv("STALE_TASK_TIMEOUT", "300"))  # 任务超时时间（秒）
+# 配置常量（从 Settings 统一读取）
+settings = get_settings()
+CHUNK_SIZE = settings.chunk_size
+CHUNK_OVERLAP = settings.chunk_overlap
+PROGRESS_UPDATE_INTERVAL = settings.progress_update_interval
+DEFAULT_MAX_CONCURRENT = settings.max_concurrent_tasks
+HEARTBEAT_INTERVAL = settings.heartbeat_interval
+STALE_TASK_TIMEOUT = settings.stale_task_timeout
 
 if TYPE_CHECKING:
     from .task_queue import Task, TaskQueue, TaskStatus
@@ -46,7 +137,6 @@ class TaskExecutor:
 
     async def execute_task(self, task_id: str) -> None:
         """执行任务"""
-        from .task_queue import TaskStatus
 
         task = self.queue.get_task(task_id)
         if not task:

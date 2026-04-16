@@ -35,17 +35,8 @@ def get_storage_root() -> Path:
 
 def get_vault_root() -> Path:
     """获取 Obsidian Vault 根目录"""
-    from dotenv import load_dotenv
-
-    env_path = PROJECT_ROOT / ".env"
-    if env_path.exists():
-        load_dotenv(env_path, override=True)
-
-    vault_root = os.getenv("OBSIDIAN_VAULT_ROOT")
-    if vault_root:
-        return Path(vault_root)
-
-    return DEFAULT_VAULT_ROOT
+    settings = get_settings()
+    return Path(settings.obsidian_vault_root)
 
 
 @dataclass
