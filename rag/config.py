@@ -43,6 +43,11 @@ class Settings:
     _DEFAULT_VECTOR_STORE_TYPE: ClassVar[str] = "lancedb"
     _DEFAULT_VECTOR_TABLE_NAME: ClassVar[str] = "llamaindex"
     _DEFAULT_QDRANT_URL: ClassVar[str] = "http://localhost:6333"
+    _DEFAULT_API_PORT: ClassVar[int] = 37241
+    _DEFAULT_PROGRESS_UPDATE_INTERVAL: ClassVar[int] = 10
+    _DEFAULT_MAX_CONCURRENT_TASKS: ClassVar[int] = 10
+    _DEFAULT_HEARTBEAT_INTERVAL: ClassVar[int] = 30
+    _DEFAULT_STALE_TASK_TIMEOUT: ClassVar[int] = 300
 
     def __init__(self) -> None:
         env_path = PROJECT_ROOT / ".env"
@@ -133,6 +138,33 @@ class Settings:
         self.mineru_api_key: Optional[str] = os.getenv("MINERU_API_KEY")
         self.mineru_pipeline_id: Optional[str] = os.getenv("MINERU_PIPELINE_ID")
 
+        # ========== 存储路径配置 ==========
+        self.obsidian_vault_root: str = self._resolve_dir(
+            os.getenv("OBSIDIAN_VAULT_ROOT", str(Path.home() / "Documents" / "Obsidian Vault")),
+            str(Path.home() / "Documents" / "Obsidian Vault"),
+        )
+        self.zotero_storage_dir: str = self._resolve_dir(
+            os.getenv("ZOTERO_STORAGE_DIR", str(Path.home() / ".llamaindex" / "storage" / "zotero")),
+            str(Path.home() / ".llamaindex" / "storage" / "zotero"),
+        )
+
+        # ========== 任务处理配置 ==========
+        self.progress_update_interval: int = int(
+            os.getenv("PROGRESS_UPDATE_INTERVAL", str(self._DEFAULT_PROGRESS_UPDATE_INTERVAL))
+        )
+        self.max_concurrent_tasks: int = int(
+            os.getenv("MAX_CONCURRENT_TASKS", str(self._DEFAULT_MAX_CONCURRENT_TASKS))
+        )
+        self.heartbeat_interval: int = int(
+            os.getenv("HEARTBEAT_INTERVAL", str(self._DEFAULT_HEARTBEAT_INTERVAL))
+        )
+        self.stale_task_timeout: int = int(
+            os.getenv("STALE_TASK_TIMEOUT", str(self._DEFAULT_STALE_TASK_TIMEOUT))
+        )
+
+        # ========== API 服务配置 ==========
+        self.api_port: int = int(os.getenv("API_PORT", str(self._DEFAULT_API_PORT)))
+
     def __repr__(self) -> str:
         return f"Settings(top_k={self.top_k})"
 
@@ -208,11 +240,46 @@ class Settings:
         self.save_runtime_settings(settings_dict)
 
 
-# ==================== 模型注册表 ====================
+# ==============================================================================
+# 模型注册表 (ModelRegistry)
+# ==============================================================================
+#
+# 注意：此处的 "Registry" 是 RAG 模型配置注册表，与 kb_core/registry.py 中的
+# "KnowledgeBaseRegistry"（知识库注册表）是完全不同的概念！
+#
+# 设计背景：
+#   - Settings (.env) 负责 "静态配置"：重试次数、分块大小、开关等
+#   - ModelRegistry (DB) 负责 "模型配置"：LLM/Embedding/Reranker 模型
+#
+# 为什么分开？
+#   1. 模型配置需要运行时动态添加/切换（如通过 WebUI）
+#   2. 模型配置包含敏感信息（API密钥）
+#   3. 模型配置需要支持热更新（reload()），无需重启服务
+#
+# 存储位置：
+#   - 模型元数据：kb_core/database.py 的 models 表
+#   - 供应商配置：kb_core/database.py 的 vendors 表
+#
+# 使用方式：
+#   from rag.config import get_model_registry
+#   registry = get_model_registry()
+#   registry.get_by_type("embedding")  # 获取所有 embedding 模型
+#   registry.get_default("llm")       # 获取默认 LLM
+#
 
 
 class ModelRegistry:
-    """模型注册表 - 从数据库加载模型配置"""
+    """
+    模型配置注册表（与知识库注册表完全不同！）
+
+    职责：管理 LLM、Embedding、Reranker 模型配置
+    数据来源：kb_core/database.py 的 models 表 + vendors 表
+    存储内容：模型 ID、供应商、API密钥、config(JSON) 等
+
+    与 Settings 的区别：
+      Settings = .env 静态配置（分块大小、开关等）
+      ModelRegistry = 数据库模型配置（供应商、API密钥等）
+    """
 
     _instance: Optional["ModelRegistry"] = None
 
