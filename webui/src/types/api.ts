@@ -647,20 +647,28 @@ export interface SystemSettings {
   default_llm_model: string | null
   ollama_embed_model: string
   ollama_base_url: string
+  embed_batch_size: number
   top_k: number
+  use_semantic_chunking: boolean
+  use_query_rewrite: boolean
   use_hybrid_search: boolean
   use_auto_merging: boolean
   use_hyde: boolean
   use_multi_query: boolean
   num_multi_queries: number
   hybrid_search_alpha: number
+  hybrid_search_mode: string
   chunk_strategy: string
   chunk_size: number
   chunk_overlap: number
   hierarchical_chunk_sizes: number[]
+  sentence_chunk_size: number
+  sentence_chunk_overlap: number
   use_reranker: boolean
   rerank_model: string
   response_mode: string
+  progress_update_interval: number
+  max_concurrent_tasks: number
 }
 
 export interface SettingsUpdateRequest {
@@ -668,20 +676,28 @@ export interface SettingsUpdateRequest {
   default_llm_model?: string | null
   ollama_embed_model?: string
   ollama_base_url?: string
+  embed_batch_size?: number
   top_k?: number
+  use_semantic_chunking?: boolean
+  use_query_rewrite?: boolean
   use_hybrid_search?: boolean
   use_auto_merging?: boolean
   use_hyde?: boolean
   use_multi_query?: boolean
   num_multi_queries?: number
   hybrid_search_alpha?: number
+  hybrid_search_mode?: string
   chunk_strategy?: string
   chunk_size?: number
   chunk_overlap?: number
   hierarchical_chunk_sizes?: number[]
+  sentence_chunk_size?: number
+  sentence_chunk_overlap?: number
   use_reranker?: boolean
   rerank_model?: string
   response_mode?: string
+  progress_update_interval?: number
+  max_concurrent_tasks?: number
 }
 
 export interface RestartResponse {
