@@ -5,7 +5,3 @@ kb_cli - 知识库 CLI 工具包
     python -m kb_cli
     llamaindex-study --help  (安装后)
 """
-
-from .ingest import ingest_one, list_knowledge_bases
-
-__all__ = ["ingest_one", "list_knowledge_bases"]
