@@ -272,7 +272,7 @@ def submit_task_and_handle(
     wait: bool = False,
     timeout: float = 0,
 ) -> int:
-    from kb_core.task_executor import SchedulerStarter, is_scheduler_running
+    from kb_core.scheduler import SchedulerStarter, is_scheduler_running
 
     # 检查并自动启动 scheduler
     if not is_scheduler_running():
@@ -293,7 +293,7 @@ def submit_task_and_handle(
 
 def submit_import_and_handle(req: ImportRequest) -> int:
     from kb_core.import_service import ImportApplicationService
-    from kb_core.task_executor import SchedulerStarter, is_scheduler_running
+    from kb_core.scheduler import SchedulerStarter, is_scheduler_running
 
     if not is_scheduler_running():
         print("⚙️  调度器未运行，正在启动...", file=sys.stderr)
@@ -1621,7 +1621,7 @@ def handle_scheduler_restart(args: argparse.Namespace) -> int:
     import signal
     import subprocess
 
-    from kb_core.task_executor import get_scheduler_pid_file
+    from kb_core.scheduler import get_scheduler_pid_file
 
     pid_file = get_scheduler_pid_file()
 
@@ -1779,7 +1779,7 @@ def handle_admin_restart_scheduler(args: argparse.Namespace) -> int:
     import signal
     import subprocess
 
-    from kb_core.task_executor import get_scheduler_pid_file
+    from kb_core.scheduler import get_scheduler_pid_file
 
     pid_file = get_scheduler_pid_file()
 
@@ -1925,7 +1925,7 @@ def _is_process_running(pid: int) -> bool:
 
 def _stop_scheduler() -> bool:
     """停止调度器"""
-    from kb_core.task_executor import get_scheduler_pid_file
+    from kb_core.scheduler import get_scheduler_pid_file
 
     pid_file = get_scheduler_pid_file()
     pid = _get_pid_from_file(pid_file)
@@ -2113,7 +2113,7 @@ def _is_port_in_use(port: int) -> bool:
 
 def _get_service_status() -> dict:
     """获取所有服务状态"""
-    from kb_core.task_executor import get_scheduler_pid_file
+    from kb_core.scheduler import get_scheduler_pid_file
 
     scheduler_pid_file = get_scheduler_pid_file()
     api_pid_file = PROJECT_ROOT / ".api.pid"

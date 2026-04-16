@@ -2458,7 +2458,7 @@ def restart_scheduler():
     使用 SchedulerStarter 确保调度器作为独立进程运行，
     与 CLI admin restart-scheduler 使用相同的机制。
     """
-    from kb_core.task_executor import SchedulerStarter, is_scheduler_running, get_scheduler_pid_file
+    from kb_core.scheduler import SchedulerStarter, is_scheduler_running, get_scheduler_pid_file
 
     pid_file = get_scheduler_pid_file()
 

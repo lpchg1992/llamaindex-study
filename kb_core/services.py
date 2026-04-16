@@ -2085,7 +2085,8 @@ class TaskService:
             任务列表
         """
         from .task_queue import TaskQueue, TaskStatus
-        from .task_executor import task_executor, is_scheduler_running
+        from .task_executor import task_executor
+        from .scheduler import is_scheduler_running
 
         queue = TaskQueue()
 
@@ -2122,7 +2123,8 @@ class TaskService:
             任务信息字典，不存在则返回 None
         """
         from .task_queue import TaskQueue, TaskStatus
-        from .task_executor import task_executor, is_scheduler_running
+        from .task_executor import task_executor
+        from .scheduler import is_scheduler_running
 
         queue = TaskQueue()
         task = queue.get_task(task_id)
@@ -2401,7 +2403,8 @@ class TaskService:
             清理结果统计
         """
         from .task_queue import TaskQueue, TaskStatus
-        from .task_executor import task_executor, is_scheduler_running
+        from .task_executor import task_executor
+        from .scheduler import is_scheduler_running
 
         queue = TaskQueue()
         tasks = queue.list_tasks(status="running")
