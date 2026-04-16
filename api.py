@@ -3264,15 +3264,19 @@ class SystemSettings(BaseModel):
     # Embedding
     ollama_embed_model: str = Field("bge-m3", description="Ollama embedding模型")
     ollama_base_url: str = Field("http://localhost:11434", description="Ollama服务地址")
+    embed_batch_size: int = Field(32, ge=1, le=256, description="Embedding批处理大小")
 
     # Retrieval
     top_k: int = Field(5, ge=1, le=100, description="检索返回数量")
+    use_semantic_chunking: bool = Field(False, description="启用语义分块")
+    use_query_rewrite: bool = Field(False, description="启用Query重写")
     use_hybrid_search: bool = Field(False, description="启用混合搜索")
     use_auto_merging: bool = Field(False, description="启用Auto-Merging")
     use_hyde: bool = Field(False, description="启用HyDE查询")
     use_multi_query: bool = Field(False, description="启用多查询转换")
     num_multi_queries: int = Field(3, ge=1, le=10, description="多查询变体数量")
     hybrid_search_alpha: float = Field(0.5, ge=0, le=1, description="混合搜索向量权重")
+    hybrid_search_mode: str = Field("relative_score", description="混合搜索融合模式")
 
     # Chunk
     chunk_strategy: str = Field(
@@ -3283,6 +3287,8 @@ class SystemSettings(BaseModel):
     hierarchical_chunk_sizes: List[int] = Field(
         [2048, 1024, 512], description="分层分块大小 [parent, child, leaf]"
     )
+    sentence_chunk_size: int = Field(1024, ge=100, le=4096, description="句子分块大小")
+    sentence_chunk_overlap: int = Field(100, ge=0, le=500, description="句子分块重叠")
 
     # Reranker
     use_reranker: bool = Field(True, description="启用Reranker")
@@ -3290,6 +3296,10 @@ class SystemSettings(BaseModel):
 
     # Response
     response_mode: str = Field("compact", description="答案生成模式")
+
+    # Task
+    progress_update_interval: int = Field(10, ge=1, description="进度更新间隔")
+    max_concurrent_tasks: int = Field(10, ge=1, description="最大并发任务数")
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -3302,9 +3312,12 @@ class SettingsUpdateRequest(BaseModel):
     # Embedding
     ollama_embed_model: Optional[str] = Field(None, description="Ollama embedding模型")
     ollama_base_url: Optional[str] = Field(None, description="Ollama服务地址")
+    embed_batch_size: Optional[int] = Field(None, ge=1, le=256, description="Embedding批处理大小")
 
     # Retrieval
     top_k: Optional[int] = Field(None, ge=1, le=100, description="检索返回数量")
+    use_semantic_chunking: Optional[bool] = Field(None, description="启用语义分块")
+    use_query_rewrite: Optional[bool] = Field(None, description="启用Query重写")
     use_hybrid_search: Optional[bool] = Field(None, description="启用混合搜索")
     use_auto_merging: Optional[bool] = Field(None, description="启用Auto-Merging")
     use_hyde: Optional[bool] = Field(None, description="启用HyDE查询")
@@ -3315,6 +3328,7 @@ class SettingsUpdateRequest(BaseModel):
     hybrid_search_alpha: Optional[float] = Field(
         None, ge=0, le=1, description="混合搜索向量权重"
     )
+    hybrid_search_mode: Optional[str] = Field(None, description="混合搜索融合模式")
 
     # Chunk
     chunk_strategy: Optional[str] = Field(
@@ -3325,6 +3339,8 @@ class SettingsUpdateRequest(BaseModel):
     hierarchical_chunk_sizes: Optional[List[int]] = Field(
         None, description="分层分块大小 [parent, child, leaf]"
     )
+    sentence_chunk_size: Optional[int] = Field(None, ge=100, le=4096, description="句子分块大小")
+    sentence_chunk_overlap: Optional[int] = Field(None, ge=0, le=500, description="句子分块重叠")
 
     # Reranker
     use_reranker: Optional[bool] = Field(None, description="启用Reranker")
@@ -3332,6 +3348,10 @@ class SettingsUpdateRequest(BaseModel):
 
     # Response
     response_mode: Optional[str] = Field(None, description="答案生成模式")
+
+    # Task
+    progress_update_interval: Optional[int] = Field(None, ge=1, description="进度更新间隔")
+    max_concurrent_tasks: Optional[int] = Field(None, ge=1, description="最大并发任务数")
 
 
 @app.get("/settings", response_model=SystemSettings)
@@ -3370,19 +3390,28 @@ def get_settings():
         default_llm_model=default_llm,
         ollama_embed_model=default_embed or "ollama/bge-m3",
         ollama_base_url="http://localhost:11434",
+        embed_batch_size=s.embed_batch_size,
         top_k=s.top_k,
+        use_semantic_chunking=s.use_semantic_chunking,
+        use_query_rewrite=s.use_query_rewrite,
         use_hybrid_search=s.use_hybrid_search,
         use_auto_merging=s.use_auto_merging,
         use_hyde=s.use_hyde,
         use_multi_query=s.use_multi_query,
         num_multi_queries=s.num_multi_queries,
         hybrid_search_alpha=s.hybrid_search_alpha,
+        hybrid_search_mode=s.hybrid_search_mode,
         chunk_strategy=s.chunk_strategy,
         chunk_size=s.chunk_size,
         chunk_overlap=s.chunk_overlap,
+        hierarchical_chunk_sizes=s.hierarchical_chunk_sizes,
+        sentence_chunk_size=s.sentence_chunk_size,
+        sentence_chunk_overlap=s.sentence_chunk_overlap,
         use_reranker=s.use_reranker,
         rerank_model=default_rerank or "siliconflow/bge-reranker-v2-m3",
         response_mode=s.response_mode,
+        progress_update_interval=s.progress_update_interval,
+        max_concurrent_tasks=s.max_concurrent_tasks,
     )
 
 
@@ -3401,20 +3430,28 @@ def update_settings(req: SettingsUpdateRequest):
             default_llm_model=_get_default_llm_model_id(),
             ollama_embed_model=s.ollama_embed_model,
             ollama_base_url=s.ollama_base_url,
+            embed_batch_size=s.embed_batch_size,
             top_k=s.top_k,
+            use_semantic_chunking=s.use_semantic_chunking,
+            use_query_rewrite=s.use_query_rewrite,
             use_hybrid_search=s.use_hybrid_search,
             use_auto_merging=s.use_auto_merging,
             use_hyde=s.use_hyde,
             use_multi_query=s.use_multi_query,
             num_multi_queries=s.num_multi_queries,
             hybrid_search_alpha=s.hybrid_search_alpha,
+            hybrid_search_mode=s.hybrid_search_mode,
             chunk_strategy=s.chunk_strategy,
             chunk_size=s.chunk_size,
             chunk_overlap=s.chunk_overlap,
             hierarchical_chunk_sizes=s.hierarchical_chunk_sizes,
+            sentence_chunk_size=s.sentence_chunk_size,
+            sentence_chunk_overlap=s.sentence_chunk_overlap,
             use_reranker=s.use_reranker,
             rerank_model=s.rerank_model,
             response_mode=s.response_mode,
+            progress_update_interval=s.progress_update_interval,
+            max_concurrent_tasks=s.max_concurrent_tasks,
         )
 
     runtime_settings = {}
@@ -3425,18 +3462,26 @@ def update_settings(req: SettingsUpdateRequest):
     for key, value in updates.items():
         if key in (
             "top_k",
+            "use_semantic_chunking",
+            "use_query_rewrite",
             "use_hybrid_search",
             "use_auto_merging",
             "use_hyde",
             "use_multi_query",
             "num_multi_queries",
             "hybrid_search_alpha",
+            "hybrid_search_mode",
             "chunk_strategy",
             "chunk_size",
             "chunk_overlap",
             "hierarchical_chunk_sizes",
+            "sentence_chunk_size",
+            "sentence_chunk_overlap",
+            "embed_batch_size",
             "use_reranker",
             "response_mode",
+            "progress_update_interval",
+            "max_concurrent_tasks",
         ):
             if key == "hierarchical_chunk_sizes" and isinstance(value, list):
                 if len(value) != 3:
@@ -3481,19 +3526,28 @@ def update_settings(req: SettingsUpdateRequest):
         default_llm_model=_get_default_llm_model_id(),
         ollama_embed_model=s.ollama_embed_model,
         ollama_base_url=s.ollama_base_url,
+        embed_batch_size=s.embed_batch_size,
         top_k=s.top_k,
+        use_semantic_chunking=s.use_semantic_chunking,
+        use_query_rewrite=s.use_query_rewrite,
         use_hybrid_search=s.use_hybrid_search,
         use_auto_merging=s.use_auto_merging,
         use_hyde=s.use_hyde,
         use_multi_query=s.use_multi_query,
         num_multi_queries=s.num_multi_queries,
         hybrid_search_alpha=s.hybrid_search_alpha,
+        hybrid_search_mode=s.hybrid_search_mode,
         chunk_strategy=s.chunk_strategy,
         chunk_size=s.chunk_size,
         chunk_overlap=s.chunk_overlap,
+        hierarchical_chunk_sizes=s.hierarchical_chunk_sizes,
+        sentence_chunk_size=s.sentence_chunk_size,
+        sentence_chunk_overlap=s.sentence_chunk_overlap,
         use_reranker=s.use_reranker,
         rerank_model=s.rerank_model,
         response_mode=s.response_mode,
+        progress_update_interval=s.progress_update_interval,
+        max_concurrent_tasks=s.max_concurrent_tasks,
     )
 
 
@@ -3561,6 +3615,7 @@ if __name__ == "__main__":
     import os
 
     from rag.logger import LOG_LEVEL
+    from rag.config import get_settings
 
-    port = int(os.getenv("API_PORT", "37241"))
+    port = get_settings().api_port
     uvicorn.run(app, host="0.0.0.0", port=port, log_config=None, log_level="info")
