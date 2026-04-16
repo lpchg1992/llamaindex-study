@@ -11,9 +11,8 @@
   - SiliconFlow 作为 fallback 始终可用
 
 负载均衡：
-  - _get_best_endpoint() 选择健康且负载低的端点
+  - _get_best_endpoint() 选择健康端点
   - inflight >= 3 的端点跳过，避免过载
-  - 按吞吐量 (chunks_completed/total_time) 评分
   - Ollama 全部不健康 → 自动切换 SiliconFlow
 
 健康检查：
