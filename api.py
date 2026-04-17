@@ -230,6 +230,9 @@ class SearchRequest(BaseModel):
     use_auto_merging: Optional[bool] = Field(
         None, description="启用 Auto-Merging（合并子节点到父节点）"
     )
+    use_reranker: Optional[bool] = Field(
+        None, description="启用 Reranker（None=使用配置默认值）"
+    )
     retrieval_mode: Literal["vector", "hybrid"] = Field(
         "vector", description="检索模式: vector(向量检索), hybrid(混合搜索)"
     )
@@ -281,6 +284,9 @@ class QueryRequest(BaseModel):
     )
     use_auto_merging: Optional[bool] = Field(
         None, description="启用 Auto-Merging（None=使用配置默认值）"
+    )
+    use_reranker: Optional[bool] = Field(
+        None, description="启用 Reranker（None=使用配置默认值）"
     )
     response_mode: Optional[str] = Field(
         None,
@@ -1210,6 +1216,7 @@ def search(req: SearchRequest):
             top_k=req.top_k,
             exclude=req.exclude,
             use_auto_merging=req.use_auto_merging,
+            use_reranker=req.use_reranker,
             mode="auto",
             model_id=req.model_id,
             embed_model_id=req.embed_model_id,
@@ -1224,6 +1231,7 @@ def search(req: SearchRequest):
         req.query,
         top_k=req.top_k,
         use_auto_merging=req.use_auto_merging,
+        use_reranker=req.use_reranker,
         embed_model_id=req.embed_model_id,
         mode=req.retrieval_mode,
     )
@@ -1264,6 +1272,7 @@ def query(req: QueryRequest):
                 use_multi_query=req.use_multi_query,
                 num_multi_queries=req.num_multi_queries,
                 use_auto_merging=req.use_auto_merging,
+                use_reranker=req.use_reranker,
                 response_mode=req.response_mode,
                 retrieval_mode=req.retrieval_mode,
                 model_id=model_id,
@@ -1281,6 +1290,7 @@ def query(req: QueryRequest):
             use_multi_query=req.use_multi_query,
             num_multi_queries=req.num_multi_queries,
             use_auto_merging=req.use_auto_merging,
+            use_reranker=req.use_reranker,
             response_mode=req.response_mode,
             retrieval_mode=req.retrieval_mode,
             model_id=model_id,
@@ -3028,7 +3038,7 @@ async def ws_tasks(websocket):
     except Exception as e:
         logger.debug(f"WebSocket 连接关闭: {e}")
     finally:
-        ws_manager.disconnect(websocket)
+        await ws_manager.disconnect(websocket)
 
 
 @app.websocket("/ws")
@@ -3259,7 +3269,6 @@ class SystemSettings(BaseModel):
     # Retrieval
     top_k: int = Field(5, ge=1, le=100, description="检索返回数量")
     use_semantic_chunking: bool = Field(False, description="启用语义分块")
-    use_query_rewrite: bool = Field(False, description="启用Query重写")
     use_hybrid_search: bool = Field(False, description="启用混合搜索")
     use_auto_merging: bool = Field(False, description="启用Auto-Merging")
     use_hyde: bool = Field(False, description="启用HyDE查询")
@@ -3307,7 +3316,6 @@ class SettingsUpdateRequest(BaseModel):
     # Retrieval
     top_k: Optional[int] = Field(None, ge=1, le=100, description="检索返回数量")
     use_semantic_chunking: Optional[bool] = Field(None, description="启用语义分块")
-    use_query_rewrite: Optional[bool] = Field(None, description="启用Query重写")
     use_hybrid_search: Optional[bool] = Field(None, description="启用混合搜索")
     use_auto_merging: Optional[bool] = Field(None, description="启用Auto-Merging")
     use_hyde: Optional[bool] = Field(None, description="启用HyDE查询")
@@ -3376,14 +3384,13 @@ def get_settings():
             default_rerank = f"{default_rerank_model.get('vendor_id')}/{default_rerank_model.get('name')}"
 
     return SystemSettings(
-        llm_mode="ollama" if default_llm and default_llm.startswith("ollama") else "siliconflow",
-        default_llm_model=default_llm,
-        ollama_embed_model=default_embed or "ollama/bge-m3",
-        ollama_base_url="http://localhost:11434",
+        llm_mode=s.llm_mode,
+        default_llm_model=_get_default_llm_model_id(),
+        ollama_embed_model=s.ollama_embed_model,
+        ollama_base_url=s.ollama_base_url,
         embed_batch_size=s.embed_batch_size,
         top_k=s.top_k,
         use_semantic_chunking=s.use_semantic_chunking,
-        use_query_rewrite=s.use_query_rewrite,
         use_hybrid_search=s.use_hybrid_search,
         use_auto_merging=s.use_auto_merging,
         use_hyde=s.use_hyde,
@@ -3422,9 +3429,8 @@ def update_settings(req: SettingsUpdateRequest):
             ollama_base_url=s.ollama_base_url,
             embed_batch_size=s.embed_batch_size,
             top_k=s.top_k,
-            use_semantic_chunking=s.use_semantic_chunking,
-            use_query_rewrite=s.use_query_rewrite,
-            use_hybrid_search=s.use_hybrid_search,
+        use_semantic_chunking=s.use_semantic_chunking,
+        use_hybrid_search=s.use_hybrid_search,
             use_auto_merging=s.use_auto_merging,
             use_hyde=s.use_hyde,
             use_multi_query=s.use_multi_query,
@@ -3453,7 +3459,6 @@ def update_settings(req: SettingsUpdateRequest):
         if key in (
             "top_k",
             "use_semantic_chunking",
-            "use_query_rewrite",
             "use_hybrid_search",
             "use_auto_merging",
             "use_hyde",
@@ -3519,7 +3524,6 @@ def update_settings(req: SettingsUpdateRequest):
         embed_batch_size=s.embed_batch_size,
         top_k=s.top_k,
         use_semantic_chunking=s.use_semantic_chunking,
-        use_query_rewrite=s.use_query_rewrite,
         use_hybrid_search=s.use_hybrid_search,
         use_auto_merging=s.use_auto_merging,
         use_hyde=s.use_hyde,

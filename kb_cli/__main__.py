@@ -2260,7 +2260,6 @@ CONFIG_OPTION_DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "HYBRID_SEARCH_ALPHA": ("检索", "混合搜索向量权重（0-1）"),
     "HYBRID_SEARCH_MODE": ("检索", "混合搜索融合模式"),
     "USE_HYDE": ("检索", "启用 HyDE 查询转换"),
-    "USE_QUERY_REWRITE": ("检索", "启用 Query Rewriting"),
     "USE_MULTI_QUERY": ("检索", "启用多查询转换"),
     "RESPONSE_MODE": ("检索", "答案生成模式"),
     "RERANK_MODEL": ("Reranker", "重排序模型名称"),

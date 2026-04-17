@@ -7,7 +7,7 @@ LlamaIndex Study
 - Embedding 服务 (OllamaEmbeddingService, create_ollama_embedding)
 - 文档处理 (DocumentReader, SmartDocumentProcessor, load_and_split)
 - 查询引擎 (QueryEngineWrapper, create_query_engine)
-- 向量存储 (LanceDBVectorStore, ChromaVectorStore, QdrantVectorStore)
+- 向量存储 (LanceDBVectorStore)
 - 回调和可观测性 (setup_callbacks, get_token_counter, get_rag_stats)
 - 聊天服务 (ChatService, ChatStore)
 - 结构化提取 (StructuredExtractor, PydanticProgram)
@@ -50,11 +50,7 @@ from rag.reader import (
 )
 from rag.query_engine import QueryEngineWrapper, create_query_engine
 from rag.vector_store import (
-    VectorStoreType,
     LanceDBVectorStore,
-    ChromaVectorStore,
-    QdrantVectorStore,
-    create_vector_store,
     get_default_vector_store,
 )
 from rag.callbacks import (
@@ -101,11 +97,7 @@ __all__ = [
     "load_and_split",
     "QueryEngineWrapper",
     "create_query_engine",
-    "VectorStoreType",
     "LanceDBVectorStore",
-    "ChromaVectorStore",
-    "QdrantVectorStore",
-    "create_vector_store",
     "get_default_vector_store",
     "setup_callbacks",
     "get_callback_manager",

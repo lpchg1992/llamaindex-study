@@ -1260,6 +1260,7 @@ class SearchService:
         top_k: int = 5,
         with_metadata: bool = True,
         use_auto_merging: Optional[bool] = None,
+        use_reranker: Optional[bool] = None,
         mode: str = "vector",
         embed_model_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
@@ -1328,6 +1329,19 @@ class SearchService:
         # Post-process: prefer parent nodes over children for longer context
         if _use_auto_merging:
             results = SearchService._prefer_parent_nodes(results)
+
+        # Post-process: reranker 排序
+        _use_reranker = (
+            use_reranker if use_reranker is not None else settings.use_reranker
+        )
+        if _use_reranker and results:
+            try:
+                from rag.query_engine import apply_reranker
+
+                results = apply_reranker(results, query, top_k=top_k)
+                logger.info("SearchService: Reranker 已应用")
+            except Exception as e:
+                logger.warning(f"SearchService Reranker 应用失败: {e}")
 
         return [
             {
@@ -1431,6 +1445,7 @@ class SearchService:
         query: str,
         top_k: int = 5,
         use_auto_merging: Optional[bool] = None,
+        use_reranker: Optional[bool] = None,
         mode: str = "vector",
         embed_model_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
@@ -1467,6 +1482,7 @@ class SearchService:
                     query,
                     top_k=top_k,
                     use_auto_merging=use_auto_merging,
+                    use_reranker=use_reranker,
                     mode=mode,
                     embed_model_id=embed_model_id,
                 )
@@ -1489,6 +1505,7 @@ class SearchService:
         use_multi_query: Optional[bool] = None,
         num_multi_queries: Optional[int] = None,
         use_auto_merging: Optional[bool] = None,
+        use_reranker: Optional[bool] = None,
         response_mode: Optional[str] = None,
         model_id: Optional[str] = None,
         embed_model_id: Optional[str] = None,
@@ -1518,6 +1535,7 @@ class SearchService:
             if use_multi_query is not None
             else settings.use_multi_query,
             num_multi_queries=num_multi_queries,
+            use_reranker=use_reranker,
             response_mode=response_mode or settings.response_mode,
             model_id=model_id,
         )
@@ -1540,6 +1558,7 @@ class SearchService:
                 else settings.use_auto_merging,
                 use_hyde=use_hyde if use_hyde is not None else settings.use_hyde,
                 use_multi_query=False,
+                use_reranker=use_reranker,
                 response_mode=response_mode or settings.response_mode,
                 model_id=model_id,
             )
@@ -1752,6 +1771,7 @@ class QueryRouter:
         mode: str = "auto",
         exclude: Optional[List[str]] = None,
         use_auto_merging: Optional[bool] = None,
+        use_reranker: Optional[bool] = None,
         model_id: Optional[str] = None,
         embed_model_id: Optional[str] = None,
         retrieval_mode: str = "vector",
@@ -1774,6 +1794,7 @@ class QueryRouter:
                     query,
                     top_k=top_k,
                     use_auto_merging=use_auto_merging,
+                    use_reranker=use_reranker,
                     mode=retrieval_mode,
                     embed_model_id=embed_model_id,
                 )
@@ -1809,6 +1830,7 @@ class QueryRouter:
         query: str,
         top_k: int = 5,
         use_auto_merging: Optional[bool] = None,
+        use_reranker: Optional[bool] = None,
         use_hyde: Optional[bool] = None,
         use_multi_query: Optional[bool] = None,
         num_multi_queries: Optional[int] = None,
@@ -1831,6 +1853,7 @@ class QueryRouter:
                     use_multi_query=use_multi_query,
                     num_multi_queries=num_multi_queries,
                     use_auto_merging=use_auto_merging,
+                    use_reranker=use_reranker,
                     response_mode=response_mode,
                     model_id=model_id,
                     embed_model_id=embed_model_id,
@@ -1875,6 +1898,7 @@ class QueryRouter:
         use_multi_query: Optional[bool] = None,
         num_multi_queries: Optional[int] = None,
         use_auto_merging: Optional[bool] = None,
+        use_reranker: Optional[bool] = None,
         response_mode: Optional[str] = None,
         retrieval_mode: str = "vector",
         model_id: Optional[str] = None,
@@ -1935,6 +1959,7 @@ class QueryRouter:
                 use_multi_query=use_multi_query,
                 num_multi_queries=num_multi_queries,
                 use_auto_merging=use_auto_merging,
+                use_reranker=use_reranker,
                 response_mode=response_mode,
                 model_id=model_id,
                 embed_model_id=embed_model_id,
@@ -1945,6 +1970,7 @@ class QueryRouter:
             query=query,
             top_k=top_k,
             use_auto_merging=use_auto_merging,
+            use_reranker=use_reranker,
             use_hyde=use_hyde,
             use_multi_query=use_multi_query,
             num_multi_queries=num_multi_queries,
@@ -1963,6 +1989,7 @@ class QueryRouter:
         use_multi_query: Optional[bool] = None,
         num_multi_queries: Optional[int] = None,
         use_auto_merging: Optional[bool] = None,
+        use_reranker: Optional[bool] = None,
         response_mode: Optional[str] = None,
         retrieval_mode: str = "vector",
         model_id: Optional[str] = None,
@@ -2019,6 +2046,7 @@ class QueryRouter:
                 use_multi_query=use_multi_query,
                 num_multi_queries=num_multi_queries,
                 use_auto_merging=use_auto_merging,
+                use_reranker=use_reranker,
                 response_mode=response_mode,
                 model_id=model_id,
                 embed_model_id=embed_model_id,
@@ -2029,6 +2057,7 @@ class QueryRouter:
             query=query,
             top_k=top_k,
             use_auto_merging=use_auto_merging,
+            use_reranker=use_reranker,
             use_hyde=use_hyde,
             use_multi_query=use_multi_query,
             num_multi_queries=num_multi_queries,

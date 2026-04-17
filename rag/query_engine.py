@@ -5,12 +5,249 @@
 支持流式输出、自定义参数、对话模式等功能。
 """
 
+import httpx
 from typing import Any, Optional, List
+
+from llama_index.core.postprocessor.types import BaseNodePostprocessor
+from llama_index.core.schema import NodeWithScore, QueryBundle, MetadataMode
 
 from rag.config import get_settings
 from rag.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _format_node_with_metadata(node: NodeWithScore) -> str:
+    metadata = node.metadata or {}
+    parts = []
+    if file_name := metadata.get("file_name"):
+        parts.append(f"[文档: {file_name}]")
+    if page_label := metadata.get("page_label"):
+        parts.append(f"[页码: {page_label}]")
+    if source := metadata.get("source"):
+        parts.append(f"[来源: {source}]")
+    if categories := metadata.get("categories"):
+        if isinstance(categories, list):
+            parts.append(f"[分类: {' | '.join(categories)}]")
+    text = node.get_content(metadata_mode=MetadataMode.NONE)
+    if parts:
+        return " ".join(parts) + f"\n{text}"
+    return text
+
+
+def _get_reranker_config() -> tuple[str, str, str]:
+    """从数据库获取默认 reranker 配置，返回 (model, api_key, base_url)"""
+    from kb_core.database import init_vendor_db
+    from rag.config import get_model_registry
+
+    registry = get_model_registry()
+    model = registry.get_default("reranker")
+    if not model:
+        raise RuntimeError(
+            "No default reranker model found in registry. "
+            "Please add a reranker model via CLI or API."
+        )
+
+    vendor_db = init_vendor_db()
+    vendor_info = vendor_db.get(model["vendor_id"])
+    if not vendor_info:
+        raise RuntimeError(f"Vendor '{model['vendor_id']}' not found in database.")
+
+    api_key = vendor_info.get("api_key", "")
+    base_url = vendor_info.get("api_base", "https://api.siliconflow.cn/v1")
+    return model["name"], api_key, base_url
+
+
+class SiliconFlowReranker(BaseNodePostprocessor):
+    api_key: str
+    model: str = "Pro/BAAI/bge-reranker-v2-m3"
+    base_url: str = "https://api.siliconflow.cn/v1"
+    top_n: int = 5
+
+    def _postprocess_nodes(
+        self,
+        nodes: list[NodeWithScore],
+        query_bundle: QueryBundle,
+    ) -> list[NodeWithScore]:
+        if not nodes:
+            return nodes
+
+        documents = [_format_node_with_metadata(node) for node in nodes]
+        payload = {
+            "model": self.model,
+            "query": query_bundle.query_str,
+            "documents": documents,
+            "top_n": min(self.top_n, len(documents)),
+        }
+
+        print(f"   🔄 SiliconFlow Reranker: 正在对 {len(nodes)} 个结果进行重排序...")
+
+        try:
+            with httpx.Client(timeout=60.0) as client:
+                response = client.post(
+                    f"{self.base_url}/rerank",
+                    json=payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {self.api_key}",
+                    },
+                )
+                response.raise_for_status()
+                api_results = response.json()["results"]
+        except Exception as e:
+            print(f"   ❌ Reranker 调用失败: {e}")
+            raise
+
+        index_to_score = {
+            item["index"]: item["relevance_score"] for item in api_results
+        }
+        for node in nodes:
+            node.score = index_to_score.get(nodes.index(node), 0.0)
+
+        nodes.sort(key=lambda n: n.score or 0.0, reverse=True)
+        print(f"   ✅ Reranker 完成: Top-{min(self.top_n, len(nodes))} 结果")
+        return nodes[: self.top_n]
+
+
+def apply_reranker(
+    nodes: list,
+    query: str,
+    top_k: int = 5,
+) -> list:
+    """对检索结果应用 SiliconFlow Reranker 排序
+
+    Args:
+        nodes: NodeWithScore 列表
+        query: 查询字符串
+        top_k: 返回结果数量
+
+    Returns:
+        排序后的 NodeWithScore 列表
+    """
+    if not nodes:
+        return nodes
+
+    rerank_model, api_key, base_url = _get_reranker_config()
+    reranker = SiliconFlowReranker(
+        api_key=api_key,
+        model=rerank_model,
+        base_url=base_url,
+        top_n=top_k,
+    )
+    from llama_index.core.schema import QueryBundle
+
+    return reranker._postprocess_nodes(nodes, QueryBundle(query_str=query))
+
+
+# Multi-Query 默认 Prompt
+DEFAULT_MULTI_QUERY_PROMPT = """你是一个查询增强专家。你的任务是根据用户问题，生成 {num_queries} 个不同的查询变体。
+
+要求：
+1. 每个变体从不同角度或用不同措辞表达同一个问题
+2. 变体之间要有差异化，涵盖问题的不同方面
+3. 保持原问题的核心意图不变
+4. 避免重复，每个变体要有独特价值
+5. 重要：必须保留原问题中的专业术语、动物名称、品种名称等关键实体（如"gilt"、"sow"、"pig"、"swine"、"肉鸡"、"蛋鸡"等），只变换通用描述词
+6. 只输出查询变体，每行一个，不要其他解释
+
+原问题：{query_str}
+
+生成 {num_queries} 个查询变体："""
+
+
+def generate_query_variants(llm: Any, query_str: str, num_queries: int = 3) -> list[str]:
+    """使用 LLM 生成 N 个不同角度的查询变体"""
+    prompt = DEFAULT_MULTI_QUERY_PROMPT.format(
+        num_queries=num_queries,
+        query_str=query_str,
+    )
+    try:
+        response = llm.complete(prompt)
+        variants = []
+        for line in str(response).strip().split("\n"):
+            line = line.strip()
+            if line and not line.startswith("#"):
+                line = line.lstrip("0123456789.、、）)")
+                if line:
+                    variants.append(line)
+        if not variants:
+            logger.warning(f"LLM 未生成有效变体，使用原始查询: {query_str}")
+            return [query_str]
+        logger.debug(f"生成了 {len(variants)} 个查询变体: {variants}")
+        return variants
+    except Exception as e:
+        logger.warning(f"生成查询变体失败: {e}，使用原始查询")
+        return [query_str]
+
+
+class _FixedQueryRetriever:
+    """包装基础检索器，使用固定查询字符串而非输入查询"""
+
+    def __init__(self, base_retriever: Any, fixed_query: str):
+        self.base_retriever = base_retriever
+        self.fixed_query = fixed_query
+
+    def retrieve(self, query_str: str) -> list[Any]:
+        return self.base_retriever.retrieve(self.fixed_query)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.base_retriever, name)
+
+
+class MultiQueryFusionRetriever:
+    """多查询变体融合检索器
+
+    策略：用户查询 → LLM 生成 N 个查询变体 → 每个变体独立检索 → RRF 融合
+    """
+
+    def __init__(self, base_retriever: Any, llm: Any, num_queries: int = 3, top_k: int = 5):
+        self.base_retriever = base_retriever
+        self.llm = llm
+        self.num_queries = num_queries
+        self.top_k = top_k
+        self._query_variants: list[str] = []
+        self._retrievers: list[Any] = []
+
+    def _generate_and_setup_retrievers(self, query_str: str) -> None:
+        self._query_variants = generate_query_variants(
+            self.llm, query_str, self.num_queries
+        )
+        self._retrievers = [
+            _FixedQueryRetriever(self.base_retriever, variant)
+            for variant in self._query_variants
+        ]
+        logger.debug(
+            f"MultiQueryFusionRetriever: 生成了 {len(self._query_variants)} 个变体"
+        )
+
+    def _rrf_fusion(self, results: list[tuple], top_k: int) -> list[Any]:
+        k = 60
+        fused_scores: dict = {}
+        for node_with_score, weight, rank in results:
+            node_id = id(node_with_score.node)
+            if node_id not in fused_scores:
+                fused_scores[node_id] = {"node": node_with_score, "score": 0.0}
+            fused_scores[node_id]["score"] += weight / (k + rank)
+        sorted_results = sorted(
+            fused_scores.values(),
+            key=lambda x: x["score"],
+            reverse=True,
+        )
+        return [item["node"] for item in sorted_results[:top_k]]
+
+    def retrieve(self, query_str: str) -> list[Any]:
+        if not self._retrievers:
+            self._generate_and_setup_retrievers(query_str)
+        all_nodes_with_scores: list[tuple[Any, float, int]] = []
+        for retriever in self._retrievers:
+            nodes = retriever.retrieve(query_str)
+            for rank, node_with_score in enumerate(nodes):
+                original_score = getattr(node_with_score, "score", 1.0)
+                all_nodes_with_scores.append((node_with_score, original_score, rank + 1))
+        return self._rrf_fusion(all_nodes_with_scores, self.top_k)
+
+    def __call__(self, query_str: str) -> list[Any]:
+        return self.retrieve(query_str)
 
 
 class QueryEngineWrapper:
@@ -77,35 +314,26 @@ class QueryEngineWrapper:
         self.response_mode = response_mode or self.settings.response_mode
         self.model_id = model_id
 
-        if rerank_model or rerank_api_key or rerank_base_url:
+        if self.use_reranker:
             if rerank_model:
                 self._rerank_model = rerank_model
                 if not rerank_api_key or not rerank_base_url:
                     from rag.config import get_model_registry
+                    from kb_core.database import init_vendor_db
                     registry = get_model_registry()
                     model_info = registry.get_model(rerank_model)
                     if model_info:
-                        from kb_core.database import init_vendor_db
                         vendor_db = init_vendor_db()
                         vendor = vendor_db.get(model_info.get("vendor_id", "siliconflow"))
                         if vendor:
                             rerank_api_key = rerank_api_key or vendor.get("api_key")
                             rerank_base_url = rerank_base_url or vendor.get("api_base")
+                self._rerank_api_key = rerank_api_key
+                self._rerank_base_url = rerank_base_url or "https://api.siliconflow.cn/v1"
             else:
-                from rag.reranker import get_default_reranker_from_registry
-                self._rerank_model, default_key, default_url = get_default_reranker_from_registry()
-                rerank_api_key = rerank_api_key or default_key
-                rerank_base_url = rerank_base_url or default_url
-
-            if not rerank_api_key:
-                raise ValueError("Reranker API key not configured. Run: uv run llamaindex-study vendor update siliconflow --api-key=YOUR_KEY")
-            self._rerank_api_key = rerank_api_key
-            self._rerank_base_url = rerank_base_url or "https://api.siliconflow.cn/v1"
-        else:
-            from rag.reranker import get_default_reranker_from_registry
-            self._rerank_model, self._rerank_api_key, self._rerank_base_url = (
-                get_default_reranker_from_registry()
-            )
+                self._rerank_model, self._rerank_api_key, self._rerank_base_url = (
+                    _get_reranker_config()
+                )
 
         self._query_engine = self._create_query_engine()
 
@@ -234,10 +462,6 @@ class QueryEngineWrapper:
 
         if self.use_multi_query:
             try:
-                from rag.query_transform import (
-                    MultiQueryFusionRetriever,
-                )
-
                 multi_retriever = MultiQueryFusionRetriever(
                     base_retriever=retriever,
                     llm=self._get_llm(),
@@ -258,8 +482,6 @@ class QueryEngineWrapper:
         }
 
         if self.use_reranker:
-            from rag.reranker import SiliconFlowReranker
-
             reranker = SiliconFlowReranker(
                 api_key=self._rerank_api_key,
                 model=self._rerank_model,
@@ -395,26 +617,10 @@ def create_query_engine(
     use_hyde: bool = False,
     use_multi_query: bool = False,
     num_multi_queries: Optional[int] = None,
+    use_reranker: Optional[bool] = None,
     response_mode: str = "compact",
     model_id: Optional[str] = None,
 ) -> Any:
-    """
-    根据知识库 ID 创建查询引擎
-
-    Args:
-        kb_id: 知识库 ID
-        mode: 检索模式 ("vector", "hybrid")
-        top_k: 返回结果数量
-        use_auto_merging: 是否使用 Auto-Merging Retriever（需要知识库使用 HierarchicalNodeParser 构建）
-        use_hyde: 是否使用 HyDE（假设文档嵌入）
-        use_multi_query: 是否使用多查询转换
-        num_multi_queries: 多查询变体数量（None=使用配置默认值）
-        response_mode: Response Synthesizer 模式
-        model_id: 使用的模型ID (None=使用默认模型)
-
-    Returns:
-        BaseQueryEngine: 查询引擎实例
-    """
     from kb_core.services import VectorStoreService
 
     settings = get_settings()
@@ -428,7 +634,7 @@ def create_query_engine(
     wrapper = QueryEngineWrapper(
         index=index,
         top_k=top_k,
-        use_reranker=settings.use_reranker,
+        use_reranker=use_reranker,
         use_auto_merging=use_auto_merging,
         mode=mode,
         use_hyde=use_hyde,

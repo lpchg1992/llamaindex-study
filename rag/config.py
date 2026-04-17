@@ -108,9 +108,6 @@ class Settings:
 
         # ========== Query Transform 配置 ==========
         self.use_hyde: bool = os.getenv("USE_HYDE", "false").lower() == "true"
-        self.use_query_rewrite: bool = (
-            os.getenv("USE_QUERY_REWRITE", "false").lower() == "true"
-        )
         self.use_multi_query: bool = (
             os.getenv("USE_MULTI_QUERY", "false").lower() == "true"
         )
