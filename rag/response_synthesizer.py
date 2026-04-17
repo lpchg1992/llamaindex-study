@@ -25,7 +25,6 @@ class ResponseMode:
     REFINE = "refine"
     TREE_SUMMARIZE = "tree_summarize"
     SIMPLE = "simple"
-    NO_TEXT = "no_text"
     ACCUMULATE = "accumulate"
 
 
@@ -43,7 +42,6 @@ def get_response_synthesizer(
             - refine: 迭代精炼，逐步完善（质量最高，token 消耗大）
             - tree_summarize: 树形汇总（适合多文档总结）
             - simple: 简单拼接后生成
-            - no_text: 只检索不生成
             - accumulate: 对每个 chunk 分别处理后拼接
         verbose: 是否显示详细过程
         callback_manager: 回调管理器
@@ -58,7 +56,6 @@ def get_response_synthesizer(
         SimpleSummarize,
         Accumulate,
     )
-    from llama_index.core.response_synthesizers.no_text import NoText
 
     mode = mode.lower()
 
@@ -84,10 +81,6 @@ def get_response_synthesizer(
             verbose=verbose,
             callback_manager=callback_manager,
         )
-    elif mode == ResponseMode.NO_TEXT or mode == "no_text":
-        from llama_index.core.llms import MockLLM
-
-        return NoText(llm=MockLLM())
     elif mode == ResponseMode.ACCUMULATE or mode == "accumulate":
         return Accumulate(
             verbose=verbose,
@@ -161,13 +154,6 @@ def get_synthesizer_stats(mode: str) -> dict:
             "answer_quality": "中",
             "speed": "快",
             "use_case": "简单问题，直接拼接",
-        },
-        "no_text": {
-            "name": "No Text (仅检索)",
-            "token_efficiency": "无",
-            "answer_quality": "无",
-            "speed": "最快",
-            "use_case": "调试、查看检索结果",
         },
         "accumulate": {
             "name": "Accumulate (累积)",

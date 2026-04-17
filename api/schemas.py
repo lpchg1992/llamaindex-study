@@ -98,7 +98,7 @@ class QueryRequest(BaseModel):
     )
     response_mode: Optional[str] = Field(
         None,
-        description="答案生成模式: compact, refine, tree_summarize, simple, no_text, accumulate（None=使用配置默认值）",
+        description="答案生成模式: compact, refine, tree_summarize, simple, accumulate（None=使用配置默认值）",
     )
 
 

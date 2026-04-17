@@ -642,7 +642,6 @@ export function SettingsPage() {
                       <SelectItem value="refine">Refine</SelectItem>
                       <SelectItem value="tree_summarize">Tree Summarize</SelectItem>
                       <SelectItem value="simple">Simple</SelectItem>
-                      <SelectItem value="no_text">No Text</SelectItem>
                       <SelectItem value="accumulate">Accumulate</SelectItem>
                     </SelectContent>
                   </Select>

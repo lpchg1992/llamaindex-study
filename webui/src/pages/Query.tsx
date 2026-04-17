@@ -42,7 +42,7 @@ const PRESETS: Record<PresetMode, { label: string; icon: React.ElementType; conf
   search: {
     label: 'Search Only',
     icon: FileSearch,
-    config: { retrieval_mode: 'vector', useHyde: false, useMultiQuery: false, useAutoMerging: false, responseMode: 'no_text' }
+    config: { retrieval_mode: 'vector', useHyde: false, useMultiQuery: false, useAutoMerging: false, responseMode: 'compact' }
   }
 }
 
@@ -349,7 +349,6 @@ export function QueryPage() {
                   <SelectItem value="refine">Refine</SelectItem>
                   <SelectItem value="tree_summarize">Tree Summarize</SelectItem>
                   <SelectItem value="simple">Simple</SelectItem>
-                  <SelectItem value="no_text">No Text</SelectItem>
                   <SelectItem value="accumulate">Accumulate</SelectItem>
                   <SelectItem value="compact_accumulate">Compact Accumulate</SelectItem>
                 </SelectContent>

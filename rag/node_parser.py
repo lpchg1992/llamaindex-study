@@ -105,20 +105,24 @@ def _create_semantic_chunker(
     Args:
         chunk_size: 目标分块大小
         chunk_overlap: 分块重叠大小
-        embed_model: embedding 模型（如果为 None，尝试使用 MockEmbedding）
+        embed_model: embedding 模型（必须传入真实模型，不支持 None）
         similarity_threshold: 相似度阈值（默认 0.5）
         percentile_threshold: 百分位阈值（默认 0.5）
 
     Returns:
-        SemanticChunker 实例，如果不可用则回退到 SentenceSplitter
+        SemanticChunker 实例
+
+    Raises:
+        ValueError: embed_model 为 None 时抛出
+        ImportError: 依赖包未安装时抛出
     """
+    if embed_model is None:
+        raise ValueError(
+            "SemanticChunker 需要传入真实的 embed_model，不支持为 None。"
+            "请使用 get_node_parser(..., embed_model=your_embed_model) 传入 embedding 模型。"
+        )
     try:
         from llama_index.packs.node_parser_semantic_chunking.base import SemanticChunker
-        from llama_index.core.embeddings import MockEmbedding
-
-        # 如果没有提供 embed_model，使用 MockEmbedding
-        if embed_model is None:
-            embed_model = MockEmbedding(embed_dim=1024)
 
         return SemanticChunker(
             embed_model=embed_model,
@@ -130,12 +134,9 @@ def _create_semantic_chunker(
             include_prev_next_rel=True,
         )
     except ImportError:
-        warnings.warn(
-            "SemanticChunker 不可用（需要 llama-index-packs-node-parser-semantic-chunking），"
-            "回退到 SentenceSplitter"
-        )
-        return _create_sentence_splitter(
-            chunk_size=chunk_size, chunk_overlap=chunk_overlap
+        raise ImportError(
+            "SemanticChunker 不可用（需要 llama-index-packs-node-parser-semantic-chunking）。"
+            "请安装: pip install llama-index-packs-node-parser-semantic-chunking"
         )
 
 

@@ -855,7 +855,6 @@ curl -X POST "http://localhost:37241/query" \
 | `refine` | 迭代优化答案 |
 | `tree_summarize` | 构建答案树结构 |
 | `simple_summarize` | 简单拼接检索结果 |
-| `no_text` | 仅返回检索结果，不生成答案 |
 | `accumulate` | 累积式生成 |
 | `generation` | 仅生成答案（不使用检索结果） |
 | `compact_accumulate` | 压缩后累积式生成 |

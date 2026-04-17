@@ -66,18 +66,23 @@ class ChunkConfig:
             header_path_separator=self.header_path_separator,
         )
     
-    def to_semantic_chunker(self):
-        """转换为 SemanticChunker（需要 sklearn）"""
+    def to_semantic_chunker(self, embed_model):
+        """转换为 SemanticChunker（必须传入真实的 embedding 模型）"""
+        if embed_model is None:
+            raise ValueError(
+                "SemanticChunker 需要传入真实的 embed_model，不支持为 None。"
+                "请使用 SmartDocumentProcessor(embed_model=your_embed_model) 传入 embedding 模型。"
+            )
         try:
             from llama_index.packs.node_parser_semantic_chunking.base import SemanticChunker
-            from llama_index.core.embeddings import MockEmbedding
         except ImportError:
-            import warnings
-            warnings.warn("SemanticChunker 不可用（需要 sklearn），回退到 SentenceSplitter")
-            return self.to_sentence_splitter()
-        
+            raise ImportError(
+                "SemanticChunker 不可用（需要 llama-index-packs-node-parser-semantic-chunking）。"
+                "请安装: pip install llama-index-packs-node-parser-semantic-chunking"
+            )
+
         return SemanticChunker(
-            embed_model=MockEmbedding(embed_dim=384),
+            embed_model=embed_model,
             chunk_size=self.chunk_size,
             chunk_overlap=self.chunk_overlap,
             similarity_threshold=self.similarity_threshold,
@@ -208,17 +213,17 @@ class SmartDocumentProcessor:
             **kwargs,
         )
 
-    def get_node_parser(self):
+    def get_node_parser(self, embed_model=None):
         """获取节点解析器"""
         strategy = self.config.strategy
-        
+
         if strategy == ChunkStrategy.SEMANTIC:
-            try:
-                return self.config.to_semantic_chunker()
-            except Exception as e:
-                import warnings
-                warnings.warn(f"语义切分失败: {e}，回退到句子切分")
-                return self.config.to_sentence_splitter()
+            if embed_model is None:
+                raise ValueError(
+                    "SEMANTIC 策略需要传入 embed_model，请使用 "
+                    "SmartDocumentProcessor(...).process_documents(documents, embed_model=your_embed_model)"
+                )
+            return self.config.to_semantic_chunker(embed_model=embed_model)
         elif strategy == ChunkStrategy.MARKDOWN:
             return self.config.to_markdown_parser()
         elif strategy == ChunkStrategy.PAGE:
@@ -231,18 +236,20 @@ class SmartDocumentProcessor:
         self,
         documents: List[LlamaDocument],
         show_progress: bool = True,
+        embed_model=None,
     ) -> List:
         """
         处理文档列表，将其切分为节点
-        
+
         Args:
             documents: 文档列表
             show_progress: 是否显示进度
-        
+            embed_model: embedding 模型（用于语义切分）
+
         Returns:
             List[Node]: 切分后的节点列表
         """
-        node_parser = self.get_node_parser()
+        node_parser = self.get_node_parser(embed_model=embed_model)
         nodes = node_parser.get_nodes_from_documents(documents, show_progress=show_progress)
         return nodes
 
@@ -250,19 +257,21 @@ class SmartDocumentProcessor:
         self,
         file_path: Union[str, Path],
         show_progress: bool = True,
+        embed_model=None,
     ) -> List:
         """
         处理单个文件
-        
+
         Args:
             file_path: 文件路径
             show_progress: 是否显示进度
-        
+            embed_model: embedding 模型（用于语义切分）
+
         Returns:
             List[Node]: 切分后的节点列表
         """
         docs = DocumentReader.load_file(file_path)
-        return self.process_documents(docs, show_progress=show_progress)
+        return self.process_documents(docs, show_progress=show_progress, embed_model=embed_model)
 
     @staticmethod
     def process_pdf(

@@ -185,7 +185,6 @@ POST /query
 | `refine` | 迭代优化答案 | 需要详细、全面的答案 |
 | `tree_summarize` | 构建答案树结构 | 复杂问题，需要层次化答案 |
 | `simple` | 简单拼接检索结果 | 快速查看原始片段 |
-| `no_text` | 仅返回检索结果，不生成答案 | 仅需检索，不需要生成 |
 | `accumulate` | 累积式生成，遍历所有检索结果 | 长答案，需要覆盖所有上下文 |
 
 ---
@@ -485,7 +484,6 @@ POST /query
 | **🚀 智能问答** | vector | false | false | false | compact |
 | **🔬 深度分析** | vector | true | false | true | tree_summarize |
 | **📚 全面检索** | hybrid | false | true | false | compact |
-| **📄 仅检索** | vector | false | false | false | no_text |
 
 ---
 

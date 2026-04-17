@@ -2614,7 +2614,6 @@ def build_parser() -> argparse.ArgumentParser:
             "refine",
             "tree_summarize",
             "simple",
-            "no_text",
             "accumulate",
         ],
         default=None,
