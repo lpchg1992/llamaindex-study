@@ -45,7 +45,7 @@ from typing import Optional, List, Callable
 from llama_index.core import SimpleDirectoryReader
 from llama_index.core.schema import Document as LlamaDocument
 from llama_index.readers.file import PptxReader, PandasExcelReader
-from rag.node_parser import get_node_parser
+from llama_index.core.node_parser import HierarchicalNodeParser
 
 from rag.logger import get_logger
 
@@ -157,12 +157,19 @@ class DocumentProcessor:
     ):
         self.config = config or DocumentProcessorConfig()
         self.embed_model = embed_model
-        self.node_parser = node_parser or get_node_parser(
-            chunk_size=self.config.chunk_size,
-            chunk_overlap=self.config.chunk_overlap,
-            strategy=self.config.chunk_strategy,
-            hierarchical_chunk_sizes=self.config.hierarchical_chunk_sizes,
-        )
+        self.node_parser = node_parser
+        if self.node_parser is None:
+            chunk_sizes = self.config.hierarchical_chunk_sizes
+            if chunk_sizes is None:
+                from rag.config import get_settings
+                settings = get_settings()
+                chunk_sizes = settings.hierarchical_chunk_sizes
+            self.node_parser = HierarchicalNodeParser.from_defaults(
+                chunk_sizes=chunk_sizes,
+                chunk_overlap=self.config.chunk_overlap,
+                include_metadata=True,
+                include_prev_next_rel=True,
+            )
 
     def set_embed_model(self, embed_model):
         """设置 embedding 模型"""
