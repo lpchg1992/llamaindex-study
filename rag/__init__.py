@@ -4,7 +4,7 @@ LlamaIndex Study
 基于 LlamaIndex 的现代化 RAG 应用核心库，提供：
 - 配置管理 (Settings, get_settings)
 - 日志工具 (get_logger, get_app_logger, etc.)
-- Embedding 服务 (OllamaEmbeddingService, create_ollama_embedding)
+- Embedding 服务 (create_ollama_embedding)
 - 文档处理 (DocumentReader, SmartDocumentProcessor, load_and_split)
 - 查询引擎 (QueryEngineWrapper, create_query_engine)
 - 向量存储 (LanceDBVectorStore)
@@ -31,17 +31,11 @@ from rag.logger import (
     get_log_dir,
     set_log_dir,
 )
-from rag.ollama_utils import (
+from rag.embedding_factory import (
     create_ollama_embedding,
     configure_global_embed_model,
     configure_embed_model_by_model_id,
     BatchEmbeddingHelper,
-)
-from rag.embedding_service import (
-    OllamaEmbeddingService,
-    OllamaEndpoint,
-    get_embedding_service,
-    reset_embedding_service,
 )
 from rag.reader import (
     DocumentReader,
@@ -88,10 +82,6 @@ __all__ = [
     "configure_global_embed_model",
     "configure_embed_model_by_model_id",
     "BatchEmbeddingHelper",
-    "OllamaEmbeddingService",
-    "OllamaEndpoint",
-    "get_embedding_service",
-    "reset_embedding_service",
     "DocumentReader",
     "SmartDocumentProcessor",
     "load_and_split",

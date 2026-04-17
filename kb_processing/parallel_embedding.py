@@ -33,7 +33,7 @@ import httpx
 
 from rag.config import get_settings
 from rag.logger import get_logger
-from rag.ollama_utils import OllamaEmbedder, create_ollama_embedding
+from rag.embedding_factory import OllamaEmbedder, create_ollama_embedding
 
 logger = get_logger(__name__)
 
@@ -98,7 +98,7 @@ class ParallelEmbeddingProcessor:
         self._initialized = True
 
         self._executor = ThreadPoolExecutor(max_workers=4)
-        self._models: Dict[str, OllamaEmbedder] = {}
+        self._models: Dict[str, Any] = {}
         self._lock = threading.Lock()
         self._model_name: str = _get_default_embedding_model_name()
         self._consecutive_failures: Dict[str, int] = {}
@@ -395,10 +395,11 @@ class ParallelEmbeddingProcessor:
         cache_key = f"{ep.url}:{ep.model_name}"
         if cache_key not in self._models:
             if ep.url == "siliconflow://":
-                from rag.ollama_utils import create_siliconflow_embedding
+                from rag.embedding_factory import create_siliconflow_embedding
 
                 self._models[cache_key] = create_siliconflow_embedding(
                     model=ep.model_name or "Pro/BAAI/bge-m3",
+                    dimensions=ep.dimensions,
                     internal_model_id=ep.model_id,
                 )
             else:
@@ -418,7 +419,7 @@ class ParallelEmbeddingProcessor:
             error: 是否发生错误
         """
         try:
-            from rag.ollama_utils import _record_embedding_call
+            from rag.embedding_factory import _record_embedding_call
 
             if ep.url == "siliconflow://":
                 vendor_id = "siliconflow"
@@ -544,9 +545,6 @@ class ParallelEmbeddingProcessor:
                     if ep.inflight < best_inflight:
                         best_inflight = ep.inflight
                         best_ep = ep
-
-                if best_ep.inflight >= 3:
-                    return best_ep
 
                 return best_ep
 
@@ -677,24 +675,22 @@ class ParallelEmbeddingProcessor:
         if not texts:
             return []
 
-        loop = asyncio.get_running_loop()
-        results: List[EmbeddingResult] = [None] * len(texts)
+        results: List[Optional[EmbeddingResult]] = [None] * len(texts)
         completed = 0
         lock = threading.Lock()
-        chunk_queue: deque = deque(range(len(texts)))
+        chunk_queue: Queue = Queue()
+        for i in range(len(texts)):
+            chunk_queue.put(i)
 
         def worker(ep: EmbeddingEndpoint) -> None:
             nonlocal completed
             while True:
-                chunk_idx = None
-                with self._lock:
-                    if chunk_queue:
-                        chunk_idx = chunk_queue.popleft()
-                    elif completed >= len(texts):
-                        return
-
-                if chunk_idx is None:
-                    time.sleep(0.01)
+                try:
+                    chunk_idx = chunk_queue.get(timeout=0.01)
+                except Empty:
+                    with lock:
+                        if completed >= len(texts):
+                            return
                     continue
 
                 result = self._get_embedding_with_retry(texts[chunk_idx], ep)
@@ -702,6 +698,7 @@ class ParallelEmbeddingProcessor:
 
                 with lock:
                     completed += 1
+                chunk_queue.task_done()
 
         threads = []
         for ep in self.endpoints:
@@ -723,30 +720,23 @@ class ParallelEmbeddingProcessor:
         ]
 
     async def aget_text_embedding(self, text: str) -> List[float]:
-        """异步获取单条文本的 embedding"""
-        _, embedding, _ = (await self.process_batch([text]))[0]
+        """异步获取单条文本的 embedding（直接调用，不走批处理流程）"""
+        ep = self._get_best_endpoint()
+        _, embedding, _ = await self._run_embedding_in_thread(text, ep)
         return embedding
 
     async def aget_text_embeddings(self, texts: List[str]) -> List[List[float]]:
         """异步批量获取 embeddings"""
         return [embedding for _, embedding, _ in await self.process_batch(texts)]
 
-    def _run_sync(self, coro):
-        """在同步环境中运行协程（用于不支持 async 的调用方）
-
-        Args:
-            coro: 协程对象
-
-        Returns:
-            协程的返回值
-        """
-        """在同步环境中运行协程"""
+    def _run_sync(self, coro) -> Any:
+        """在同步环境中运行协程（用于不支持 async 的调用方）"""
         try:
             asyncio.get_running_loop()
         except RuntimeError:
             return asyncio.run(coro)
 
-        result: Dict[str, object] = {}
+        result: Dict[str, Any] = {}
         error: Dict[str, BaseException] = {}
 
         def runner() -> None:
