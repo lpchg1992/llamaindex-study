@@ -38,10 +38,9 @@ import re
 import subprocess
 import tempfile
 import time
-import uuid
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
-from typing import Optional, List, Callable, Set
+from typing import Optional, List, Callable
 
 from llama_index.core import SimpleDirectoryReader
 from llama_index.core.schema import Document as LlamaDocument

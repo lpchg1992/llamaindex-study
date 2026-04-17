@@ -444,19 +444,17 @@ class LanceDBWriteQueue:
 ### 5. 节点解析器（统一分块策略）
 
 ```python
-# rag/node_parser.py
+from llama_index.core.node_parser import HierarchicalNodeParser
+from rag.config import get_settings
 
-from rag.node_parser import get_node_parser, get_hierarchical_node_parser
-
-# 普通分块（SentenceSplitter 或 SemanticChunker）
-parser = get_node_parser(chunk_size=512, chunk_overlap=50)
-
-# 语义分块（基于 embedding 相似度动态决定分块边界）
-parser = get_node_parser(chunk_size=512, use_semantic=True)
-
-# 父子节点分块（用于 Auto-Merging Retriever）
-parser = get_hierarchical_node_parser()
-# 生成三层: [2048, 512, 128]
+# 统一使用层级分块（用于 Auto-Merging Retriever）
+settings = get_settings()
+parser = HierarchicalNodeParser.from_defaults(
+    chunk_sizes=settings.hierarchical_chunk_sizes,
+    chunk_overlap=settings.chunk_overlap or 50,
+    include_metadata=True,
+    include_prev_next_rel=True,
+)
 ```
 
 #### HierarchicalNodeParser 层级分块详解

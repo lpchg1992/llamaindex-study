@@ -8,8 +8,6 @@ Zotero 文档导入处理器
 - Office 文档附件
 """
 
-import os
-import re
 import sqlite3
 import threading
 import time
@@ -20,7 +18,8 @@ from typing import Any, Callable, List, Optional, Tuple
 
 from llama_index.core import SimpleDirectoryReader
 from llama_index.core.schema import Document as LlamaDocument
-from rag.node_parser import get_node_parser
+from llama_index.core.node_parser import HierarchicalNodeParser
+from rag.config import get_settings
 from rag.logger import get_logger
 
 logger = get_logger(__name__)
@@ -434,9 +433,12 @@ class ZoteroImporter:
         from kb_core.document_chunk_service import get_document_chunk_service
 
         self.processor.set_embed_model(embed_model)
-        node_parser = get_node_parser(
-            chunk_size=self.processor.config.chunk_size,
-            chunk_overlap=self.processor.config.chunk_overlap,
+        settings = get_settings()
+        node_parser = HierarchicalNodeParser.from_defaults(
+            chunk_sizes=self.processor.config.hierarchical_chunk_sizes or settings.hierarchical_chunk_sizes,
+            chunk_overlap=self.processor.config.chunk_overlap or settings.chunk_overlap,
+            include_metadata=True,
+            include_prev_next_rel=True,
         )
 
         effective_kb_id = kb_id or self.kb_id or "default"
