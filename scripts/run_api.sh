@@ -157,7 +157,7 @@ case "${1:-start}" in
 
         check_uv
 
-        if [ -f "$PROJECT_DIR/api.py" ] && [ -f "$PROJECT_DIR/pyproject.toml" ]; then
+        if [ -f "$PROJECT_DIR/api/main.py" ] && [ -f "$PROJECT_DIR/pyproject.toml" ]; then
             log_info "Starting LlamaIndex RAG API..."
         else
             log_error "Required files not found"
