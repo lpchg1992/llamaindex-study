@@ -246,7 +246,7 @@ curl -X POST "http://localhost:37241/query" \
 
 ### Q: API 服务如何启动？
 ```bash
-uv run python api.py
+uv run python -m api.main
 ```
 - 服务地址：`http://localhost:37241`
 - API 文档：`http://localhost:37241/docs`
@@ -256,5 +256,5 @@ uv run python api.py
 配置 Python logging 级别：
 ```bash
 export LOG_LEVEL=DEBUG
-uv run python api.py
+uv run python -m api.main
 ```

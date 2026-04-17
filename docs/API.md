@@ -24,7 +24,7 @@
 
 ```bash
 cd ~/文档/GitHub/llamaindex-study
-uv run python api.py
+uv run python -m api.main
 ```
 
  - 服务地址: `http://localhost:37241`

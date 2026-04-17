@@ -57,8 +57,8 @@ cleanup_all() {
         echo "$port_pids" | tr ' ' '\n' | xargs kill -9 2>/dev/null || true
     fi
 
-    # 杀掉 api.py 进程
-    local api_pids=$(ps aux 2>/dev/null | grep -E "[p]ython.*api\.py|[u]vicorn.*api:app" 2>/dev/null | awk '{print $2}' | tr '\n' ' ') || true
+    # 杀掉 api 进程
+    local api_pids=$(ps aux 2>/dev/null | grep -E "[p]ython.*-m api|[u]vicorn.*api:app" 2>/dev/null | awk '{print $2}' | tr '\n' ' ') || true
     if [ -n "$api_pids" ]; then
         echo "$api_pids" | tr ' ' '\n' | xargs kill -9 2>/dev/null || true
     fi
@@ -72,7 +72,7 @@ start_api() {
 
     cd "$PROJECT_DIR"
 
-    nohup uv run python api.py > "$LOG_DIR/api.stdout.log" 2>&1 &
+    nohup uv run python -m api.main > "$LOG_DIR/api.stdout.log" 2>&1 &
 
     local pid=$!
     echo $pid > "$PID_FILE"

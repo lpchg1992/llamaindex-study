@@ -50,7 +50,7 @@ ollama pull bge-m3
 
 ```bash
 # 启动 API 服务
-uv run python api.py
+uv run python -m api.main
 
 # 或使用交互式 CLI
 uv run llamaindex-study
@@ -162,7 +162,11 @@ curl -X POST http://localhost:37241/kbs/HTE_history/topics/refresh \
 
 ```
 llamaindex-study/
-├── api.py                    # FastAPI 服务入口
+├── api/                     # FastAPI 模块化服务
+│   ├── main.py              # 应用入口
+│   ├── schemas.py           # Pydantic 模型
+│   ├── deps.py              # 共享依赖
+│   └── routes/              # 路由模块
 ├── kb_cli/                   # CLI 命令实现
 ├── rag/                      # 核心库（RAG 组件）
 │   ├── config.py             # 配置管理
