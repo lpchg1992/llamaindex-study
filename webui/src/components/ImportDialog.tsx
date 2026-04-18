@@ -33,10 +33,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { Upload, FolderOpen, Book, FileText, RefreshCw, Eye, Loader2 } from 'lucide-react'
+import { Upload, FolderOpen, Book, FileText, RefreshCw, Eye, Loader2, Settings2, ChevronDown, ChevronRight } from 'lucide-react'
 import { toast } from 'sonner'
-import type { 
-  ObsidianVaultTree, 
+import type {
+  ObsidianVaultTree,
   ZoteroPreviewItem,
   ObsidianPreviewItem,
   FilePreviewItem,
@@ -123,6 +123,11 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
     warnings: [] as string[],
   })
   const [fileIncludeExts, setFileIncludeExts] = useState("")
+
+  const [showAdvanced, setShowAdvanced] = useState(false)
+  const [chunkStrategy, setChunkStrategy] = useState<string>("hierarchical")
+  const [chunkSize, setChunkSize] = useState<number>(1024)
+  const [hierarchicalChunkSizes, setHierarchicalChunkSizes] = useState<string>("2048,1024,512")
 
   const zoteroTreeItems = useMemo<FileTreeItem[]>(() => {
     if (!zoteroCollectionsData?.collections) return []
@@ -427,6 +432,14 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
       return
     }
 
+    const chunkParams = {
+      chunk_strategy: chunkStrategy,
+      chunk_size: chunkSize,
+      ...(chunkStrategy === 'hierarchical' && {
+        hierarchical_chunk_sizes: hierarchicalChunkSizes.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n))
+      }),
+    }
+
     try {
       if (activeSource === 'files') {
         const paths = itemsToImport.map((item) => item.path || item.name)
@@ -436,6 +449,7 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
             paths,
             async_mode: true,
             refresh_topics: true,
+            ...chunkParams,
           },
         })
 
@@ -481,6 +495,7 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
             async_mode: true,
             refresh_topics: false,
             ...(activeSource === 'zotero' && { prefix: zoteroPrefix }),
+            ...chunkParams,
           },
         })
 
@@ -690,6 +705,60 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
                   </div>
                 </TabsContent>
               </Tabs>
+
+              <div className="mt-4 pt-4 border-t">
+                <button
+                  type="button"
+                  onClick={() => setShowAdvanced(!showAdvanced)}
+                  className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  {showAdvanced ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                  <Settings2 className="h-4 w-4" />
+                  高级选项
+                </button>
+                {showAdvanced && (
+                  <div className="mt-3 space-y-3">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <Label htmlFor="chunk-strategy" className="text-xs">分块策略</Label>
+                        <Select value={chunkStrategy} onValueChange={setChunkStrategy}>
+                          <SelectTrigger id="chunk-strategy" className="h-8 text-xs">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="hierarchical">层级 (Hierarchical)</SelectItem>
+                            <SelectItem value="sentence">句子 (Sentence)</SelectItem>
+                            <SelectItem value="semantic">语义 (Semantic)</SelectItem>
+                            <SelectItem value="markdown">Markdown</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-1">
+                        <Label htmlFor="chunk-size" className="text-xs">分块大小</Label>
+                        <Input
+                          id="chunk-size"
+                          type="number"
+                          value={chunkSize}
+                          onChange={(e) => setChunkSize(parseInt(e.target.value) || 1024)}
+                          className="h-8 text-xs"
+                        />
+                      </div>
+                    </div>
+                    {chunkStrategy === 'hierarchical' && (
+                      <div className="space-y-1">
+                        <Label htmlFor="hierarchical-sizes" className="text-xs">层级大小 (逗号分隔)</Label>
+                        <Input
+                          id="hierarchical-sizes"
+                          value={hierarchicalChunkSizes}
+                          onChange={(e) => setHierarchicalChunkSizes(e.target.value)}
+                          placeholder="2048,1024,512"
+                          className="h-8 text-xs"
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
 
             <div className="flex flex-col gap-4 flex-1 min-h-0 overflow-hidden">

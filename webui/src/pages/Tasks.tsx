@@ -43,12 +43,25 @@ function TaskDetailDialog({ taskId, open, onOpenChange }: TaskDetailDialogProps)
     switch (status) {
       case 'completed': return 'bg-green-500'
       case 'failed': return 'bg-red-500'
-      case 'processing':
-      case 'embedding':
-      case 'writing': return 'bg-blue-500'
+      case 'processing': return 'bg-blue-500'
+      case 'embedding': return 'bg-purple-500'
+      case 'writing': return 'bg-cyan-500'
       case 'cancelled': return 'bg-gray-500'
       case 'pending': return 'bg-yellow-500'
       default: return 'bg-gray-400'
+    }
+  }
+
+  const getStatusLabel = (status: string) => {
+    switch (status) {
+      case 'completed': return '完成'
+      case 'failed': return '失败'
+      case 'processing': return '解析中'
+      case 'embedding': return '向量化'
+      case 'writing': return '写入中'
+      case 'cancelled': return '已取消'
+      case 'pending': return '等待中'
+      default: return status
     }
   }
 
@@ -138,7 +151,7 @@ function TaskDetailDialog({ taskId, open, onOpenChange }: TaskDetailDialogProps)
                         <div className="flex items-center justify-between mb-2">
                           <div className="flex items-center gap-2 min-w-0">
                             <Badge className={getStatusColor(file.status)} variant="outline">
-                              {file.status}
+                              {getStatusLabel(file.status)}
                             </Badge>
                             <span className="truncate font-medium" title={file.file_name}>
                               {file.file_name}
@@ -156,7 +169,7 @@ function TaskDetailDialog({ taskId, open, onOpenChange }: TaskDetailDialogProps)
                         <div className="flex items-center gap-2">
                           <div className="flex-1 h-1.5 bg-secondary rounded-full overflow-hidden">
                             <div
-                              className="h-full bg-primary transition-all"
+                              className={`h-full transition-all ${file.status === 'embedding' ? 'bg-purple-500' : file.status === 'writing' ? 'bg-cyan-500' : 'bg-primary'}`}
                               style={{
                                 width: file.total_chunks > 0
                                   ? `${(file.processed_chunks / file.total_chunks) * 100}%`
