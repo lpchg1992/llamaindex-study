@@ -14,7 +14,7 @@ LanceDB CRUD 工具
 
 import json
 import lancedb
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, List, Dict, Iterator
 

@@ -10,7 +10,7 @@ Ollama 工具模块
 import asyncio
 import logging
 import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Optional
 
 from llama_index.llms.ollama import Ollama
 from llama_index.core.constants import DEFAULT_NUM_OUTPUTS, DEFAULT_CONTEXT_WINDOW
@@ -18,9 +18,7 @@ from llama_index.core.constants import DEFAULT_NUM_OUTPUTS, DEFAULT_CONTEXT_WIND
 from rag._infra import (
     CircuitBreakerOpenError,
     RetryableError,
-    get_circuit_breaker,
     get_ollama_request_queue,
-    OllamaRequestQueue,
     _extract_llm_tokens,
     DEFAULT_TIMEOUT,
 )
@@ -32,7 +30,6 @@ from rag.embedding_factory import (
     configure_embed_model_by_model_id,
     BatchEmbeddingHelper,
     create_siliconflow_embedding,
-    _record_embedding_call,
 )
 
 logger = logging.getLogger(__name__)

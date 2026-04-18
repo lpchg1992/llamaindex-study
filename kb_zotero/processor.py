@@ -11,12 +11,10 @@ Zotero 文档导入处理器
 import sqlite3
 import threading
 import time
-import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, List, Optional, Tuple
 
-from llama_index.core import SimpleDirectoryReader
 from llama_index.core.schema import Document as LlamaDocument
 from llama_index.core.node_parser import HierarchicalNodeParser
 from rag.config import get_settings

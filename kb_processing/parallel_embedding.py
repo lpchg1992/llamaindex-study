@@ -33,7 +33,7 @@ import httpx
 
 from rag.config import get_settings
 from rag.logger import get_logger
-from rag.embedding_factory import OllamaEmbedder, create_ollama_embedding
+from rag.embedding_factory import create_ollama_embedding
 
 logger = get_logger(__name__)
 

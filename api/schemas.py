@@ -6,9 +6,7 @@ Extracted from api.py to avoid circular imports.
 from __future__ import annotations
 
 from typing import List, Optional, Dict, Literal, Any
-from dataclasses import dataclass
 from pydantic import BaseModel, Field
-import markdown
 
 
 # ============== Shared Data Models ==============

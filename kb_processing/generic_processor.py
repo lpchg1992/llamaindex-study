@@ -13,8 +13,6 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, List, Optional
-
-from llama_index.core.schema import Document as LlamaDocument
 from llama_index.core.node_parser import HierarchicalNodeParser
 from rag.config import get_settings
 

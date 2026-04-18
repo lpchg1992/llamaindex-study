@@ -9,11 +9,10 @@
 """
 
 import logging
-import os
 import sys
 import threading
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Optional
 from datetime import datetime
 
 

@@ -10,13 +10,11 @@ Zotero 文档读取器
 - 按收藏夹分类
 """
 
-import json
 import re
 import sqlite3
-from dataclasses import dataclass, field, asdict
-from datetime import datetime
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, Set, Dict, Any
+from typing import List, Optional, Dict, Any
 
 from llama_index.core.schema import Document as LlamaDocument
 

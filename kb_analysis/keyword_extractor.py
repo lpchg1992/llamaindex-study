@@ -9,7 +9,6 @@ import re
 from collections import Counter
 from typing import List, Set
 
-from rag.config import get_settings
 from rag.logger import get_logger
 
 logger = get_logger(__name__)
