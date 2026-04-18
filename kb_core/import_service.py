@@ -79,6 +79,12 @@ class ImportApplicationService:
                 params["include_exts"] = req.include_exts
             if req.exclude_exts:
                 params["exclude_exts"] = req.exclude_exts
+            if req.chunk_strategy:
+                params["chunk_strategy"] = req.chunk_strategy
+            if req.chunk_size:
+                params["chunk_size"] = req.chunk_size
+            if req.hierarchical_chunk_sizes:
+                params["hierarchical_chunk_sizes"] = req.hierarchical_chunk_sizes
             source = req.source or (
                 req.paths[0] if req.paths else (req.path or "generic")
             )
@@ -100,6 +106,12 @@ class ImportApplicationService:
                 "persist_dir": req.persist_dir,
                 "refresh_topics": req.refresh_topics,
             }
+            if req.chunk_strategy:
+                params["chunk_strategy"] = req.chunk_strategy
+            if req.chunk_size:
+                params["chunk_size"] = req.chunk_size
+            if req.hierarchical_chunk_sizes:
+                params["hierarchical_chunk_sizes"] = req.hierarchical_chunk_sizes
             source = req.source or (req.folder_path or req.vault_path or "obsidian")
             return TaskService.submit(
                 task_type="obsidian",

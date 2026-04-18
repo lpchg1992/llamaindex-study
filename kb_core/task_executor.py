@@ -356,7 +356,6 @@ class TaskExecutor:
         from kb_core.registry import KnowledgeBaseRegistry
         from .database import init_document_db
         from llama_index.core.schema import Document as LlamaDocument
-        from llama_index.core.node_parser import HierarchicalNodeParser
         from kb_processing.parallel_embedding import get_parallel_processor
         from rag.config import get_settings
 
@@ -451,12 +450,13 @@ class TaskExecutor:
         )
 
         lance_store = vs._get_lance_vector_store()
+        from kb_processing.document_processor import get_node_parser
         settings = get_settings()
-        node_parser = HierarchicalNodeParser.from_defaults(
-            chunk_sizes=settings.hierarchical_chunk_sizes,
-            chunk_overlap=settings.chunk_overlap or 50,
-            include_metadata=True,
-            include_prev_next_rel=True,
+        node_parser = get_node_parser(
+            strategy=settings.chunk_strategy,
+            chunk_size=settings.chunk_size,
+            chunk_overlap=settings.chunk_overlap,
+            hierarchical_chunk_sizes=settings.hierarchical_chunk_sizes,
         )
 
         processed_sources = []
@@ -1439,7 +1439,6 @@ class TaskExecutor:
         """执行通用文件导入"""
         from kb_processing.generic_processor import GenericImporter
         from kb_processing.parallel_embedding import get_parallel_processor
-        from llama_index.core.node_parser import HierarchicalNodeParser
         from rag.config import get_settings
 
         kb_id = task.kb_id
@@ -1451,12 +1450,13 @@ class TaskExecutor:
         doc_db = init_document_db()
         embed_processor = get_parallel_processor()
         lance_store = vs._get_lance_vector_store()
+        from kb_processing.document_processor import get_node_parser
         settings = get_settings()
-        node_parser = HierarchicalNodeParser.from_defaults(
-            chunk_sizes=settings.hierarchical_chunk_sizes,
-            chunk_overlap=settings.chunk_overlap or 50,
-            include_metadata=True,
-            include_prev_next_rel=True,
+        node_parser = get_node_parser(
+            strategy=settings.chunk_strategy,
+            chunk_size=settings.chunk_size,
+            chunk_overlap=settings.chunk_overlap,
+            hierarchical_chunk_sizes=settings.hierarchical_chunk_sizes,
         )
 
         raw_paths = params.get("paths")
