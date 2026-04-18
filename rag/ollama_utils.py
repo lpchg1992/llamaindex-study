@@ -61,23 +61,6 @@ def _record_llm_call(
         pass
 
 
-def _record_reranker_call(vendor_id: str, model_id: str, token_count: int, error: bool):
-    """记录 Reranker 调用统计"""
-    try:
-        from rag.callbacks import record_model_call
-
-        record_model_call(
-            vendor_id=vendor_id,
-            model_type="reranker",
-            model_id=model_id,
-            prompt_tokens=token_count,
-            completion_tokens=0,
-            error=error,
-        )
-    except Exception:
-        pass
-
-
 class RetryableOllama(Ollama):
     """Ollama LLM 子类，支持 503 错误重试、请求超时和熔断器"""
 
