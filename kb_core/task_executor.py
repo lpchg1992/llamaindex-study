@@ -95,10 +95,7 @@
 """
 
 import asyncio
-import os
 import queue
-import subprocess
-import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
@@ -509,6 +506,13 @@ class TaskExecutor:
                 nodes = node_parser.get_nodes_from_documents([doc])
 
                 if nodes:
+                    current_hash = ""
+                    if hash_tool:
+                        try:
+                            current_hash = hash_tool(str(abs_path))
+                        except Exception:
+                            pass
+
                     texts = [node.get_content() for node in nodes]
 
                     results: List[Optional[EmbeddingResult]] = [None] * len(texts)
@@ -517,17 +521,39 @@ class TaskExecutor:
                     ):
                         results[idx] = result
 
+                    failed_ids = []
                     for j in range(len(results)):
                         result_item = results[j]
                         if result_item is None:
+                            failed_ids.append(nodes[j].node_id)
                             continue
                         _, embedding, _ = result_item
+                        if embedding is None or all(v == 0.0 for v in embedding):
+                            failed_ids.append(nodes[j].node_id)
+                            continue
                         nodes[j].embedding = embedding
 
-                        # 同步写入 LanceDB，等待完成才继续（确保原子性）
+                    try:
+                        from .document_chunk_service import DocumentChunkService
+                        doc_chunk_svc = DocumentChunkService(kb_id)
+                        doc_record = doc_chunk_svc.create_document(
+                            source_file=rel_path,
+                            source_path=str(abs_path),
+                            file_hash=current_hash if current_hash else "",
+                            nodes=nodes,
+                            file_size=abs_path.stat().st_size if abs_path.exists() else 0,
+                            failed_node_ids=failed_ids if failed_ids else None,
+                        )
+                        if not doc_record:
+                            logger.warning(f"SQLite 保存失败，跳过文档: {rel_path}")
+                            continue
+                    except Exception as e:
+                        logger.warning(f"SQLite 保存失败，跳过文档: {rel_path}, 错误: {e}")
+                        continue
+
                     try:
                         processor = DocumentProcessor()
-                        success_count, skipped, failed_ids = processor._upsert_nodes(
+                        success_count, skipped, _ = processor._upsert_nodes(
                             lance_store, nodes
                         )
                         write_ok = True
@@ -535,48 +561,8 @@ class TaskExecutor:
                     except Exception as write_ex:
                         write_ok = False
                         write_err = str(write_ex)
-                        logger.warning(f"LanceDB 写入失败: {write_err}")
-                    if not write_ok:
-                        logger.warning(
-                            f"LanceDB 写入失败，跳过文档: {rel_path}, 错误: {write_err}"
-                        )
-                        continue
+                        logger.warning(f"LanceDB 写入失败（SQLite 已保存，标记为待修复）: {rel_path}, 错误: {write_err}")
                     processed_chunks += success_count
-
-                    # 标记失败的 chunks
-                    if failed_ids:
-                        try:
-                            svc = DocumentChunkService(kb_id)
-                            svc.mark_chunks_failed(failed_ids)
-                        except Exception as e:
-                            logger.warning(f"标记失败 chunks 失败: {e}")
-
-                current_hash = ""
-                if hash_tool:
-                    try:
-                        current_hash = hash_tool(str(abs_path))
-                    except Exception:
-                        pass
-
-                from .document_chunk_service import DocumentChunkService
-
-                svc = DocumentChunkService(kb_id)
-                doc_record = doc_db.get_by_source_path(kb_id, str(abs_path))
-                if doc_record:
-                    doc_id = doc_record.get("id")
-                    if doc_id:
-                        svc.delete_document_cascade(doc_id, delete_lance=True)
-
-                file_size = abs_path.stat().st_size if abs_path.exists() else 0
-                doc_db.create(
-                    kb_id=kb_id,
-                    source_file=rel_path,
-                    source_path=str(abs_path),
-                    file_hash=current_hash,
-                    file_size=file_size,
-                    mime_type="text/markdown",
-                    metadata={"source": "obsidian", "relative_path": rel_path},
-                )
 
                 processed_sources.append(str(abs_path))
                 processed_files += 1
