@@ -1711,48 +1711,6 @@ def handle_evaluate(args: argparse.Namespace) -> int:
     return 0
 
 
-def handle_category_rules_list(_: argparse.Namespace) -> int:
-    result = CategoryService.list_rules()
-    print_table(
-        result["rules"], ["kb_id", "rule_type", "pattern", "priority", "description"]
-    )
-    return 0
-
-
-def handle_category_rules_sync(_: argparse.Namespace) -> int:
-    print_json(CategoryService.sync_rules())
-    return 0
-
-
-def handle_category_rules_add(args: argparse.Namespace) -> int:
-    print_json(
-        CategoryService.add_rule(
-            kb_id=args.kb_id,
-            rule_type=args.rule_type,
-            pattern=args.pattern,
-            description=args.description,
-            priority=args.priority,
-        )
-    )
-    return 0
-
-
-def handle_category_rules_delete(args: argparse.Namespace) -> int:
-    print_json(CategoryService.delete_rule(args.kb_id, args.rule_type, args.pattern))
-    return 0
-
-
-def handle_category_classify(args: argparse.Namespace) -> int:
-    print_json(
-        CategoryService.classify(
-            folder_path=args.folder_path,
-            folder_description=args.description,
-            use_llm=args.use_llm,
-        )
-    )
-    return 0
-
-
 def handle_admin_tables(_: argparse.Namespace) -> int:
     print_table(
         AdminService.list_tables()["tables"], ["kb_id", "status", "row_count", "path"]
@@ -3018,44 +2976,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="不显示实时日志输出",
     )
     task_watch.set_defaults(handler=handle_task_watch)
-
-    category_parser = subparsers.add_parser("category", help="分类规则与分类辅助")
-    category_sub = category_parser.add_subparsers(
-        dest="category_command", required=True
-    )
-
-    category_rules = category_sub.add_parser("rules", help="分类规则管理")
-    category_rules_sub = category_rules.add_subparsers(
-        dest="rules_command", required=True
-    )
-
-    rules_list = category_rules_sub.add_parser("list", help="列出分类规则")
-    rules_list.set_defaults(handler=handle_category_rules_list)
-
-    rules_sync = category_rules_sub.add_parser("sync", help="同步映射规则到数据库")
-    rules_sync.set_defaults(handler=handle_category_rules_sync)
-
-    rules_add = category_rules_sub.add_parser("add", help="新增分类规则")
-    rules_add.add_argument("--kb-id", required=True)
-    rules_add.add_argument("--rule-type", required=True)
-    rules_add.add_argument("--pattern", required=True)
-    rules_add.add_argument("--description", default="")
-    rules_add.add_argument("--priority", type=int, default=0)
-    rules_add.set_defaults(handler=handle_category_rules_add)
-
-    rules_delete = category_rules_sub.add_parser("delete", help="删除分类规则")
-    rules_delete.add_argument("--kb-id", required=True)
-    rules_delete.add_argument("--rule-type", required=True)
-    rules_delete.add_argument("--pattern", required=True)
-    rules_delete.set_defaults(handler=handle_category_rules_delete)
-
-    category_classify = category_sub.add_parser("classify", help="对文件夹执行分类")
-    category_classify.add_argument("folder_path")
-    category_classify.add_argument("--description", default="")
-    category_classify.add_argument(
-        "--use-llm", action=argparse.BooleanOptionalAction, default=True
-    )
-    category_classify.set_defaults(handler=handle_category_classify)
 
     admin_parser = subparsers.add_parser("admin", help="管理命令")
     admin_sub = admin_parser.add_subparsers(dest="admin_command", required=True)

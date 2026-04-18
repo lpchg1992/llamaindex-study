@@ -7,7 +7,6 @@ from .search import router as search_router
 from .ingest import router as ingest_router
 from .zotero import router as zotero_router
 from .obsidian import router as obsidian_router
-from .categories import router as categories_router
 from .admin import router as admin_router
 from .documents import router as documents_router
 from .lance import router as lance_router
@@ -25,7 +24,6 @@ __all__ = [
     "ingest_router",
     "zotero_router",
     "obsidian_router",
-    "categories_router",
     "admin_router",
     "documents_router",
     "lance_router",

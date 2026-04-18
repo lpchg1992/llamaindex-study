@@ -75,14 +75,6 @@
 | DELETE | `/tasks/delete-all` | 删除所有任务 |
 | POST | `/tasks/cleanup` | 清理孤儿任务 |
 
-### 分类规则
-| 方法 | 端点 | 功能 |
-|------|------|------|
-| GET | `/category/rules` | 列出分类规则 |
-| POST | `/category/rules/sync` | 同步分类规则 |
-| POST | `/category/classify` | 分类文件夹 |
-| POST | `/category/rules/add` | 添加分类规则 |
-
 ## 代码索引
 
 ### 核心模块 (`rag/`)
@@ -120,7 +112,6 @@
 | 文档管理 | `kb_core/` | 文档记录（documents 表） |
 | 文档处理 | `kb_processing/` | 统一文档解析 |
 | Obsidian | `kb_obsidian/` | Obsidian 集成 |
-| 分类器 | `kb_analysis/` | LLM 分类 |
 | 同步状态 | `kb_storage/` | 同步状态管理 |
 | Zotero | `kb_zotero/` | Zotero 集成 |
 | WebSocket | `kb_core/` | WebSocket 管理 |

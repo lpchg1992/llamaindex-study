@@ -82,7 +82,6 @@ llamaindex-study <command> [subcommand] [options]
   obsidian                      Obsidian 辅助
   zotero                        Zotero 辅助
   task                          任务管理
-  category                      分类规则
   admin                         管理命令
   service                       服务管理
   config                        配置管理
@@ -676,75 +675,6 @@ uv run llamaindex-study task watch abc12345 --interval 2
 
 # 最多观察 60 秒
 uv run llamaindex-study task watch abc12345 --timeout 60
-```
-
----
-
-## 分类规则 (category)
-
-### 列出规则
-
-```bash
-uv run llamaindex-study category rules list
-```
-
-### 同步规则到数据库
-
-```bash
-uv run llamaindex-study category rules sync
-```
-
-### 添加规则
-
-```bash
-uv run llamaindex-study category rules add \
-    --kb-id <kb_id> \
-    --rule-type <type> \
-    --pattern <pattern> \
-    [--description <desc>] \
-    [--priority <num>]
-```
-
-规则类型：
-- `folder_path`：文件夹路径匹配
-- `tag`：标签匹配
-
-示例：
-
-```bash
-uv run llamaindex-study category rules add \
-    --kb-id tech_tools \
-    --rule-type folder_path \
-    --pattern "IT" \
-    --description "IT 技术文档" \
-    --priority 100
-```
-
-### 删除规则
-
-```bash
-uv run llamaindex-study category rules delete \
-    --kb-id <kb_id> \
-    --rule-type <type> \
-    --pattern <pattern>
-```
-
-### 对文件夹分类
-
-```bash
-uv run llamaindex-study category classify <folder_path> \
-    [--description <desc>] \
-    [--use-llm | --no-use-llm]
-```
-
-示例：
-
-```bash
-# 使用 LLM 智能分类
-uv run llamaindex-study category classify /path/to/folder
-
-# 仅使用规则匹配
-uv run llamaindex-study category classify /path/to/folder --no-use-llm
 ```
 
 ---

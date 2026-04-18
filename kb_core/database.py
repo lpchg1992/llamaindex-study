@@ -112,24 +112,6 @@ class TaskHistoryModel(Base):
     created_at: Mapped[float] = mapped_column(Float, nullable=False)
 
 
-class CategoryRuleModel(Base):
-    __tablename__ = "kb_category_rules"
-    __table_args__ = (
-        UniqueConstraint("kb_id", "rule_type", "pattern", name="uq_rule_key"),
-        Index("idx_rules_kb_id", "kb_id"),
-        Index("idx_rules_type", "rule_type"),
-    )
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    kb_id: Mapped[str] = mapped_column(String, nullable=False)
-    rule_type: Mapped[str] = mapped_column(String, nullable=False)
-    pattern: Mapped[str] = mapped_column(String, nullable=False)
-    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    priority: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    is_active: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
-    created_at: Mapped[float] = mapped_column(Float, nullable=False)
-    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
-
-
 class VendorModel(Base):
     __tablename__ = "vendors"
     __table_args__ = (Index("idx_vendors_active", "is_active"),)
@@ -1360,141 +1342,6 @@ class KnowledgeBaseMetaDB:
         return count
 
 
-class CategoryRuleDB:
-    def __init__(self, db: DatabaseManager):
-        self.db = db
-
-    @staticmethod
-    def _to_dict(row: CategoryRuleModel) -> Dict[str, Any]:
-        return {
-            "id": row.id,
-            "kb_id": row.kb_id,
-            "rule_type": row.rule_type,
-            "pattern": row.pattern,
-            "description": row.description or "",
-            "priority": row.priority,
-            "is_active": row.is_active,
-            "created_at": row.created_at,
-            "updated_at": row.updated_at,
-        }
-
-    def add_rule(
-        self,
-        kb_id: str,
-        rule_type: str,
-        pattern: str,
-        description: str = "",
-        priority: int = 0,
-    ) -> bool:
-        now = time.time()
-        stmt = sqlite_insert(CategoryRuleModel).values(
-            kb_id=kb_id,
-            rule_type=rule_type,
-            pattern=pattern,
-            description=description,
-            priority=priority,
-            is_active=1,
-            created_at=now,
-            updated_at=now,
-        )
-        stmt = stmt.on_conflict_do_update(
-            index_elements=[
-                CategoryRuleModel.kb_id,
-                CategoryRuleModel.rule_type,
-                CategoryRuleModel.pattern,
-            ],
-            set_={
-                "description": stmt.excluded.description,
-                "priority": stmt.excluded.priority,
-                "is_active": 1,
-                "updated_at": now,
-            },
-        )
-        try:
-            with self.db.session_scope() as session:
-                session.execute(stmt)
-            return True
-        except Exception as e:
-            logger.warning(f"添加分类规则失败: {e}")
-            return False
-
-    def get_rules_for_kb(self, kb_id: str) -> List[Dict[str, Any]]:
-        with self.db.session_scope() as session:
-            rows = session.scalars(
-                select(CategoryRuleModel)
-                .where(
-                    CategoryRuleModel.kb_id == kb_id, CategoryRuleModel.is_active == 1
-                )
-                .order_by(CategoryRuleModel.priority.desc())
-            ).all()
-            return [self._to_dict(row) for row in rows]
-
-    def get_rules_by_type(self, rule_type: str) -> List[Dict[str, Any]]:
-        with self.db.session_scope() as session:
-            rows = session.scalars(
-                select(CategoryRuleModel)
-                .where(
-                    CategoryRuleModel.rule_type == rule_type,
-                    CategoryRuleModel.is_active == 1,
-                )
-                .order_by(CategoryRuleModel.kb_id, CategoryRuleModel.priority.desc())
-            ).all()
-            return [self._to_dict(row) for row in rows]
-
-    def get_all_rules(self) -> List[Dict[str, Any]]:
-        with self.db.session_scope() as session:
-            rows = session.scalars(
-                select(CategoryRuleModel)
-                .where(CategoryRuleModel.is_active == 1)
-                .order_by(CategoryRuleModel.kb_id, CategoryRuleModel.priority.desc())
-            ).all()
-            return [self._to_dict(row) for row in rows]
-
-    def delete_rule(self, kb_id: str, rule_type: str, pattern: str) -> bool:
-        with self.db.session_scope() as session:
-            result = session.execute(
-                delete(CategoryRuleModel).where(
-                    CategoryRuleModel.kb_id == kb_id,
-                    CategoryRuleModel.rule_type == rule_type,
-                    CategoryRuleModel.pattern == pattern,
-                )
-            )
-            return (result.rowcount or 0) > 0
-
-    def delete_rules_for_kb(self, kb_id: str) -> int:
-        with self.db.session_scope() as session:
-            result = session.execute(
-                delete(CategoryRuleModel).where(CategoryRuleModel.kb_id == kb_id)
-            )
-            return result.rowcount or 0
-
-    def seed_initial_rules(self, knowledge_bases: List[Dict[str, Any]]) -> int:
-        count = 0
-        for kb in knowledge_bases:
-            kb_id = kb.get("id")
-            source_paths = kb.get("source_paths", [])
-            source_tags = kb.get("source_tags", [])
-            for i, path in enumerate(source_paths):
-                if self.add_rule(
-                    kb_id=kb_id,
-                    rule_type="folder_path",
-                    pattern=path,
-                    description=f"文件夹路径匹配: {path}",
-                    priority=100 - i,
-                ):
-                    count += 1
-            for i, tag in enumerate(source_tags):
-                if self.add_rule(
-                    kb_id=kb_id,
-                    rule_type="tag",
-                    pattern=tag,
-                    description=f"标签匹配: {tag}",
-                    priority=50 - i,
-                ):
-                    count += 1
-        return count
-
-
 class DocumentDB:
     def __init__(self, db: DatabaseManager):
         self.db = db
@@ -2049,10 +1896,6 @@ def init_progress_db() -> ProgressDB:
 
 def init_kb_meta_db() -> KnowledgeBaseMetaDB:
     return KnowledgeBaseMetaDB(get_db())
-
-
-def init_category_rule_db() -> CategoryRuleDB:
-    return CategoryRuleDB(get_db())
 
 
 def init_document_db() -> DocumentDB:

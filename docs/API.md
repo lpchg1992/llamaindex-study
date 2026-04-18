@@ -355,15 +355,6 @@ curl -X POST http://localhost:37241/query \
 | POST | `/obsidian/import-all` | 全库分类导入 |
 | GET | `/obsidian/vaults/{name}` | 获取 vault 信息 |
 
-### 分类规则
-
-| 方法 | 端点 | 功能 |
-|------|------|------|
-| GET | `/category/rules` | 列出分类规则 |
-| POST | `/category/rules/sync` | 同步分类规则到数据库 |
-| POST | `/category/classify` | 分类文件夹 |
-| POST | `/category/rules/add` | 添加分类规则 |
-
 ### Zotero
 
 | 方法 | 端点 | 功能 |
@@ -916,49 +907,6 @@ curl http://localhost:37241/evaluate/metrics
   "answer_relevancy": {...},
   "context_precision": {...},
   "context_recall": {...}
-}
-```
-
----
-
-### 分类规则
-
-#### GET /category/rules - 列出分类规则
-
-```bash
-curl http://localhost:37241/category/rules
-```
-
-```json
-{
-  "rules": [
-    {
-      "id": 1,
-      "kb_id": "tech_tools",
-      "rule_type": "folder_path",
-      "pattern": "IT",
-      "description": "文件夹路径匹配: IT",
-      "priority": 100
-    }
-  ],
-  "total": 5
-}
-```
-
-#### POST /category/classify - 分类文件夹
-
-```bash
-curl -X POST "http://localhost:37241/category/classify" \
-  -H "Content-Type: application/json" \
-  -d '{"folder_path": "/path/to/folder", "use_llm": true}'
-```
-
-```json
-{
-  "kb_id": "tech_tools",
-  "matched_by": "llm",
-  "confidence": 0.85,
-  "reason": "基于 LLM 分析，文件夹内容与 IT 技术相关"
 }
 ```
 
@@ -1754,7 +1702,6 @@ curl -X POST "http://localhost:37241/search" \
 │   ├── sync_states              # 同步状态
 │   ├── progress                 # 处理进度
 │   ├── knowledge_bases          # 知识库元数据（唯一数据源）
-│   └── kb_category_rules         # 分类规则
 └── tasks.db                     # 任务队列
 ```
 

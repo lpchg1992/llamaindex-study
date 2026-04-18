@@ -1028,16 +1028,6 @@ CREATE TABLE knowledge_bases (
     config TEXT DEFAULT '{}'
 );
 
--- 分类规则
-CREATE TABLE kb_category_rules (
-    kb_id TEXT NOT NULL,
-    rule_type TEXT NOT NULL,
-    pattern TEXT NOT NULL,
-    description TEXT,
-    priority INTEGER DEFAULT 0,
-    PRIMARY KEY (kb_id, rule_type, pattern)
-);
-
 -- 模型供应商
 CREATE TABLE vendors (
     id TEXT PRIMARY KEY,              -- 供应商ID: siliconflow, ollama
@@ -1093,7 +1083,6 @@ Table: {kb_id}
 │   ├── documents                      # 文档记录
 │   ├── chunks                         # 分块记录
 │   ├── task_history                   # 任务历史
-│   ├── kb_category_rules               # 分类规则
 │   ├── vendors                        # 供应商配置
 │   └── models                        # 模型配置
 │
@@ -1131,7 +1120,6 @@ Table: {kb_id}
 | `documents` | 文档记录 | id, kb_id, source_file, file_hash, chunk_count |
 | `chunks` | 分块记录 | id, doc_id, kb_id, text, parent_chunk_id, hierarchy_level |
 | `task_history` | 任务历史 | task_id, kb_id, status, result, error |
-| `kb_category_rules` | 分类规则 | kb_id, rule_type, pattern, priority |
 | `vendors` | 供应商配置 | id, name, api_base, api_key |
 | `models` | 模型配置 | id, vendor_id, type, is_default |
 

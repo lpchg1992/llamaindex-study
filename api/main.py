@@ -15,7 +15,7 @@ FastAPI application entry point with modular router architecture.
     - ingest:     /kbs/{kb_id}/ingest/*
     - zotero:     /zotero/*
     - obsidian:   /obsidian/*
-    - categories:  /category/*, /file/preview
+    - categories:  /file/preview
     - admin:      /admin/*
     - documents:  /kbs/{kb_id}/documents/*, /kbs/{kb_id}/chunks/*
     - lance:      /lance/*
@@ -39,7 +39,6 @@ from api.routes import (
     ingest_router,
     zotero_router,
     obsidian_router,
-    categories_router,
     admin_router,
     documents_router,
     lance_router,
@@ -123,7 +122,6 @@ RAG 检索增强生成 API，支持任务队列异步处理。
     app.include_router(ingest_router)
     app.include_router(zotero_router)
     app.include_router(obsidian_router)
-    app.include_router(categories_router)
     app.include_router(admin_router)
     app.include_router(documents_router)
     app.include_router(lance_router)
