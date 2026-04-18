@@ -9,10 +9,10 @@
 """
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import List, Optional, Union, Callable
+from typing import List, Optional, Union
 
 from llama_index.core.schema import Document as LlamaDocument
 

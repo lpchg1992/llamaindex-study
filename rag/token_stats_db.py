@@ -7,7 +7,7 @@ Token 统计持久化数据库
 import json
 import threading
 import time
-from datetime import datetime, date
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 

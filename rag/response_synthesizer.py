@@ -17,8 +17,6 @@ Response Synthesizer Configuration Module
 
 from typing import Any, Optional
 
-from rag.config import get_settings
-
 
 class ResponseMode:
     COMPACT = "compact"

@@ -23,8 +23,6 @@ RAG Evaluation Framework
 
 from typing import Any, Dict, List, Optional
 
-from rag.config import get_settings
-
 
 def check_ragas_available() -> bool:
     """检查 Ragas 是否已安装"""
