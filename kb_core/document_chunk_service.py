@@ -403,24 +403,39 @@ class DocumentChunkService:
                     )
 
                     chunks = []
+                    parent_map: Dict[str, Optional[str]] = {}
                     for idx, node in enumerate(nodes):
                         parent_id = None
-                        hierarchy_level = 0
                         try:
                             if "_node_content" in node.metadata:
                                 node_data = json.loads(node.metadata["_node_content"])
                                 relationships = node_data.get("relationships", {})
-                                for key, rel in relationships.items():
-                                    if key.isdigit() and key != "1":
-                                        parent_id = rel.get("node_id")
-                                        break
-                                hierarchy_level = 0
                                 if "2" in relationships:
-                                    hierarchy_level = 1
-                                elif "3" in relationships:
-                                    hierarchy_level = 2
+                                    parent_id = relationships["2"].get("node_id")
+                                elif "4" in relationships:
+                                    parent_id = relationships["4"].get("node_id")
                         except Exception:
                             pass
+                        parent_map[node.id] = parent_id
+
+                    level_cache: Dict[str, int] = {}
+                    MAX_HIERARCHY_LEVEL = 2
+
+                    def calc_level(chunk_id: str) -> int:
+                        if chunk_id in level_cache:
+                            return level_cache[chunk_id]
+                        pid = parent_map.get(chunk_id)
+                        if not pid:
+                            level_cache[chunk_id] = 0
+                            return 0
+                        parent_level = calc_level(pid)
+                        level = min(parent_level + 1, MAX_HIERARCHY_LEVEL)
+                        level_cache[chunk_id] = level
+                        return level
+
+                    for idx, node in enumerate(nodes):
+                        hierarchy_level = calc_level(node.id)
+                        parent_id = parent_map.get(node.id)
 
                         chunk = {
                             "id": node.id,
@@ -437,6 +452,7 @@ class DocumentChunkService:
                         chunks.append(chunk)
 
                     if chunks:
+                        chunk_db.delete_by_doc(doc_id)
                         chunk_db.create_bulk(chunks)
                         result["chunks"] += len(chunks)
                         doc_db.update_stats(doc_id, chunk_count=len(chunks))
