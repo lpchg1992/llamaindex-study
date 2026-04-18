@@ -34,7 +34,6 @@ from rag.embedding_factory import (
     create_ollama_embedding,
     configure_global_embed_model,
     configure_embed_model_by_model_id,
-    BatchEmbeddingHelper,
 )
 from rag.reader import (
     DocumentReader,
@@ -74,7 +73,6 @@ __all__ = [
     "create_ollama_embedding",
     "configure_global_embed_model",
     "configure_embed_model_by_model_id",
-    "BatchEmbeddingHelper",
     "DocumentReader",
     "SmartDocumentProcessor",
     "load_and_split",

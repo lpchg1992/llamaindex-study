@@ -189,7 +189,6 @@ class LanceDBVectorStore:
     def build_index(
         self,
         documents: List[LlamaDocument],
-        show_progress: bool = True,
     ) -> Any:
         """从文档构建索引"""
         from llama_index.core import VectorStoreIndex, Settings as LlamaSettings

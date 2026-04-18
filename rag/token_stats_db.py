@@ -117,7 +117,7 @@ class TokenStatsDB:
 
     def _register_sqlite_pragmas(self) -> None:
         @event.listens_for(self.engine, "connect")
-        def _set_sqlite_pragmas(dbapi_connection, connection_record):
+        def _set_sqlite_pragmas(dbapi_connection, _connection_record):
             cursor = dbapi_connection.cursor()
             cursor.execute("PRAGMA journal_mode=WAL")
             cursor.execute("PRAGMA busy_timeout=30000")

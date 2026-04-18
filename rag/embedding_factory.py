@@ -4,6 +4,8 @@ Embedding 工厂模块
 提供 Ollama Embedding 模型的创建和配置接口。
 """
 
+from __future__ import annotations
+
 import logging
 from typing import Optional, Tuple
 
@@ -319,103 +321,6 @@ def create_parallel_ollama_embedding():
     return create_parallel_embedding_model()
 
 
-# === BatchEmbeddingHelper ===
-
-_sf_fallback_count = 0
-_SF_FALLBACK_THRESHOLD = 3
-
-
-class BatchEmbeddingHelper:
-    """批量 Embedding 辅助类"""
-
-    def __init__(
-        self,
-        embed_model: Optional[OllamaEmbedding] = None,
-        batch_size: int = 10,
-        max_concurrency: int = 3,
-    ):
-        self.embed_model = embed_model or create_ollama_embedding()
-        self.batch_size = batch_size
-        self.max_concurrency = max_concurrency
-
-    def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        if not texts:
-            return []
-
-        global _sf_fallback_count
-
-        if _sf_fallback_count >= _SF_FALLBACK_THRESHOLD:
-            from rag.embedding_service import SiliconFlowEmbedding
-            sf = SiliconFlowEmbedding(model="Pro/BAAI/bge-m3")
-            return sf.get_text_embeddings(texts)
-
-        if hasattr(self.embed_model, "get_text_embeddings"):
-            try:
-                result = self.embed_model.get_text_embeddings(texts)
-                _sf_fallback_count = 0
-                return result
-            except Exception as e:
-                print(f"      ⚠️  Ollama 批量 embedding 失败: {e}")
-                _sf_fallback_count += 1
-
-        results = []
-        for i in range(0, len(texts), self.batch_size):
-            batch = texts[i : i + self.batch_size]
-            for text in batch:
-                try:
-                    embedding = self.embed_model.get_text_embedding(text)
-                    results.append(embedding)
-                except Exception as e:
-                    print(f"      ⚠️  Ollama embedding 失败: {e}")
-                    _sf_fallback_count += 1
-                    results.append([0.0] * 1024)
-
-        return results
-
-    async def embed_documents_async(self, texts: list[str]) -> list[list[float]]:
-        import asyncio
-        if not texts:
-            return []
-
-        if hasattr(self.embed_model, "aget_text_embeddings"):
-            try:
-                return await self.embed_model.aget_text_embeddings(texts)
-            except Exception as e:
-                print(f"      ⚠️  异步批量 Embedding 失败，回退并发模式: {e}")
-
-        semaphore = asyncio.Semaphore(self.max_concurrency)
-
-        async def embed_with_semaphore(text: str) -> list[float]:
-            async with semaphore:
-                return await self.embed_model.aget_text_embedding(text)
-
-        results = []
-        for i in range(0, len(texts), self.batch_size):
-            batch = texts[i : i + self.batch_size]
-            tasks = [embed_with_semaphore(text) for text in batch]
-            batch_results = await asyncio.gather(*tasks, return_exceptions=True)
-
-            for j, result in enumerate(batch_results):
-                if isinstance(result, Exception):
-                    try:
-                        results.append(self.embed_model.get_text_embedding(batch[j]))
-                    except Exception:
-                        results.append([0.0] * 1024)
-                else:
-                    results.append(result)
-
-        return results
-
-    def embed_node(self, node) -> None:
-        node.embedding = self.embed_model.get_text_embedding(node.get_content())
-
-    def embed_nodes(self, nodes: list) -> None:
-        texts = [node.get_content() for node in nodes]
-        embeddings = self.embed_documents(texts)
-        for node, embedding in zip(nodes, embeddings):
-            node.embedding = embedding
-
-
 def create_siliconflow_embedding(
     model: str,
     dimensions: Optional[int] = None,
@@ -440,7 +345,6 @@ __all__ = [
     "configure_global_embed_model",
     "configure_embed_model_by_model_id",
     "create_parallel_ollama_embedding",
-    "BatchEmbeddingHelper",
     "create_siliconflow_embedding",
     "_record_embedding_call",
 ]

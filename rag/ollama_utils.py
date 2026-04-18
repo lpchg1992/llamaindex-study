@@ -28,7 +28,6 @@ from rag.embedding_factory import (
     configure_global_embed_model,
     create_parallel_ollama_embedding,
     configure_embed_model_by_model_id,
-    BatchEmbeddingHelper,
     create_siliconflow_embedding,
 )
 
@@ -679,18 +678,14 @@ class RetryableSiliconFlowLLM:
         return self._fallback_llm
 
     def _call_with_retry(self, method_name: str, *args, **kwargs) -> Any:
-        last_error: BaseException = Exception("Unknown error")
         delay = self._initial_delay
-        service_unavailable = False
 
         for attempt in range(self._max_retries):
             try:
                 method = getattr(self._primary_llm, method_name)
                 return method(*args, **kwargs)
             except Exception as e:
-                last_error = e
                 if self._is_service_unavailable_error(e):
-                    service_unavailable = True
                     logger.warning(
                         f"SiliconFlow 服务不可用 (尝试 {attempt + 1}/{self._max_retries})，"
                         f"等待 {delay:.1f}s: {e}"
@@ -970,7 +965,6 @@ __all__ = [
     "create_siliconflow_embedding",
     "configure_global_embed_model",
     "configure_embed_model_by_model_id",
-    "BatchEmbeddingHelper",
     "OllamaEmbedder",
     "RetryableOllama",
     "RetryableSiliconFlowLLM",

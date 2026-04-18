@@ -649,8 +649,6 @@ def create_query_engine(
 ) -> Any:
     from kb_core.services import VectorStoreService
 
-    settings = get_settings()
-
     vector_store = VectorStoreService.get_vector_store(kb_id)
 
     index = vector_store.load_index()

@@ -1495,12 +1495,7 @@ class DocumentProcessor:
         if not nodes:
             return 0
 
-        # 优先使用批量 embedding
-        from rag.ollama_utils import BatchEmbeddingHelper
-
-        batch_helper = BatchEmbeddingHelper(
-            embed_model=self.embed_model, batch_size=self.config.batch_size
-        )
+        from kb_processing.parallel_embedding import get_parallel_processor
 
         saved = 0
         processed_batch = []
@@ -1511,7 +1506,8 @@ class DocumentProcessor:
         if processed_batch and self.embed_model:
             texts = [node.get_content() for node in processed_batch]
             try:
-                embeddings = batch_helper.embed_documents(texts)
+                processor = get_parallel_processor()
+                embeddings = processor.get_text_embeddings(texts)
                 for node, embedding in zip(processed_batch, embeddings):
                     node.embedding = embedding
             except Exception as e:
