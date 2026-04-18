@@ -127,6 +127,9 @@ export interface ObsidianIngestRequest {
   async_mode?: boolean
   exclude_patterns?: string[]
   refresh_topics?: boolean
+  chunk_strategy?: string
+  chunk_size?: number
+  hierarchical_chunk_sizes?: number[]
 }
 
 export interface ZoteroIngestRequest {
@@ -135,6 +138,9 @@ export interface ZoteroIngestRequest {
   async_mode?: boolean
   rebuild?: boolean
   refresh_topics?: boolean
+  chunk_strategy?: string
+  chunk_size?: number
+  hierarchical_chunk_sizes?: number[]
 }
 
 export interface SelectiveImportItem {
@@ -160,6 +166,9 @@ export interface FilesImportRequest {
   paths: string[]
   async_mode?: boolean
   refresh_topics?: boolean
+  chunk_strategy?: string
+  chunk_size?: number
+  hierarchical_chunk_sizes?: number[]
 }
 
 export interface ModelInfo {

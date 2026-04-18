@@ -855,6 +855,25 @@ export function useSetDefaultModel() {
   })
 }
 
+export interface EmbeddingStats {
+  kb_id: string
+  total: number
+  success: number
+  failed: number
+  pending: number
+}
+
+export function useEmbeddingStats(kbId: string) {
+  return useQuery<EmbeddingStats, Error>({
+    queryKey: ['embedding-stats', kbId],
+    queryFn: async () => {
+      const { data } = await apiClient.get(`${API_BASE}/kbs/${kbId}/embedding-stats`)
+      return data
+    },
+    enabled: !!kbId,
+  })
+}
+
 export function useConsistencyCheck(kbId: string) {
   return useQuery<ConsistencyCheckResult, Error>({
     queryKey: ['consistency-check', kbId],
