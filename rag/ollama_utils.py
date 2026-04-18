@@ -387,9 +387,108 @@ class RetryableOllama(Ollama):
             is_function_calling_model=self.is_function_calling_model,
         )
 
-#TODO 后期需要修复，此处不符合参数从数据库获取原则。
-FALLBACK_OLLAMA_MODEL = "lfm2.5-thinking:latest"
-FALLBACK_SILICONFLOW_MODEL = "Pro/deepseek-ai/DeepSeek-V3.2"
+def _get_fallback_model_from_registry() -> tuple[str, str, str, str]:
+    """
+    从模型数据库获取 SiliconFlow fallback LLM 配置。
+    
+    Returns:
+        tuple: (model_id, model_name, api_key, api_base)
+        
+    Raises:
+        RuntimeError: 当没有可用的 SiliconFlow LLM 时抛出
+    """
+    from rag.config import get_model_registry
+    from kb_core.database import init_vendor_db
+
+    registry = get_model_registry()
+    
+    # 优先获取默认 LLM，如果它是 SiliconFlow 供应商则直接使用
+    default_model = registry.get_default("llm")
+    if default_model:
+        vendor_id = default_model.get("vendor_id", "")
+        if vendor_id == "siliconflow":
+            vendor_db = init_vendor_db()
+            vendor_info = vendor_db.get(vendor_id)
+            if vendor_info and vendor_info.get("api_key"):
+                return (
+                    default_model["id"],
+                    default_model["name"],
+                    vendor_info["api_key"],
+                    vendor_info.get("api_base", "https://api.siliconflow.cn/v1"),
+                )
+
+    # 否则查找任何可用的 SiliconFlow LLM
+    siliconflow_models = [
+        m for m in registry.get_by_type("llm")
+        if m.get("vendor_id") == "siliconflow" and m.get("is_active", True)
+    ]
+    
+    if siliconflow_models:
+        model = siliconflow_models[0]
+        vendor_db = init_vendor_db()
+        vendor_info = vendor_db.get("siliconflow")
+        if vendor_info and vendor_info.get("api_key"):
+            return (
+                model["id"],
+                model["name"],
+                vendor_info["api_key"],
+                vendor_info.get("api_base", "https://api.siliconflow.cn/v1"),
+            )
+
+    raise RuntimeError(
+        "No SiliconFlow LLM available for fallback. "
+        "Please add a SiliconFlow LLM model via CLI: "
+        "uv run llamaindex-study model add siliconflow/DeepSeek-V3.2 --vendor-id=siliconflow --type=llm"
+    )
+
+
+def _get_fallback_ollama_model_from_registry() -> tuple[str, str]:
+    """
+    从模型数据库获取 Ollama fallback LLM 配置。
+
+    Returns:
+        tuple: (model_name, base_url)
+
+    Raises:
+        RuntimeError: 当没有可用的 Ollama LLM 时抛出
+    """
+    from rag.config import get_model_registry
+    from kb_core.database import init_vendor_db
+
+    registry = get_model_registry()
+
+    default_model = registry.get_default("llm")
+    if default_model:
+        vendor_id = default_model.get("vendor_id", "")
+        if vendor_id.startswith("ollama"):
+            vendor_db = init_vendor_db()
+            vendor_info = vendor_db.get(vendor_id)
+            if vendor_info and vendor_info.get("api_base"):
+                return (
+                    default_model["name"],
+                    vendor_info["api_base"],
+                )
+
+    ollama_models = [
+        m for m in registry.get_by_type("llm")
+        if m.get("vendor_id", "").startswith("ollama") and m.get("is_active", True)
+    ]
+
+    if ollama_models:
+        model = ollama_models[0]
+        vendor_db = init_vendor_db()
+        vendor_info = vendor_db.get(model.get("vendor_id", ""))
+        if vendor_info and vendor_info.get("api_base"):
+            return (
+                model["name"],
+                vendor_info["api_base"],
+            )
+
+    raise RuntimeError(
+        "No Ollama LLM available for fallback. "
+        "Please add an Ollama LLM model via CLI: "
+        "uv run llamaindex-study model add ollama/llama3 --vendor-id=ollama --type=llm"
+    )
 
 
 class OllamaWithSiliconFlowFallback:
@@ -403,9 +502,9 @@ class OllamaWithSiliconFlowFallback:
         if self._fallback_llm is None:
             from llama_index.llms.openai import OpenAI
             from llama_index.llms.openai.utils import ALL_AVAILABLE_MODELS
-            from kb_core.database import init_vendor_db
 
-            model_name = FALLBACK_SILICONFLOW_MODEL
+            model_id, model_name, api_key, api_base = _get_fallback_model_from_registry()
+
             if model_name not in ALL_AVAILABLE_MODELS:
                 ALL_AVAILABLE_MODELS[model_name] = 128000
             try:
@@ -414,14 +513,6 @@ class OllamaWithSiliconFlowFallback:
             except (KeyError, ImportError):
                 import tiktoken.model as tm
                 tm.MODEL_TO_ENCODING[model_name] = "cl100k_base"
-
-            vendor_db = init_vendor_db()
-            vendor = vendor_db.get("siliconflow")
-            api_key = vendor.get("api_key") if vendor else None
-            api_base = vendor.get("api_base") if vendor else "https://api.siliconflow.cn/v1"
-
-            if not api_key:
-                raise ValueError("SiliconFlow API key not configured for fallback. Run: uv run llamaindex-study vendor update siliconflow --api-key=YOUR_KEY")
 
             self._fallback_llm = OpenAI(
                 model=model_name,
@@ -521,7 +612,6 @@ class RetryableSiliconFlowLLM:
         max_retries: int = 3,
         initial_delay: float = 2.0,
         backoff_factor: float = 1.5,
-        fallback_model: str = FALLBACK_OLLAMA_MODEL,
     ):
         from llama_index.llms.openai import OpenAI
 
@@ -536,7 +626,6 @@ class RetryableSiliconFlowLLM:
         self._max_retries = max_retries
         self._initial_delay = initial_delay
         self._backoff_factor = backoff_factor
-        self._fallback_model = fallback_model
         self._fallback_llm: Optional[Any] = None
         self._use_fallback = False
 
@@ -580,14 +669,10 @@ class RetryableSiliconFlowLLM:
 
     def _get_fallback_llm(self) -> Any:
         if self._fallback_llm is None:
-            from kb_core.database import init_vendor_db
-            vendor_db = init_vendor_db()
-            vendor = vendor_db.get("ollama")
-            if not vendor or not vendor.get("api_base"):
-                raise ValueError("Ollama vendor not configured for fallback. Run: uv run llamaindex-study vendor add ollama --url=YOUR_OLLAMA_URL")
+            model_name, base_url = _get_fallback_ollama_model_from_registry()
             self._fallback_llm = RetryableOllama(
-                model=self._fallback_model,
-                base_url=vendor["api_base"],
+                model=model_name,
+                base_url=base_url,
                 max_retries=5,
                 initial_delay=2.0,
                 backoff_factor=1.5,
@@ -624,7 +709,7 @@ class RetryableSiliconFlowLLM:
                     logger.warning(f"SiliconFlow LLM 错误，降级到 Ollama: {e}")
                     break
 
-        logger.info(f"SiliconFlow LLM 重试耗尽，降级到 Ollama ({self._fallback_model})")
+        logger.info("SiliconFlow LLM 重试耗尽，降级到 Ollama")
         self._use_fallback = True
         fallback_llm = self._get_fallback_llm()
         method = getattr(fallback_llm, method_name)
@@ -794,7 +879,7 @@ class RetryableSiliconFlowLLM:
 
     def __repr__(self) -> str:
         if self._use_fallback:
-            return f"RetryableSiliconFlowLLM(fallback={self._fallback_model})"
+            return "RetryableSiliconFlowLLM(fallback=Ollama)"
         return f"RetryableSiliconFlowLLM(primary={self._model})"
 
 
