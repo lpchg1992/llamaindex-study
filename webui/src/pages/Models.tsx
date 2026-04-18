@@ -224,7 +224,7 @@ function ModelDialog({
 
   const handleVendorChange = (vendorId: string) => {
     if (mode === 'create') {
-      setFormData(prev => ({ ...prev, vendor_id: vendorId, id: autoGenerateModelId(vendorId, prev.name) }))
+      setFormData(prev => ({ ...prev, vendor_id: vendorId, id: autoGenerateModelId(vendorId, prev.name || '') }))
     } else {
       setFormData(prev => ({ ...prev, vendor_id: vendorId }))
     }

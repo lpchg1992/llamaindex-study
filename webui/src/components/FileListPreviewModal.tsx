@@ -17,7 +17,7 @@ import {
   TableHead,
   TableCell,
 } from '@/components/ui/table'
-import { FileText, Loader2, FolderOpen, RefreshCw } from 'lucide-react'
+import { FileText, FolderOpen, RefreshCw } from 'lucide-react'
 
 interface FileListPreviewItem {
   path: string
