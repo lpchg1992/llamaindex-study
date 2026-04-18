@@ -73,10 +73,6 @@ class RAGTraceEventModel(TokenStatsBase):
     retrieval_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     retrieval_scores: Mapped[str] = mapped_column(Text, default="[]")
     source_node_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    llm_input_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    llm_output_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    embedding_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    total_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[float] = mapped_column(Float, nullable=False)
 
@@ -433,10 +429,6 @@ class TokenStatsDB:
         retrieval_count: int,
         retrieval_scores: List[float],
         source_node_count: int,
-        llm_input_tokens: int,
-        llm_output_tokens: int,
-        embedding_tokens: int,
-        total_tokens: int,
         error: Optional[str] = None,
         record_date: Optional[str] = None,
     ) -> None:
@@ -453,10 +445,6 @@ class TokenStatsDB:
                 retrieval_count=retrieval_count,
                 retrieval_scores=json.dumps(retrieval_scores, ensure_ascii=False),
                 source_node_count=source_node_count,
-                llm_input_tokens=llm_input_tokens,
-                llm_output_tokens=llm_output_tokens,
-                embedding_tokens=embedding_tokens,
-                total_tokens=total_tokens,
                 error=error,
                 created_at=time.time(),
             )
@@ -503,6 +491,19 @@ class TokenStatsDB:
             )
             session.commit()
             return count
+        except Exception as e:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def delete_all_stats(self) -> None:
+        """Delete all token stats and trace events"""
+        session = self.session
+        try:
+            session.query(DailyTokenStatsModel).delete()
+            session.query(RAGTraceEventModel).delete()
+            session.commit()
         except Exception as e:
             session.rollback()
             raise

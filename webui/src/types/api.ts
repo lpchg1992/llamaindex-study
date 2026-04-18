@@ -493,10 +493,6 @@ export interface TraceEvent {
   retrieval_count: number
   retrieval_scores: number[]
   source_node_count: number
-  llm_input_tokens: number
-  llm_output_tokens: number
-  embedding_tokens: number
-  total_tokens: number
   error?: string
 }
 

@@ -4,6 +4,7 @@ Embedding 工厂模块
 提供 Ollama Embedding 模型的创建和配置接口。
 """
 
+import logging
 from typing import Optional, Tuple
 
 from llama_index.embeddings.ollama import OllamaEmbedding
@@ -13,6 +14,8 @@ from rag._infra import get_ollama_request_queue, RetryableError, CircuitBreakerO
 from rag.config import get_settings, get_model_registry
 from rag.embedding_service import get_default_embedding_from_registry
 from kb_core.database import init_vendor_db
+
+logger = logging.getLogger(__name__)
 
 
 def _record_embedding_call(
@@ -30,8 +33,8 @@ def _record_embedding_call(
             completion_tokens=0,
             error=error,
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to record embedding call for {vendor_id}/{model_id}: {e}")
 
 
 def _resolve_embedding_base_url(

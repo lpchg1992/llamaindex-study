@@ -93,8 +93,8 @@ class SiliconFlowEmbedding:
                 completion_tokens=0,
                 error=error,
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to record embedding call for {self._internal_model_id}: {e}")
 
     def get_text_embedding(self, text: str) -> List[float]:
         results = self.get_text_embeddings([text])

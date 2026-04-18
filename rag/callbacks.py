@@ -174,8 +174,8 @@ class ModelCallStatsCollection:
                     delta_total_tokens=delta_total_tokens,
                     delta_error_count=delta_error_count,
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to persist model call stats: {e}")
 
     def get_all_stats(self) -> List[Dict[str, Any]]:
         """获取所有统计，按 vendor_id 分组"""
@@ -266,9 +266,15 @@ def record_model_call(
 
 
 def reset_model_call_stats():
-    """重置模型调用统计"""
+    """重置模型调用统计（内存 + 数据库）"""
     stats = get_model_call_stats()
     stats.reset()
+    try:
+        from rag.token_stats_db import get_token_stats_db
+        db = get_token_stats_db()
+        db.delete_all_stats()
+    except Exception as e:
+        logger.warning(f"Failed to clear token stats DB: {e}")
 
 
 @dataclass
@@ -279,10 +285,6 @@ class RAGTraceEvent:
     retrieval_count: int
     retrieval_scores: List[float]
     source_node_count: int
-    llm_input_tokens: int
-    llm_output_tokens: int
-    embedding_tokens: int
-    total_tokens: int
     error: Optional[str] = None
 
 
@@ -290,9 +292,6 @@ class RAGTraceEvent:
 class RAGStats:
     total_queries: int = 0
     total_retrieval_count: int = 0
-    total_llm_input_tokens: int = 0
-    total_llm_output_tokens: int = 0
-    total_embedding_tokens: int = 0
     total_duration_ms: float = 0.0
     errors: int = 0
     trace_events: List[Dict] = field(default_factory=list)
@@ -351,10 +350,6 @@ class RAGCallbackHandler(BaseCallbackHandler):
                 retrieval_count=0,
                 retrieval_scores=[],
                 source_node_count=0,
-                llm_input_tokens=0,
-                llm_output_tokens=0,
-                embedding_tokens=0,
-                total_tokens=0,
             )
             self._retrieval_count = 0
             self._retrieval_scores = []
@@ -434,14 +429,10 @@ class RAGCallbackHandler(BaseCallbackHandler):
                 retrieval_count=event.retrieval_count,
                 retrieval_scores=event.retrieval_scores,
                 source_node_count=event.source_node_count,
-                llm_input_tokens=event.llm_input_tokens,
-                llm_output_tokens=event.llm_output_tokens,
-                embedding_tokens=event.embedding_tokens,
-                total_tokens=event.total_tokens,
                 error=event.error,
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to persist trace event: {e}")
 
     def get_stats(self) -> RAGStats:
         return self._stats
@@ -454,13 +445,14 @@ class RAGCallbackHandler(BaseCallbackHandler):
 
 class LlamaCallbackManager:
     def __init__(self, trace_dir: Optional[Path] = None):
+        # TokenCountingHandler is NOT added to CallbackManager.
+        # Manual model call recording via record_model_call() is the source of truth.
+        # TokenCountingHandler is kept here for potential future aggregate validation.
         self._token_counter = TokenCountingHandler()
         self._rag_handler = RAGCallbackHandler(
-            trace_file=trace_dir / "rag_trace.jsonl" if trace_dir else None
+            trace_file=trace_dir / "rag_trace.jsonl" if trace_dir else None,
         )
-        self._callback_manager = CallbackManager(
-            [self._token_counter, self._rag_handler]
-        )
+        self._callback_manager = CallbackManager([self._rag_handler])
 
     @property
     def callback_manager(self) -> CallbackManager:
@@ -556,9 +548,6 @@ def format_rag_stats(stats: RAGStats) -> str:
             f"总查询数: {stats.total_queries}",
             f"总检索节点数: {stats.total_retrieval_count}",
             f"平均耗时: {stats.get_avg_duration_ms():.2f}ms",
-            f"LLM Input Tokens: {stats.total_llm_input_tokens:,}",
-            f"LLM Output Tokens: {stats.total_llm_output_tokens:,}",
-            f"Embedding Tokens: {stats.total_embedding_tokens:,}",
             f"错误数: {stats.errors}",
         ]
     )

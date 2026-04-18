@@ -429,8 +429,8 @@ class ParallelEmbeddingProcessor:
                 vendor_id = "ollama"
             model_id_for_record = ep.model_id if ep.model_id else f"{vendor_id}/unknown"
             _record_embedding_call(vendor_id, model_id_for_record, token_count, error)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to record embedding call for {model_id_for_record}: {e}")
 
     def _get_embedding_with_retry(
         self, text: str, ep: EmbeddingEndpoint
@@ -493,7 +493,7 @@ class ParallelEmbeddingProcessor:
                     if ep.avg_latency == 0
                     else (ep.avg_latency * 0.7 + latency * 0.3)
                 )
-            self._record_embedding(ep, len(text), False)
+            self._record_embedding(ep, len(text) // 4, False)
             return (ep.name, embedding, None)
         except Exception as e:
             text_len = len(text[:8192])

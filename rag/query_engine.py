@@ -35,8 +35,8 @@ def _format_node_with_metadata(node: NodeWithScore) -> str:
     return text
 
 
-def _get_reranker_config() -> tuple[str, str, str]:
-    """从数据库获取默认 reranker 配置，返回 (model, api_key, base_url)"""
+def _get_reranker_config() -> tuple[str, str, str, str, str]:
+    """从数据库获取默认 reranker 配置，返回 (model, api_key, base_url, vendor_id, model_id)"""
     from kb_core.database import init_vendor_db
     from rag.config import get_model_registry
 
@@ -55,7 +55,7 @@ def _get_reranker_config() -> tuple[str, str, str]:
 
     api_key = vendor_info.get("api_key", "")
     base_url = vendor_info.get("api_base", "https://api.siliconflow.cn/v1")
-    return model["name"], api_key, base_url
+    return model["name"], api_key, base_url, model["vendor_id"], model["id"]
 
 
 class SiliconFlowReranker(BaseNodePostprocessor):
@@ -63,6 +63,19 @@ class SiliconFlowReranker(BaseNodePostprocessor):
     model: str = "Pro/BAAI/bge-reranker-v2-m3"
     base_url: str = "https://api.siliconflow.cn/v1"
     top_n: int = 5
+    _vendor_id: str = "siliconflow"
+    _model_id: str = "siliconflow/bge-reranker-v2-m3"
+
+    def _record_reranker_call(self, token_count: int, error: bool):
+        from rag.callbacks import record_model_call
+        record_model_call(
+            vendor_id=self._vendor_id,
+            model_type="reranker",
+            model_id=self._model_id,
+            prompt_tokens=token_count,
+            completion_tokens=0,
+            error=error,
+        )
 
     def _postprocess_nodes(
         self,
@@ -80,6 +93,10 @@ class SiliconFlowReranker(BaseNodePostprocessor):
             "top_n": min(self.top_n, len(documents)),
         }
 
+        query_len = len(query_bundle.query_str)
+        doc_lens = [len(d) for d in documents]
+        total_input_tokens = query_len + sum(doc_lens)
+
         print(f"   🔄 SiliconFlow Reranker: 正在对 {len(nodes)} 个结果进行重排序...")
 
         try:
@@ -94,7 +111,9 @@ class SiliconFlowReranker(BaseNodePostprocessor):
                 )
                 response.raise_for_status()
                 api_results = response.json()["results"]
+            self._record_reranker_call(total_input_tokens, False)
         except Exception as e:
+            self._record_reranker_call(total_input_tokens, True)
             print(f"   ❌ Reranker 调用失败: {e}")
             raise
 
@@ -127,13 +146,15 @@ def apply_reranker(
     if not nodes:
         return nodes
 
-    rerank_model, api_key, base_url = _get_reranker_config()
+    rerank_model, api_key, base_url, vendor_id, model_id = _get_reranker_config()
     reranker = SiliconFlowReranker(
         api_key=api_key,
         model=rerank_model,
         base_url=base_url,
         top_n=top_k,
     )
+    reranker._vendor_id = vendor_id
+    reranker._model_id = model_id
     from llama_index.core.schema import QueryBundle
 
     return reranker._postprocess_nodes(nodes, QueryBundle(query_str=query))
@@ -314,24 +335,27 @@ class QueryEngineWrapper:
         self.response_mode = response_mode or self.settings.response_mode
         self.model_id = model_id
 
+        self._rerank_vendor_id: Optional[str] = None
+        self._rerank_model_id: Optional[str] = None
         if self.use_reranker:
             if rerank_model:
                 self._rerank_model = rerank_model
-                if not rerank_api_key or not rerank_base_url:
-                    from rag.config import get_model_registry
-                    from kb_core.database import init_vendor_db
-                    registry = get_model_registry()
-                    model_info = registry.get_model(rerank_model)
-                    if model_info:
-                        vendor_db = init_vendor_db()
-                        vendor = vendor_db.get(model_info.get("vendor_id", "siliconflow"))
-                        if vendor:
-                            rerank_api_key = rerank_api_key or vendor.get("api_key")
-                            rerank_base_url = rerank_base_url or vendor.get("api_base")
+                from rag.config import get_model_registry
+                from kb_core.database import init_vendor_db
+                registry = get_model_registry()
+                model_info = registry.get_model(rerank_model)
+                if model_info:
+                    self._rerank_vendor_id = model_info.get("vendor_id", "siliconflow")
+                    self._rerank_model_id = model_info.get("id")
+                    vendor_db = init_vendor_db()
+                    vendor = vendor_db.get(self._rerank_vendor_id)
+                    if vendor:
+                        rerank_api_key = rerank_api_key or vendor.get("api_key")
+                        rerank_base_url = rerank_base_url or vendor.get("api_base")
                 self._rerank_api_key = rerank_api_key
                 self._rerank_base_url = rerank_base_url or "https://api.siliconflow.cn/v1"
             else:
-                self._rerank_model, self._rerank_api_key, self._rerank_base_url = (
+                self._rerank_model, self._rerank_api_key, self._rerank_base_url, self._rerank_vendor_id, self._rerank_model_id = (
                     _get_reranker_config()
                 )
 
@@ -488,6 +512,8 @@ class QueryEngineWrapper:
                 base_url=self._rerank_base_url,
                 top_n=self.top_k,
             )
+            reranker._vendor_id = self._rerank_vendor_id or "siliconflow"
+            reranker._model_id = self._rerank_model_id or f"siliconflow/{self._rerank_model}"
             kwargs["node_postprocessors"] = [reranker]
             logger.info(f"启用 SiliconFlow Reranker: {self._rerank_model}")
 

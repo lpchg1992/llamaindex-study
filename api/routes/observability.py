@@ -55,28 +55,16 @@ def get_traces(
     start_date: Optional[str] = Query(None, description="开始日期 (YYYY-MM-DD)"),
     end_date: Optional[str] = Query(None, description="结束日期 (YYYY-MM-DD)"),
 ):
-    from rag.callbacks import setup_callbacks, get_rag_stats
     from rag.token_stats_db import get_token_stats_db
 
-    setup_callbacks()
-
-    if start_date or end_date:
-        db = get_token_stats_db()
-        traces = db.get_trace_events(start_date, end_date, limit)
-        return {
-            "traces": traces,
-            "total": len(traces),
-            "start_date": start_date,
-            "end_date": end_date,
-        }
-
-    rag_stats = get_rag_stats()
-
-    if not rag_stats:
-        return {"traces": [], "total": 0}
-
-    traces = rag_stats.trace_events[-limit:]
-    return {"traces": traces, "total": len(rag_stats.trace_events)}
+    db = get_token_stats_db()
+    traces = db.get_trace_events(start_date, end_date, limit)
+    return {
+        "traces": traces,
+        "total": len(traces),
+        "start_date": start_date,
+        "end_date": end_date,
+    }
 
 
 @router.get("/dates")

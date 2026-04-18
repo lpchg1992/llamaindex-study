@@ -54,8 +54,8 @@ def _record_llm_call(
             completion_tokens=completion_tokens,
             error=error,
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to record LLM call for {vendor_id}/{model_id}: {e}")
 
 
 class RetryableOllama(Ollama):
@@ -508,8 +508,27 @@ class OllamaWithSiliconFlowFallback:
         except Exception as e:
             logger.warning(f"Ollama LLM 调用失败，降级到 SiliconFlow: {e}")
             fallback_llm = self._get_fallback_llm()
-            method = getattr(fallback_llm, method_name)
-            return method(*args, **kwargs)
+            fallback_method = getattr(fallback_llm, method_name)
+            try:
+                response = fallback_method(*args, **kwargs)
+                prompt_tokens, completion_tokens = _extract_llm_tokens(response)
+                _record_llm_call(
+                    "siliconflow",
+                    getattr(fallback_llm, "model", "siliconflow"),
+                    prompt_tokens,
+                    completion_tokens,
+                    False,
+                )
+                return response
+            except Exception as fallback_err:
+                _record_llm_call(
+                    "siliconflow",
+                    getattr(fallback_llm, "model", "siliconflow"),
+                    0,
+                    0,
+                    True,
+                )
+                raise fallback_err
 
     def complete(self, prompt: str, **kwargs) -> Any:
         return self._call_with_fallback("complete", prompt, **kwargs)
