@@ -11,7 +11,8 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 
 @router.get("/tables")
 def list_tables():
-    base = Path("/Volumes/online/llamaindex")
+    import os
+    base = Path(os.getenv("LLAMAINDEX_STORAGE_BASE", "/Volumes/online/llamaindex"))
     tables = []
 
     for kb_dir in base.iterdir():

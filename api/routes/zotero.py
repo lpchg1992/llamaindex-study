@@ -2,7 +2,7 @@
 Zotero integration endpoints.
 """
 
-from typing import Optional, List
+import os
 
 from fastapi import APIRouter, HTTPException
 
@@ -56,7 +56,7 @@ def preview_zotero_import(req: ZoteroPreviewRequest):
     from kb_core.services import KnowledgeBaseService
 
     importer = ZoteroImporter()
-    mddocs_base = Path("/Volumes/online/llamaindex/mddocs")
+    mddocs_base = Path(os.getenv("LLAMAINDEX_STORAGE_BASE", "/Volumes/online/llamaindex")) / "mddocs"
 
     document_db = None
     kb_info = KnowledgeBaseService.get_info(req.kb_id)

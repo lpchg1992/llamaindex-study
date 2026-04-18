@@ -172,7 +172,10 @@ def reembed_chunk(kb_id: str, chunk_id: str):
         if error:
             raise Exception(error)
 
-        if all(v == 0.0 for v in embedding):
+        if embedding is None or not isinstance(embedding, (list, tuple)):
+            raise Exception(f"Invalid embedding type: {type(embedding)}")
+
+        if len(embedding) == 0 or all(v == 0.0 for v in embedding):
             raise Exception("Embedding returned zero vector")
 
         LanceCRUDService.upsert_vector(

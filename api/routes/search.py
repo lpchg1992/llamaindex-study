@@ -154,6 +154,7 @@ def evaluate(kb_id: str, req: EvaluateRequest):
         ground_truths=req.ground_truths,
     )
 
+    result["note"] = "仅检索模式评估，无法评估生成质量"
     return result
 
 

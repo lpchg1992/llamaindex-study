@@ -127,10 +127,9 @@ def create_model(req: ModelCreateRequest):
     logger = get_logger(__name__)
     vendor_db = init_vendor_db()
     if not vendor_db.get(req.vendor_id):
-        vendor_db.upsert(
-            vendor_id=req.vendor_id,
-            name=req.vendor_id.capitalize(),
-            is_active=True,
+        raise HTTPException(
+            status_code=400,
+            detail=f"供应商 {req.vendor_id} 不存在，请先创建供应商",
         )
 
     model_db = init_model_db()

@@ -106,10 +106,10 @@ curl "http://localhost:37241/tasks/abc12345"
 | POST | `/tasks` | 提交任务 |
 | GET | `/tasks` | 列出任务 |
 | GET | `/tasks/{task_id}` | 查询任务状态 |
-| DELETE | `/tasks/{task_id}` | 取消任务 |
+| POST | `/tasks/{task_id}/cancel` | 取消任务 |
 | POST | `/tasks/{task_id}/pause` | 暂停任务 |
 | POST | `/tasks/{task_id}/resume` | 恢复任务 |
-| DELETE | `/tasks/{task_id}/delete` | 删除任务（可选 cleanup=true 清理关联数据） |
+| DELETE | `/tasks/{task_id}` | 删除任务（可选 cleanup=true 清理关联数据） |
 | POST | `/tasks/pause-all` | 暂停所有运行中的任务 |
 | POST | `/tasks/resume-all` | 恢复所有已暂停的任务 |
 | DELETE | `/tasks/delete-all` | 删除所有任务 |
@@ -437,10 +437,10 @@ curl http://localhost:37241/tasks/abc12345
 curl "http://localhost:37241/tasks?status=running&limit=10"
 ```
 
-#### DELETE /tasks/{task_id} - 取消任务
+#### POST /tasks/{task_id}/cancel - 取消任务
 
 ```bash
-curl -X DELETE "http://localhost:37241/tasks/abc12345"
+curl -X POST "http://localhost:37241/tasks/abc12345/cancel"
 ```
 
 ```json
@@ -1113,23 +1113,24 @@ curl http://localhost:37241/settings
 
 ```json
 {
-  "llm_mode": "ollama",
-  "default_llm_model": "ollama/tomng/lfm2.5-instruct:1.2b",
-  "ollama_embed_model": "bge-m3",
-  "ollama_base_url": "http://localhost:11434",
+  "embed_batch_size": 32,
   "top_k": 5,
+  "use_semantic_chunking": false,
   "use_hybrid_search": false,
   "use_auto_merging": false,
   "use_hyde": false,
   "use_multi_query": false,
   "num_multi_queries": 3,
   "hybrid_search_alpha": 0.5,
+  "hybrid_search_mode": "relative_score",
   "chunk_strategy": "hierarchical",
   "chunk_size": 1024,
   "chunk_overlap": 100,
+  "hierarchical_chunk_sizes": [2048, 1024, 512],
   "use_reranker": true,
-  "rerank_model": "Pro/BAAI/bge-reranker-v2-m3",
-  "response_mode": "compact"
+  "response_mode": "compact",
+  "progress_update_interval": 10,
+  "max_concurrent_tasks": 10
 }
 ```
 
@@ -1151,15 +1152,13 @@ curl -X PUT http://localhost:37241/settings \
 
 | 设置类别 | 设置项 | 持久化位置 | 生效方式 |
 |----------|--------|------------|----------|
-| 运行时设置 | `top_k`, `use_hybrid_search`, `use_auto_merging`, `use_hyde`, `use_multi_query`, `num_multi_queries`, `hybrid_search_alpha`, `use_reranker`, `response_mode` | `.runtime_settings.json` | 立即生效 |
-| Chunk 设置 | `chunk_strategy`, `chunk_size`, `chunk_overlap` | `.runtime_settings.json` | 立即生效，**仅影响新导入的文档** |
-| LLM/Embedding | `llm_mode`, `ollama_embed_model`, `ollama_base_url`, `rerank_model` | `.env` | 重启服务后生效 |
-| 默认模型 | `default_llm_model` | 模型数据库 | 立即生效（通过 `is_default` 字段） |
+| 运行时设置 | `embed_batch_size`, `top_k`, `use_hybrid_search`, `use_auto_merging`, `use_hyde`, `use_multi_query`, `num_multi_queries`, `hybrid_search_alpha`, `use_reranker`, `response_mode` | `.runtime_settings.json` | 立即生效 |
+| Chunk 设置 | `chunk_strategy`, `chunk_size`, `chunk_overlap`, `hierarchical_chunk_sizes` | `.runtime_settings.json` | 立即生效，**仅影响新导入的文档** |
+| 模型配置 | LLM/Embedding/Reranker 模型 | 模型数据库 | 通过 `models` API 管理 |
 
 **注意：**
 - Chunk 设置只对新导入的文档生效，已有的知识库不受影响
-- LLM/Embedding 相关设置修改后需重启服务或调用 `POST /admin/reload-config`
-- 默认模型设置立即生效，无需重启
+- 所有模型配置通过 `/models` 和 `/vendors` API 管理，不再使用环境变量
 
 ## 管理操作
 
@@ -1655,15 +1654,12 @@ curl -X POST "http://localhost:37241/search" \
 | `CHUNK_SIZE` | `1024` | 默认分块大小 |
 | `CHUNK_OVERLAP` | `100` | 分块重叠 |
 | `HIERARCHICAL_CHUNK_SIZES` | `2048,1024,512` | 层级分块各层大小 |
-| `SENTENCE_CHUNK_SIZE` | `1024` | 句子分块大小 |
-| `SENTENCE_CHUNK_OVERLAP` | `100` | 句子分块重叠 |
 | `USE_SEMANTIC_CHUNKING` | `false` | 启用语义分块（需重建知识库） |
 | `USE_AUTO_MERGING` | `false` | 启用 Auto-Merging Retriever（需知识库使用 hierarchical 分块） |
 | `USE_HYBRID_SEARCH` | `false` | 启用混合搜索（向量 + BM25） |
 | `HYBRID_SEARCH_ALPHA` | `0.5` | 混合搜索向量权重（0-1，1=仅向量） |
 | `HYBRID_SEARCH_MODE` | `relative_score` | 混合搜索融合模式 |
 | `USE_HYDE` | `false` | 启用 HyDE 查询转换 |
-| `USE_QUERY_REWRITE` | `false` | 启用 Query Rewriting |
 | `USE_MULTI_QUERY` | `false` | 启用多查询转换 |
 | `MULTI_QUERY_NUM` | `3` | 多查询生成变体数量 |
 | `RESPONSE_MODE` | `compact` | 答案生成模式 |

@@ -101,10 +101,6 @@ class Settings:
             int(x)
             for x in os.getenv("HIERARCHICAL_CHUNK_SIZES", "2048,1024,512").split(",")
         ]
-        self.sentence_chunk_size: int = int(os.getenv("SENTENCE_CHUNK_SIZE", "1024"))
-        self.sentence_chunk_overlap: int = int(
-            os.getenv("SENTENCE_CHUNK_OVERLAP", "100")
-        )
 
         # ========== Query Transform 配置 ==========
         self.use_hyde: bool = os.getenv("USE_HYDE", "false").lower() == "true"

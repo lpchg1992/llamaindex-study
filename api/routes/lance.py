@@ -120,7 +120,12 @@ def lance_delete_by_nodes(kb_id: str, node_ids: str, table_name: Optional[str] =
 
 @router.post("/{kb_id}/export")
 def lance_export(kb_id: str, output_path: str, table_name: Optional[str] = None):
+    from pathlib import Path
     from kb_storage.lance_crud import LanceCRUDService
+
+    output = Path(output_path)
+    if output.exists() and not output.is_file():
+        raise HTTPException(status_code=400, detail="output_path 必须是文件路径，不能是目录")
 
     try:
         count = LanceCRUDService.export_to_jsonl(kb_id, output_path, table_name)

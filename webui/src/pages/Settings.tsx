@@ -438,20 +438,6 @@ export function SettingsPage() {
                     onCheckedChange={(checked) => updateField('use_reranker', checked)}
                   />
                 </div>
-
-                {localSettings.use_reranker && (
-                  <div className="space-y-2">
-                    <Label htmlFor="rerank-model">Reranker Model</Label>
-                    <Input
-                      id="rerank-model"
-                      value={localSettings.rerank_model}
-                      onChange={(e) => updateField('rerank_model', e.target.value)}
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      Requires restart to take effect
-                    </p>
-                  </div>
-                )}
               </CardContent>
             </Card>
 
@@ -602,20 +588,6 @@ export function SettingsPage() {
                     id="semantic-chunking"
                     checked={localSettings.use_semantic_chunking}
                     onCheckedChange={(checked) => updateField('use_semantic_chunking', checked)}
-                  />
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label htmlFor="query-rewrite">Query Rewrite</Label>
-                    <p className="text-sm text-muted-foreground">
-                      Rewrite query for better retrieval
-                    </p>
-                  </div>
-                  <Switch
-                    id="query-rewrite"
-                    checked={localSettings.use_query_rewrite}
-                    onCheckedChange={(checked) => updateField('use_query_rewrite', checked)}
                   />
                 </div>
               </CardContent>

@@ -258,6 +258,7 @@ class ZoteroPreviewResponse(BaseModel):
     duplicate_items: int
     items: List[ZoteroPreviewItem]
     filtering_rules: List[str] = []
+    filtering_rules: List[str] = []
 
 
 # ============== Obsidian Request Models ==============
@@ -284,7 +285,7 @@ class ObsidianPreviewResponse(BaseModel):
 
 
 class ObsidianIngestRequest(BaseModel):
-    vault_path: str = Field(
+    vault_path: Optional[str] = Field(
         None, description="Vault 路径"
     )
     folder_path: Optional[str] = Field(None, description="子文件夹路径")
@@ -386,39 +387,13 @@ class ChatHistoryRequest(BaseModel):
     limit: int = 10
 
 
-# ============== Extraction Models ==============
-
-
-class ExtractRequest(BaseModel):
-    text: str
-    schema_definition: Dict[str, Any]
-    prompt_template: Optional[str] = None
-
-
-class ExtractResponse(BaseModel):
-    data: Dict[str, Any]
-    error: Optional[str] = None
-
-
-class TextToJsonRequest(BaseModel):
-    text: str
-    fields: List[str]
-    prompt_template: Optional[str] = None
-
-
 # ============== Settings Models ==============
 
 
 class SystemSettings(BaseModel):
     """系统设置（仅包含可动态修改的部分）"""
 
-    # LLM
-    llm_mode: str = Field("ollama", description="LLM模式: ollama/siliconflow")
-    default_llm_model: Optional[str] = Field(None, description="默认LLM模型")
-
     # Embedding
-    ollama_embed_model: str = Field("bge-m3", description="Ollama embedding模型")
-    ollama_base_url: str = Field("http://localhost:11434", description="Ollama服务地址")
     embed_batch_size: int = Field(32, ge=1, le=256, description="Embedding批处理大小")
 
     # Retrieval
@@ -441,12 +416,9 @@ class SystemSettings(BaseModel):
     hierarchical_chunk_sizes: List[int] = Field(
         [2048, 1024, 512], description="分层分块大小 [parent, child, leaf]"
     )
-    sentence_chunk_size: int = Field(1024, ge=100, le=4096, description="句子分块大小")
-    sentence_chunk_overlap: int = Field(100, ge=0, le=500, description="句子分块重叠")
 
     # Reranker
     use_reranker: bool = Field(True, description="启用Reranker")
-    rerank_model: str = Field("Pro/BAAI/bge-reranker-v2-m3", description="Reranker模型")
 
     # Response
     response_mode: str = Field("compact", description="答案生成模式")
@@ -459,13 +431,7 @@ class SystemSettings(BaseModel):
 class SettingsUpdateRequest(BaseModel):
     """设置更新请求"""
 
-    # LLM
-    llm_mode: Optional[str] = Field(None, description="LLM模式: ollama/siliconflow")
-    default_llm_model: Optional[str] = Field(None, description="默认LLM模型")
-
     # Embedding
-    ollama_embed_model: Optional[str] = Field(None, description="Ollama embedding模型")
-    ollama_base_url: Optional[str] = Field(None, description="Ollama服务地址")
     embed_batch_size: Optional[int] = Field(None, ge=1, le=256, description="Embedding批处理大小")
 
     # Retrieval
@@ -492,12 +458,9 @@ class SettingsUpdateRequest(BaseModel):
     hierarchical_chunk_sizes: Optional[List[int]] = Field(
         None, description="分层分块大小 [parent, child, leaf]"
     )
-    sentence_chunk_size: Optional[int] = Field(None, ge=100, le=4096, description="句子分块大小")
-    sentence_chunk_overlap: Optional[int] = Field(None, ge=0, le=500, description="句子分块重叠")
 
     # Reranker
     use_reranker: Optional[bool] = Field(None, description="启用Reranker")
-    rerank_model: Optional[str] = Field(None, description="Reranker模型")
 
     # Response
     response_mode: Optional[str] = Field(None, description="答案生成模式")

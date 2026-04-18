@@ -2,7 +2,7 @@
 Obsidian integration endpoints.
 """
 
-from typing import Optional, List
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 
@@ -78,6 +78,11 @@ def import_obsidian_all():
 
     task_ids = []
     vault_root = get_vault_root()
+    if not vault_root.exists():
+        raise HTTPException(
+            status_code=400,
+            detail=f"Vault 根目录不存在: {vault_root}",
+        )
 
     for mapping in OBSIDIAN_KB_MAPPINGS:
         if not mapping.folders:

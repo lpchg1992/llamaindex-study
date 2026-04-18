@@ -623,18 +623,6 @@ export interface RefreshTopicsRequest {
   has_new_docs?: boolean
 }
 
-// Extract
-export interface ExtractRequest {
-  text: string
-  schema_definition: Record<string, unknown>
-  prompt_template?: string
-}
-
-export interface ExtractResponse {
-  data: Record<string, unknown>
-  error?: string
-}
-
 // File Preview
 export interface FilePreviewItem {
   path: string
@@ -643,14 +631,9 @@ export interface FilePreviewItem {
 
 // Settings
 export interface SystemSettings {
-  llm_mode: string
-  default_llm_model: string | null
-  ollama_embed_model: string
-  ollama_base_url: string
   embed_batch_size: number
   top_k: number
   use_semantic_chunking: boolean
-  use_query_rewrite: boolean
   use_hybrid_search: boolean
   use_auto_merging: boolean
   use_hyde: boolean
@@ -662,24 +645,16 @@ export interface SystemSettings {
   chunk_size: number
   chunk_overlap: number
   hierarchical_chunk_sizes: number[]
-  sentence_chunk_size: number
-  sentence_chunk_overlap: number
   use_reranker: boolean
-  rerank_model: string
   response_mode: string
   progress_update_interval: number
   max_concurrent_tasks: number
 }
 
 export interface SettingsUpdateRequest {
-  llm_mode?: string
-  default_llm_model?: string | null
-  ollama_embed_model?: string
-  ollama_base_url?: string
   embed_batch_size?: number
   top_k?: number
   use_semantic_chunking?: boolean
-  use_query_rewrite?: boolean
   use_hybrid_search?: boolean
   use_auto_merging?: boolean
   use_hyde?: boolean
@@ -691,10 +666,7 @@ export interface SettingsUpdateRequest {
   chunk_size?: number
   chunk_overlap?: number
   hierarchical_chunk_sizes?: number[]
-  sentence_chunk_size?: number
-  sentence_chunk_overlap?: number
   use_reranker?: boolean
-  rerank_model?: string
   response_mode?: string
   progress_update_interval?: number
   max_concurrent_tasks?: number

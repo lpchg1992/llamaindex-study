@@ -252,7 +252,7 @@ export function useCancelTask() {
   const queryClient = useQueryClient()
   return useMutation<string, Error, string>({
     mutationFn: async (taskId: string) => {
-      await apiClient.delete(`${API_BASE}/tasks/${taskId}`)
+      await apiClient.post(`${API_BASE}/tasks/${taskId}/cancel`)
       return taskId
     },
     onSuccess: () => {
@@ -378,7 +378,7 @@ export function useDeleteTask() {
   const queryClient = useQueryClient()
   return useMutation<{ status: string; message?: string }, Error, { taskId: string; cleanup?: boolean }>({
     mutationFn: async ({ taskId, cleanup }) => {
-      const { data } = await apiClient.delete(`${API_BASE}/tasks/${taskId}/delete`, {
+      const { data } = await apiClient.delete(`${API_BASE}/tasks/${taskId}`, {
         params: { cleanup },
       })
       return data

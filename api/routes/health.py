@@ -17,10 +17,11 @@ router = APIRouter(tags=["health"])
 
 @router.get("/health")
 def health():
+    from rag import __version__
     return {
         "status": "ok",
         "service": "llamaindex-rag-api",
-        "version": "3.1.0",
+        "version": __version__,
     }
 
 

@@ -10,7 +10,6 @@ LlamaIndex Study
 - 向量存储 (LanceDBVectorStore)
 - 回调和可观测性 (setup_callbacks, get_token_counter, get_rag_stats)
 - 聊天服务 (ChatService, ChatStore)
-- 结构化提取 (StructuredExtractor, PydanticProgram)
 
 用法:
     from llamaindex_study import get_settings, get_logger, QueryEngineWrapper
@@ -59,12 +58,6 @@ from rag.chat_engine import (
     ChatStore,
     get_chat_service,
 )
-from rag.structured_extractor import (
-    StructuredExtractor,
-    PydanticProgram,
-    TextToJsonExtractor,
-    get_extractor,
-)
 
 __all__ = [
     "Settings",
@@ -97,8 +90,4 @@ __all__ = [
     "ChatService",
     "ChatStore",
     "get_chat_service",
-    "StructuredExtractor",
-    "PydanticProgram",
-    "TextToJsonExtractor",
-    "get_extractor",
 ]

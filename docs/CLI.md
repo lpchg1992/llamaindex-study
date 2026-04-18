@@ -1028,7 +1028,6 @@ uv run llamaindex-study config set RESPONSE_MODE refine
 | `USE_HYDE` | 启用 HyDE 查询转换 | `true`/`false` |
 | `USE_MULTI_QUERY` | 启用多查询转换 | `true`/`false` |
 | `MULTI_QUERY_NUM` | 多查询生成变体数量 | 整数（默认 3） |
-| `USE_QUERY_REWRITE` | 启用 Query Rewriting | `true`/`false` |
 | `RESPONSE_MODE` | 答案生成模式 | `compact`/`refine`/`tree_summarize`/`simple`/`accumulate` |
 | `USE_AUTO_MERGING` | 启用 Auto-Merging Retriever | `true`/`false` |
 | `USE_SEMANTIC_CHUNKING` | 启用语义分块 | `true`/`false` |
@@ -1111,5 +1110,3 @@ CLI 工具读取以下环境变量（参见 `.env.example`）：
 | `CHUNK_SIZE` | 默认分块大小 | `1024` |
 | `CHUNK_OVERLAP` | 默认分块重叠 | `100` |
 | `HIERARCHICAL_CHUNK_SIZES` | 层级分块各层大小 | `2048,1024,512` |
-| `SENTENCE_CHUNK_SIZE` | 句子分块大小 | `1024` |
-| `SENTENCE_CHUNK_OVERLAP` | 句子分块重叠 | `100` |

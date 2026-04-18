@@ -22,7 +22,6 @@ FastAPI application entry point with modular router architecture.
     - websocket:  /ws/*, /chat/*
     - observability: /observability/*
     - settings:   /settings
-    - extraction: /extract/*
 """
 
 from fastapi import FastAPI, HTTPException
@@ -45,7 +44,6 @@ from api.routes import (
     websocket_router,
     observability_router,
     settings_router,
-    extraction_router,
 )
 from rag.logger import get_logger
 
@@ -128,7 +126,6 @@ RAG 检索增强生成 API，支持任务队列异步处理。
     app.include_router(websocket_router)
     app.include_router(observability_router)
     app.include_router(settings_router)
-    app.include_router(extraction_router)
 
     return app
 

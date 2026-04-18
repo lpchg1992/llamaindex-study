@@ -2,8 +2,6 @@
 WebSocket and chat endpoints.
 """
 
-from typing import List
-
 from fastapi import APIRouter
 
 from api.schemas import ChatRequest, ChatResponse
@@ -25,19 +23,6 @@ async def ws_tasks(websocket):
         logger.debug(f"WebSocket 连接关闭: {e}")
     finally:
         await ws_manager.disconnect(websocket)
-
-
-@router.websocket("/ws")
-async def websocket_endpoint(websocket):
-    await websocket.accept()
-    try:
-        while True:
-            data = await websocket.receive_text()
-            await websocket.send_text(f"收到: {data}")
-    except Exception as e:
-        from rag.logger import get_logger
-        logger = get_logger(__name__)
-        logger.debug(f"WebSocket 连接关闭: {e}")
 
 
 @router.post("/chat/{kb_id}", response_model=ChatResponse)
@@ -72,7 +57,7 @@ def list_chat_sessions(kb_id: str):
     from rag.chat_engine import get_chat_service
 
     chat_service = get_chat_service()
-    sessions = chat_service._chat_store.list_sessions(kb_id=kb_id)
+    sessions = chat_service.list_sessions(kb_id=kb_id)
     return {
         "sessions": [
             {

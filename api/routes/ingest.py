@@ -160,12 +160,6 @@ def ingest_obsidian(kb_id: str, req: ObsidianIngestRequest):
     from pathlib import Path
     from kb_core.import_service import ImportApplicationService, ImportRequest
 
-    vault_path = Path(req.vault_path) if req.vault_path else None
-    if vault_path and not vault_path.exists():
-        raise HTTPException(
-            status_code=400, detail=f"Vault 路径不存在: {req.vault_path}"
-        )
-
     vault_path_obj = Path(req.vault_path) if req.vault_path else None
     if vault_path_obj and not vault_path_obj.exists():
         raise HTTPException(
@@ -229,6 +223,13 @@ def ingest_obsidian(kb_id: str, req: ObsidianIngestRequest):
 
 @router.post("/kbs/{kb_id}/ingest/selective", response_model=IngestResponse)
 def ingest_selective(kb_id: str, req: SelectiveImportRequest):
+    valid_source_types = {"zotero", "obsidian", "files"}
+    if req.source_type not in valid_source_types:
+        raise HTTPException(
+            status_code=400,
+            detail=f"无效的 source_type: {req.source_type}，有效值: {valid_source_types}",
+        )
+
     from kb_core.import_service import (
         ImportApplicationService,
         SelectiveImportItem,

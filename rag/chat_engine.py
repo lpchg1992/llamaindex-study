@@ -248,6 +248,10 @@ class ChatService:
         """删除会话"""
         return self._chat_store.delete_session(session_id)
 
+    def list_sessions(self, kb_id: Optional[str] = None) -> List[ChatSession]:
+        """列出会话"""
+        return self._chat_store.list_sessions(kb_id=kb_id)
+
 
 _chat_service_instance: Optional[ChatService] = None
 

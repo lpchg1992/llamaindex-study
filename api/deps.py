@@ -6,6 +6,8 @@ Extracted from api.py to avoid circular imports.
 from __future__ import annotations
 
 import asyncio
+import asyncio
+import markdown
 import threading
 from typing import Optional
 
@@ -283,7 +285,3 @@ def get_doc_files() -> dict:
         "QUERY_PARAM_GUIDE": "QUERY_PARAM_GUIDE.md",
         "SEARCH_PARAM_GUIDE": "SEARCH_PARAM_GUIDE.md",
     }
-
-
-# Import markdown for the render function
-import markdown

@@ -2,7 +2,7 @@
 Task queue management endpoints.
 """
 
-from typing import List, Optional
+from typing import List
 
 from fastapi import APIRouter, HTTPException
 
@@ -70,7 +70,7 @@ def get_task(task_id: str):
     )
 
 
-@router.delete("/{task_id}")
+@router.post("/{task_id}/cancel")
 def cancel_task(task_id: str):
     from kb_core.services import TaskService
 
@@ -115,7 +115,7 @@ def cancel_file_in_task(task_id: str, file_id: str):
     return {"message": "文件已取消", "task_id": task_id, "file_id": file_id}
 
 
-@router.delete("/{task_id}/delete")
+@router.delete("/{task_id}")
 def delete_task(task_id: str, cleanup: bool = False):
     from kb_core.services import TaskService
 
