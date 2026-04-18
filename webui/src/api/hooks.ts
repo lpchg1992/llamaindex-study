@@ -895,6 +895,7 @@ export function useConsistencyRepair() {
     onSuccess: (_, kbId) => {
       queryClient.invalidateQueries({ queryKey: ['kbs'] })
       queryClient.invalidateQueries({ queryKey: ['consistency-check', kbId] })
+      queryClient.invalidateQueries({ queryKey: ['embedding-stats', kbId] })
     },
   })
 }
@@ -908,6 +909,8 @@ export function useRepairAll() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['kbs'] })
+      queryClient.invalidateQueries({ queryKey: ['embedding-stats'] })
+      queryClient.invalidateQueries({ queryKey: ['consistency-check'] })
     },
   })
 }
@@ -934,6 +937,7 @@ export function useCheckAndMarkFailed() {
       queryClient.invalidateQueries({ queryKey: ['doc-embedding-stats', kbId] })
       queryClient.invalidateQueries({ queryKey: ['consistency-check', kbId] })
       queryClient.invalidateQueries({ queryKey: ['documents', kbId] })
+      queryClient.invalidateQueries({ queryKey: ['embedding-stats', kbId] })
     },
   })
 }
