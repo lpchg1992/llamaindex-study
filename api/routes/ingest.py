@@ -51,6 +51,9 @@ def ingest(kb_id: str, req: IngestRequest):
                 async_mode=False,
                 path=req.path,
                 refresh_topics=req.refresh_topics,
+                chunk_strategy=req.chunk_strategy,
+                chunk_size=req.chunk_size,
+                hierarchical_chunk_sizes=req.hierarchical_chunk_sizes,
             )
         )
         return IngestResponse(
@@ -68,6 +71,9 @@ def ingest(kb_id: str, req: IngestRequest):
             path=req.path,
             refresh_topics=req.refresh_topics,
             source=req.path,
+            chunk_strategy=req.chunk_strategy,
+            chunk_size=req.chunk_size,
+            hierarchical_chunk_sizes=req.hierarchical_chunk_sizes,
         )
     )
 
@@ -188,6 +194,9 @@ def ingest_obsidian(kb_id: str, req: ObsidianIngestRequest):
                 recursive=req.recursive,
                 exclude_patterns=req.exclude_patterns,
                 refresh_topics=req.refresh_topics,
+                chunk_strategy=req.chunk_strategy,
+                chunk_size=req.chunk_size,
+                hierarchical_chunk_sizes=req.hierarchical_chunk_sizes,
             )
         )
         return IngestResponse(
@@ -209,6 +218,9 @@ def ingest_obsidian(kb_id: str, req: ObsidianIngestRequest):
             exclude_patterns=req.exclude_patterns,
             refresh_topics=req.refresh_topics,
             source=f"obsidian:{import_dir_name}",
+            chunk_strategy=req.chunk_strategy,
+            chunk_size=req.chunk_size,
+            hierarchical_chunk_sizes=req.hierarchical_chunk_sizes,
         )
     )
     task_id = task["task_id"]
@@ -318,6 +330,9 @@ def ingest_files(kb_id: str, req: FilesImportRequest):
             paths=validated_paths,
             refresh_topics=req.refresh_topics,
             source=f"files:{len(validated_paths)}files",
+            chunk_strategy=req.chunk_strategy,
+            chunk_size=req.chunk_size,
+            hierarchical_chunk_sizes=req.hierarchical_chunk_sizes,
         )
     )
     task_id = task["task_id"]

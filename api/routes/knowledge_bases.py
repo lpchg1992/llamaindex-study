@@ -162,6 +162,27 @@ def get_doc_embedding_stats(kb_id: str):
     }
 
 
+@router.get("/{kb_id}/embedding-stats")
+def get_embedding_stats(kb_id: str):
+    from kb_core.services import KnowledgeBaseService
+    from kb_core.database import init_chunk_db
+
+    info = KnowledgeBaseService.get_info(kb_id)
+    if not info:
+        raise HTTPException(status_code=404, detail=f"知识库不存在: {kb_id}")
+
+    chunk_db = init_chunk_db()
+    stats = chunk_db.get_embedding_stats(kb_id)
+
+    return {
+        "kb_id": kb_id,
+        "total": stats.get("total", 0),
+        "success": stats.get("success", 0),
+        "failed": stats.get("failed", 0),
+        "pending": stats.get("pending", 0),
+    }
+
+
 @router.post("/{kb_id}/consistency/check-and-mark-failed")
 def check_and_mark_failed_chunks(kb_id: str, limit: int = 200000):
     from kb_core.services import KnowledgeBaseService
