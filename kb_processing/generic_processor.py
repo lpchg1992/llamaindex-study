@@ -207,13 +207,7 @@ class GenericImporter:
                 progress.started_at = time.time()
 
         self.processor.set_embed_model(embed_model)
-        settings = get_settings()
-        node_parser = HierarchicalNodeParser.from_defaults(
-            chunk_sizes=self.processor.config.hierarchical_chunk_sizes or settings.hierarchical_chunk_sizes,
-            chunk_overlap=self.processor.config.chunk_overlap or settings.chunk_overlap,
-            include_metadata=True,
-            include_prev_next_rel=True,
-        )
+        node_parser = self.processor.get_node_parser()
 
         processed_set = set(progress.processed_items) if progress else set()
 

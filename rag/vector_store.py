@@ -192,9 +192,9 @@ class LanceDBVectorStore:
     ) -> Any:
         """从文档构建索引"""
         from llama_index.core import VectorStoreIndex, Settings as LlamaSettings
-        from llama_index.core.node_parser import HierarchicalNodeParser
 
         from rag.config import get_settings
+        from kb_processing.document_processor import get_node_parser
 
         embed_model = self._get_embed_model()
         LlamaSettings.embed_model = embed_model
@@ -202,11 +202,12 @@ class LanceDBVectorStore:
         vector_store = self._get_lance_vector_store()
 
         settings = get_settings()
-        node_parser = HierarchicalNodeParser.from_defaults(
-            chunk_sizes=settings.hierarchical_chunk_sizes,
-            chunk_overlap=settings.chunk_overlap or 50,
-            include_metadata=True,
-            include_prev_next_rel=True,
+        node_parser = get_node_parser(
+            strategy=settings.chunk_strategy,
+            chunk_size=settings.chunk_size,
+            chunk_overlap=settings.chunk_overlap,
+            hierarchical_chunk_sizes=settings.hierarchical_chunk_sizes,
+            embed_model=embed_model,
         )
         nodes = node_parser.get_nodes_from_documents(documents)
 

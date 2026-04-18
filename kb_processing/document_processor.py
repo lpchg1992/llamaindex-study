@@ -45,11 +45,75 @@ from typing import Optional, List, Callable
 from llama_index.core import SimpleDirectoryReader
 from llama_index.core.schema import Document as LlamaDocument
 from llama_index.readers.file import PptxReader, PandasExcelReader
-from llama_index.core.node_parser import HierarchicalNodeParser
+from llama_index.core.node_parser import HierarchicalNodeParser, SentenceSplitter, MarkdownNodeParser
 
 from rag.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def get_node_parser(
+    strategy: str,
+    chunk_size: int = 1024,
+    chunk_overlap: int = 100,
+    hierarchical_chunk_sizes: list = None,
+    embed_model=None,
+):
+    """
+    根据策略获取节点解析器
+
+    Args:
+        strategy: 分块策略 (hierarchical/sentence/semantic/markdown/page)
+        chunk_size: 每个块的目标大小（tokens）
+        chunk_overlap: 相邻块重叠大小（tokens）
+        hierarchical_chunk_sizes: hierarchical策略的层级大小列表
+        embed_model: embedding模型（用于semantic策略）
+
+    Returns:
+        NodeParser 实例
+    """
+    if hierarchical_chunk_sizes is None:
+        from rag.config import get_settings
+        settings = get_settings()
+        hierarchical_chunk_sizes = settings.hierarchical_chunk_sizes
+
+    if strategy == "hierarchical":
+        return HierarchicalNodeParser.from_defaults(
+            chunk_sizes=hierarchical_chunk_sizes,
+            chunk_overlap=chunk_overlap,
+            include_metadata=True,
+            include_prev_next_rel=True,
+        )
+    elif strategy == "semantic":
+        if embed_model is None:
+            raise ValueError("Semantic策略需要传入embed_model")
+        from llama_index.packs.node_parser_semantic_chunking.base import SemanticChunker
+        return SemanticChunker(
+            embed_model=embed_model,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            include_metadata=True,
+            include_prev_next_rel=True,
+        )
+    elif strategy == "markdown":
+        return MarkdownNodeParser.from_defaults(
+            include_metadata=True,
+            include_prev_next_rel=True,
+        )
+    elif strategy in ("sentence", "page"):
+        return SentenceSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            include_metadata=True,
+            include_prev_next_rel=True,
+        )
+    else:
+        return HierarchicalNodeParser.from_defaults(
+            chunk_sizes=hierarchical_chunk_sizes,
+            chunk_overlap=chunk_overlap,
+            include_metadata=True,
+            include_prev_next_rel=True,
+        )
 
 
 @dataclass
@@ -158,21 +222,20 @@ class DocumentProcessor:
         self.config = config or DocumentProcessorConfig()
         self.embed_model = embed_model
         self.node_parser = node_parser
-        if self.node_parser is None:
-            chunk_sizes = self.config.hierarchical_chunk_sizes
-            if chunk_sizes is None:
-                from rag.config import get_settings
-                settings = get_settings()
-                chunk_sizes = settings.hierarchical_chunk_sizes
-            self.node_parser = HierarchicalNodeParser.from_defaults(
-                chunk_sizes=chunk_sizes,
-                chunk_overlap=self.config.chunk_overlap,
-                include_metadata=True,
-                include_prev_next_rel=True,
-            )
+
+    def get_node_parser(self):
+        """获取节点解析器，根据配置的分块策略创建"""
+        if self.node_parser is not None:
+            return self.node_parser
+        return get_node_parser(
+            strategy=self.config.chunk_strategy,
+            chunk_size=self.config.chunk_size,
+            chunk_overlap=self.config.chunk_overlap,
+            hierarchical_chunk_sizes=self.config.hierarchical_chunk_sizes,
+            embed_model=self.embed_model,
+        )
 
     def set_embed_model(self, embed_model):
-        """设置 embedding 模型"""
         self.embed_model = embed_model
 
     def _upsert_nodes(self, lance_store, nodes):

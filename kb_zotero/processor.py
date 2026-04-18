@@ -431,13 +431,7 @@ class ZoteroImporter:
         from kb_core.document_chunk_service import get_document_chunk_service
 
         self.processor.set_embed_model(embed_model)
-        settings = get_settings()
-        node_parser = HierarchicalNodeParser.from_defaults(
-            chunk_sizes=self.processor.config.hierarchical_chunk_sizes or settings.hierarchical_chunk_sizes,
-            chunk_overlap=self.processor.config.chunk_overlap or settings.chunk_overlap,
-            include_metadata=True,
-            include_prev_next_rel=True,
-        )
+        node_parser = self.processor.get_node_parser()
 
         effective_kb_id = kb_id or self.kb_id or "default"
         doc_chunk_service = get_document_chunk_service(effective_kb_id)
