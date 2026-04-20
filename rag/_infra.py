@@ -21,7 +21,7 @@ CIRCUIT_BREAKER_FAILURE_THRESHOLD = 5
 CIRCUIT_BREAKER_RECOVERY_TIMEOUT = 60.0
 
 
-def _extract_llm_tokens(response: Any) -> tuple[int, int]:
+def extract_llm_tokens(response: Any) -> tuple[int, int]:
     """从 LLM 响应中提取 token 数量，返回 (prompt_tokens, completion_tokens)"""
     prompt_tokens = 0
     completion_tokens = 0

@@ -598,7 +598,7 @@ class ZoteroService:
             logger.info(
                 f"[ZoteroService.import_item] item_id={item_id}, prefix={prefix}, file_path={item.file_path}, force_ocr={force_ocr}, is_scanned_override={is_scanned_override}, has_md_cache={has_md_cache}"
             )
-            nodes, all_nodes, processed_sources, error_reason = importer.import_item(
+            nodes, all_nodes, processed_sources, error_reason, failed_ids = importer.import_item(
                 item=item,
                 vector_store=vs,
                 embed_model=create_parallel_ollama_embedding(),

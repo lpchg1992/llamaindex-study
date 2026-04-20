@@ -19,7 +19,7 @@ from rag._infra import (
     CircuitBreakerOpenError,
     RetryableError,
     get_ollama_request_queue,
-    _extract_llm_tokens,
+    extract_llm_tokens,
     DEFAULT_TIMEOUT,
 )
 from rag.embedding_factory import (
@@ -156,7 +156,7 @@ class RetryableOllama(Ollama):
     def complete(self, prompt: str, **kwargs) -> Any:
         try:
             response = self._sync_call_with_retry("complete", prompt, **kwargs)
-            prompt_tokens, completion_tokens = _extract_llm_tokens(response)
+            prompt_tokens, completion_tokens = extract_llm_tokens(response)
             _record_llm_call(
                 self._get_vendor_id(),
                 self.model,
@@ -172,7 +172,7 @@ class RetryableOllama(Ollama):
     def completion(self, prompt: str, **kwargs) -> Any:
         try:
             response = self._sync_call_with_retry("completion", prompt, **kwargs)
-            prompt_tokens, completion_tokens = _extract_llm_tokens(response)
+            prompt_tokens, completion_tokens = extract_llm_tokens(response)
             _record_llm_call(
                 self._get_vendor_id(),
                 self.model,
@@ -188,7 +188,7 @@ class RetryableOllama(Ollama):
     def predict(self, prompt: str, **kwargs) -> Any:
         try:
             response = self._sync_call_with_retry("predict", prompt, **kwargs)
-            prompt_tokens, completion_tokens = _extract_llm_tokens(response)
+            prompt_tokens, completion_tokens = extract_llm_tokens(response)
             _record_llm_call(
                 self._get_vendor_id(),
                 self.model,
@@ -213,7 +213,7 @@ class RetryableOllama(Ollama):
     def chat(self, messages: Any, **kwargs) -> Any:
         try:
             response = self._sync_call_with_retry("chat", messages, **kwargs)
-            prompt_tokens, completion_tokens = _extract_llm_tokens(response)
+            prompt_tokens, completion_tokens = extract_llm_tokens(response)
             _record_llm_call(
                 self._get_vendor_id(),
                 self.model,
@@ -266,7 +266,7 @@ class RetryableOllama(Ollama):
     async def acomplete(self, prompt: str, **kwargs) -> Any:
         try:
             response = await self._async_call_with_retry("acomplete", prompt, **kwargs)
-            prompt_tokens, completion_tokens = _extract_llm_tokens(response)
+            prompt_tokens, completion_tokens = extract_llm_tokens(response)
             _record_llm_call(
                 self._get_vendor_id(),
                 self.model,
@@ -282,7 +282,7 @@ class RetryableOllama(Ollama):
     async def achat(self, messages: Any, **kwargs) -> Any:
         try:
             response = await self._async_call_with_retry("achat", messages, **kwargs)
-            prompt_tokens, completion_tokens = _extract_llm_tokens(response)
+            prompt_tokens, completion_tokens = extract_llm_tokens(response)
             _record_llm_call(
                 self._get_vendor_id(),
                 self.model,
@@ -510,7 +510,7 @@ class OllamaWithSiliconFlowFallback:
             fallback_method = getattr(fallback_llm, method_name)
             try:
                 response = fallback_method(*args, **kwargs)
-                prompt_tokens, completion_tokens = _extract_llm_tokens(response)
+                prompt_tokens, completion_tokens = extract_llm_tokens(response)
                 _record_llm_call(
                     "siliconflow",
                     getattr(fallback_llm, "model", "siliconflow"),
@@ -712,7 +712,7 @@ class RetryableSiliconFlowLLM:
     def complete(self, prompt: str, **kwargs) -> Any:
         try:
             response = self._call_with_retry("complete", prompt, **kwargs)
-            prompt_tokens, completion_tokens = _extract_llm_tokens(response)
+            prompt_tokens, completion_tokens = extract_llm_tokens(response)
             _record_llm_call(
                 self._get_vendor_id(),
                 self._model,
@@ -728,7 +728,7 @@ class RetryableSiliconFlowLLM:
     def completion(self, prompt: str, **kwargs) -> Any:
         try:
             response = self._call_with_retry("completion", prompt, **kwargs)
-            prompt_tokens, completion_tokens = _extract_llm_tokens(response)
+            prompt_tokens, completion_tokens = extract_llm_tokens(response)
             _record_llm_call(
                 self._get_vendor_id(),
                 self._model,
@@ -744,7 +744,7 @@ class RetryableSiliconFlowLLM:
     def predict(self, prompt: str, **kwargs) -> Any:
         try:
             response = self._call_with_retry("predict", prompt, **kwargs)
-            prompt_tokens, completion_tokens = _extract_llm_tokens(response)
+            prompt_tokens, completion_tokens = extract_llm_tokens(response)
             _record_llm_call(
                 self._get_vendor_id(),
                 self._model,
@@ -769,7 +769,7 @@ class RetryableSiliconFlowLLM:
     def chat(self, messages: Any, **kwargs) -> Any:
         try:
             response = self._call_with_retry("chat", messages, **kwargs)
-            prompt_tokens, completion_tokens = _extract_llm_tokens(response)
+            prompt_tokens, completion_tokens = extract_llm_tokens(response)
             _record_llm_call(
                 self._get_vendor_id(),
                 self._model,
@@ -794,7 +794,7 @@ class RetryableSiliconFlowLLM:
     async def acomplete(self, prompt: str, **kwargs) -> Any:
         try:
             response = self._call_with_retry("acomplete", prompt, **kwargs)
-            prompt_tokens, completion_tokens = _extract_llm_tokens(response)
+            prompt_tokens, completion_tokens = extract_llm_tokens(response)
             _record_llm_call(
                 self._get_vendor_id(),
                 self._model,
@@ -810,7 +810,7 @@ class RetryableSiliconFlowLLM:
     async def achat(self, messages: Any, **kwargs) -> Any:
         try:
             response = self._call_with_retry("achat", messages, **kwargs)
-            prompt_tokens, completion_tokens = _extract_llm_tokens(response)
+            prompt_tokens, completion_tokens = extract_llm_tokens(response)
             _record_llm_call(
                 self._get_vendor_id(),
                 self._model,

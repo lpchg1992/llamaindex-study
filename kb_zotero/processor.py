@@ -410,7 +410,7 @@ class ZoteroImporter:
         force_ocr: bool = False,
         is_scanned: Optional[bool] = None,
         has_md_cache: Optional[bool] = None,
-    ) -> Tuple[int, List[Any], List[str], Optional[str]]:
+    ) -> Tuple[int, List[Any], List[str], Optional[str], List[str]]:
         """
         导入单个文献
 
@@ -425,7 +425,7 @@ class ZoteroImporter:
             has_md_cache: 是否有 MD 缓存（前端传递，避免重复检测）
 
         Returns:
-            (生成的节点数, 所有节点列表, 处理过的源文件路径列表, 错误原因)
+            (生成的节点数, 所有节点列表, 处理过的源文件路径列表, 错误原因, 失败的节点ID列表)
         """
         from kb_zotero.reader import create_zotero_reader
         from kb_core.document_chunk_service import get_document_chunk_service
@@ -439,6 +439,7 @@ class ZoteroImporter:
         total_nodes = 0
         all_nodes = []
         processed_sources = []
+        all_failed_ids = []
         creators_str = ", ".join(item.creators) if item.creators else ""
         base_metadata = {
             "item_id": item.item_id,
@@ -532,20 +533,22 @@ class ZoteroImporter:
                 if not result:
                     logger.warning(f"zotero_meta 文档记录创建失败: {item.title}")
                 else:
+                    meta_node_ids = [n.node_id for n in nodes]
                     try:
                         success_count, skipped, emb_failed_ids = (
                             self.processor._upsert_nodes(
                                 vector_store._get_lance_vector_store(), nodes
                             )
                         )
-                        all_failed_ids = list(set(failed_ids + emb_failed_ids))
-                        failed_ids = all_failed_ids if all_failed_ids else failed_ids
+                        all_failed_ids = list(set(all_failed_ids + failed_ids + emb_failed_ids))
                     except Exception as e:
                         logger.warning(
                             f"LanceDB 写入失败 (zotero_meta): {item.title}, 错误: {e}"
                         )
                         success_count = 0
                         error_reason = f"LanceDB write failed for zotero_meta: {e}"
+                        doc_chunk_service.mark_chunks_failed(meta_node_ids)
+                        all_failed_ids = list(set(all_failed_ids + meta_node_ids))
                     total_nodes += len(nodes)
                     if success_count > 0:
                         all_nodes.extend(
@@ -660,7 +663,7 @@ class ZoteroImporter:
                             f"[{item.title}] 附件 embedding 全部失败 ({len(nodes)} 个节点): {file_path}"
                         )
 
-                    all_failed_ids = list(set(failed_ids))
+                    current_failed_ids = list(set(failed_ids))
                     result = doc_chunk_service.create_document(
                         source_file=file_path.name,
                         source_path=str(file_path),
@@ -669,7 +672,7 @@ class ZoteroImporter:
                         file_size=file_size,
                         doc_id=doc_id,
                         zotero_doc_id=zotero_doc_id,
-                        failed_node_ids=all_failed_ids if all_failed_ids else None,
+                        failed_node_ids=current_failed_ids if current_failed_ids else None,
                     )
                     if not result:
                         logger.warning(f"文档记录创建失败: {file_path}")
@@ -681,11 +684,13 @@ class ZoteroImporter:
                                 vector_store._get_lance_vector_store(), nodes
                             )
                         )
-                        all_failed_ids = list(set(failed_ids + emb_failed_ids))
-                        failed_ids = all_failed_ids if all_failed_ids else failed_ids
+                        all_failed_ids = list(set(all_failed_ids + failed_ids + emb_failed_ids))
                     except Exception as e:
                         logger.warning(f"LanceDB 写入失败: {file_path}, 错误: {e}")
                         error_reason = f"LanceDB write failed: {e}"
+                        failed_node_ids = list(set(failed_ids + [n.node_id for n in nodes]))
+                        doc_chunk_service.mark_chunks_failed(failed_node_ids)
+                        all_failed_ids = list(set(all_failed_ids + failed_node_ids))
                         total_nodes += len(nodes)
                         continue
 
@@ -704,7 +709,7 @@ class ZoteroImporter:
             else:
                 logger.warning(f"文档处理返回空结果: {file_path}")
 
-        return total_nodes, all_nodes, processed_sources, error_reason
+        return total_nodes, all_nodes, processed_sources, error_reason, all_failed_ids
 
     def import_collection(
         self,
@@ -795,9 +800,11 @@ class ZoteroImporter:
             logger.debug(f"处理文献: {item.title} (item_id={item_id})")
 
             try:
-                total_nodes, all_nodes, _, _ = self.import_item(
+                total_nodes, all_nodes, _, _, item_failed_ids = self.import_item(
                     item, vector_store, embed_model, progress, kb_id=kb_id
                 )
+                if item_failed_ids:
+                    stats.setdefault("failed_ids", []).extend(item_failed_ids)
                 if total_nodes > 0:
                     stats["nodes"] += total_nodes
                     stats["items"] += 1
