@@ -113,8 +113,9 @@ DEFAULT_MAX_CONCURRENT = settings.max_concurrent_tasks
 HEARTBEAT_INTERVAL = settings.heartbeat_interval
 STALE_TASK_TIMEOUT = settings.stale_task_timeout
 
+from .task_queue import Task, TaskQueue, TaskStatus
+
 if TYPE_CHECKING:
-    from .task_queue import Task, TaskQueue, TaskStatus
     from rag.vector_store import LanceDBVectorStore
     from kb_processing.parallel_embedding import EmbeddingResult
 
