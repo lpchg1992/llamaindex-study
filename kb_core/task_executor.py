@@ -557,12 +557,10 @@ class TaskExecutor:
                         success_count, skipped, _ = processor._upsert_nodes(
                             lance_store, nodes
                         )
-                        write_ok = True
-                        write_err = ""
                     except Exception as write_ex:
-                        write_ok = False
-                        write_err = str(write_ex)
-                        logger.warning(f"LanceDB 写入失败（SQLite 已保存，标记为待修复）: {rel_path}, 错误: {write_err}")
+                        logger.warning(f"LanceDB 写入失败（SQLite 已保存）: {rel_path}, 错误: {write_ex}")
+                        continue
+
                     processed_chunks += success_count
 
                 processed_sources.append(str(abs_path))
@@ -1576,32 +1574,68 @@ class TaskExecutor:
                                 if results[j] is not None:
                                     nodes[j].embedding = embedding
 
-                            # 同步写入 LanceDB，等待完成才继续（确保原子性）
+                            file_nodes.extend(nodes)
+
+                            # Write to SQLite FIRST
+                            try:
+                                content = file_path.read_text(
+                                    encoding="utf-8", errors="ignore"
+                                )
+                                current_hash = ""
+                                try:
+                                    from kb_processing.document_processor import DocumentProcessor
+
+                                    current_hash = DocumentProcessor().compute_file_hash(
+                                        str(file_path)
+                                    )
+                                except Exception:
+                                    pass
+                                file_size = (
+                                    file_path.stat().st_size if file_path.exists() else 0
+                                )
+                                mime_type = (
+                                    "application/pdf"
+                                    if file_path.suffix.lower() == ".pdf"
+                                    else "text/plain"
+                                )
+                                doc_db.create(
+                                    kb_id=kb_id,
+                                    source_file=str(file_path.name),
+                                    source_path=str(file_path),
+                                    file_hash=current_hash,
+                                    file_size=file_size,
+                                    mime_type=mime_type,
+                                    metadata={"source": "generic"},
+                                )
+                            except Exception as e:
+                                logger.warning(f"SQLite 文档记录创建失败 {file_path}: {e}")
+                                continue
+
+                            # Then write to LanceDB
                             try:
                                 processor = DocumentProcessor()
                                 success_count, skipped, failed_ids = (
                                     processor._upsert_nodes(lance_store, nodes)
                                 )
-                                write_ok = True
-                                write_err = ""
                             except Exception as write_ex:
-                                write_ok = False
-                                write_err = str(write_ex)
-                            if not write_ok:
                                 logger.warning(
-                                    f"LanceDB 写入失败，跳过文档: {file_path}, 错误: {write_err}"
+                                    f"LanceDB 写入失败（SQLite 已保存）: {file_path}, 错误: {write_ex}"
                                 )
+                                error_reason = f"LanceDB write failed: {write_ex}"
                                 self.queue.update_file_progress(
                                     task.task_id,
                                     file_id,
-                                    status=FileStatus.FAILED.value,
-                                    error=write_err,
+                                    status=FileStatus.COMPLETED.value,
+                                    total_chunks=len(nodes),
+                                    processed_chunks=0,
+                                    db_written=True,
+                                    error=error_reason,
                                 )
+                                stats["nodes"] += len(nodes)
+                                processed_sources.append(str(file_path))
                                 continue
-                            stats["nodes"] += success_count
-                            file_nodes.extend(nodes)
 
-                            # 标记失败的 chunks
+                            # Mark failed chunks
                             if failed_ids:
                                 try:
                                     from .database import init_chunk_db
@@ -1611,50 +1645,17 @@ class TaskExecutor:
                                 except Exception as e:
                                     logger.warning(f"标记失败 chunks 失败: {e}")
 
-                    if file_nodes:
-                        try:
-                            content = file_path.read_text(
-                                encoding="utf-8", errors="ignore"
+                            stats["nodes"] += success_count
+                            processed_sources.append(str(file_path))
+                            stats["files"] += 1
+                            self.queue.update_file_progress(
+                                task.task_id,
+                                file_id,
+                                status=FileStatus.COMPLETED.value,
+                                total_chunks=len(nodes),
+                                processed_chunks=success_count,
+                                db_written=True,
                             )
-                            current_hash = ""
-                            try:
-                                from kb_processing.document_processor import DocumentProcessor
-
-                                current_hash = DocumentProcessor().compute_file_hash(
-                                    str(file_path)
-                                )
-                            except Exception:
-                                pass
-                            file_size = (
-                                file_path.stat().st_size if file_path.exists() else 0
-                            )
-                            mime_type = (
-                                "application/pdf"
-                                if file_path.suffix.lower() == ".pdf"
-                                else "text/plain"
-                            )
-                            doc_db.create(
-                                kb_id=kb_id,
-                                source_file=str(file_path.name),
-                                source_path=str(file_path),
-                                file_hash=current_hash,
-                                file_size=file_size,
-                                mime_type=mime_type,
-                                metadata={"source": "generic"},
-                            )
-                        except Exception as e:
-                            logger.warning(f"更新文档记录失败 {file_path}: {e}")
-
-                    processed_sources.append(str(file_path))
-                    stats["files"] += 1
-                    self.queue.update_file_progress(
-                        task.task_id,
-                        file_id,
-                        status=FileStatus.COMPLETED.value,
-                        total_chunks=success_count,
-                        processed_chunks=success_count,
-                        db_written=True,
-                    )
 
                 progress = int((i + 1) / total_files * 100) if total_files > 0 else 0
                 await self._update_and_notify(

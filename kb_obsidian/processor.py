@@ -420,37 +420,36 @@ class ObsidianImporter:
 
             nodes = [clean_node_metadata(n) for n in nodes]
 
+            doc_chunk_service = get_document_chunk_service(self.kb_id)
+            file_hash = self.processor.compute_file_hash(str(file_path))
+            result = doc_chunk_service.create_document(
+                source_file=file_path.name,
+                source_path=str(file_path),
+                file_hash=file_hash,
+                nodes=nodes,
+                file_size=file_path.stat().st_size,
+                doc_id=doc_id,
+            )
+            if not result:
+                logger.warning(f"SQLite 文档记录创建失败: {file_path}")
+                continue
+
             try:
                 lance_store = vector_store._get_lance_vector_store()
                 success_count, skipped, failed_ids = self.processor._upsert_nodes(lance_store, nodes)
             except Exception as write_ex:
-                logger.warning(f"LanceDB 写入失败: {file_path}, 错误: {write_ex}")
+                logger.warning(f"LanceDB 写入失败（SQLite 已保存）: {file_path}, 错误: {write_ex}")
                 continue
 
-                if success_count > 0 or failed_ids:
-                    try:
-                        doc_chunk_service = get_document_chunk_service(self.kb_id)
-                        file_hash = self.processor.compute_file_hash(str(file_path))
-                        doc_chunk_service.create_document(
-                            source_file=file_path.name,
-                            source_path=str(file_path),
-                            file_hash=file_hash,
-                            nodes=nodes,
-                            file_size=file_path.stat().st_size,
-                            doc_id=doc_id,
-                            failed_node_ids=failed_ids if failed_ids else None,
-                        )
-                        stats["nodes"] += success_count
-                        stats["files"] += 1
-                        stats["processed_sources"].append(str(file_path))
+            stats["nodes"] += len(nodes)
+            stats["files"] += 1
+            stats["processed_sources"].append(str(file_path))
 
-                        if progress:
-                            progress.processed_items.append(str(file_path))
-                            progress.save(
-                                Path.home() / ".llamaindex" / "obsidian_progress.json"
-                            )
-                    except Exception as e:
-                        logger.error(f"Document 记录创建失败: {file_path}, 错误: {e}")
+            if progress:
+                progress.processed_items.append(str(file_path))
+                progress.save(
+                    Path.home() / ".llamaindex" / "obsidian_progress.json"
+                )
 
         # 处理 PDF 附件
         pdf_stats = self.import_pdf_attachments(
