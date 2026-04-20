@@ -1576,11 +1576,10 @@ class TaskExecutor:
 
                             file_nodes.extend(nodes)
 
-                            # Write to SQLite FIRST
+                            # Write to SQLite FIRST (document + chunks)
                             try:
-                                content = file_path.read_text(
-                                    encoding="utf-8", errors="ignore"
-                                )
+                                from .document_chunk_service import DocumentChunkService
+
                                 current_hash = ""
                                 try:
                                     from kb_processing.document_processor import DocumentProcessor
@@ -1593,20 +1592,18 @@ class TaskExecutor:
                                 file_size = (
                                     file_path.stat().st_size if file_path.exists() else 0
                                 )
-                                mime_type = (
-                                    "application/pdf"
-                                    if file_path.suffix.lower() == ".pdf"
-                                    else "text/plain"
-                                )
-                                doc_db.create(
-                                    kb_id=kb_id,
+                                doc_chunk_svc = DocumentChunkService(kb_id)
+                                result = doc_chunk_svc.create_document(
                                     source_file=str(file_path.name),
                                     source_path=str(file_path),
                                     file_hash=current_hash,
+                                    nodes=nodes,
                                     file_size=file_size,
-                                    mime_type=mime_type,
                                     metadata={"source": "generic"},
                                 )
+                                if not result:
+                                    logger.warning(f"SQLite 文档记录创建失败 {file_path}")
+                                    continue
                             except Exception as e:
                                 logger.warning(f"SQLite 文档记录创建失败 {file_path}: {e}")
                                 continue
@@ -1634,16 +1631,6 @@ class TaskExecutor:
                                 stats["nodes"] += len(nodes)
                                 processed_sources.append(str(file_path))
                                 continue
-
-                            # Mark failed chunks
-                            if failed_ids:
-                                try:
-                                    from .database import init_chunk_db
-
-                                    chunk_db = init_chunk_db()
-                                    chunk_db.mark_failed_bulk(failed_ids)
-                                except Exception as e:
-                                    logger.warning(f"标记失败 chunks 失败: {e}")
 
                             stats["nodes"] += success_count
                             processed_sources.append(str(file_path))
