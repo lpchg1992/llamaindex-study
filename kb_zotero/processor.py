@@ -517,35 +517,37 @@ class ZoteroImporter:
                     )
                     logger.warning(f"[{item.title}] zotero_meta: {error_reason}")
 
-                try:
-                    success_count, skipped, emb_failed_ids = (
-                        self.processor._upsert_nodes(
-                            vector_store._get_lance_vector_store(), nodes
+                all_failed_ids = list(set(failed_ids))
+                meta_doc_id = f"zotero_meta_{item.item_id}"
+                result = doc_chunk_service.create_document(
+                    source_file=f"zotero_meta_{item.item_id}",
+                    source_path=f"zotero://item/{item.item_id}",
+                    file_hash="",
+                    nodes=nodes,
+                    file_size=len(text.encode("utf-8")),
+                    doc_id=meta_doc_id,
+                    zotero_doc_id=str(item.item_id),
+                    failed_node_ids=all_failed_ids if all_failed_ids else None,
+                )
+                if not result:
+                    logger.warning(f"zotero_meta 文档记录创建失败: {item.title}")
+                else:
+                    try:
+                        success_count, skipped, emb_failed_ids = (
+                            self.processor._upsert_nodes(
+                                vector_store._get_lance_vector_store(), nodes
+                            )
                         )
-                    )
-                    # Merge embedding failures with upsert failures
-                    all_failed_ids = list(set(failed_ids + emb_failed_ids))
-                    failed_ids = all_failed_ids if all_failed_ids else failed_ids
-                except Exception as e:
-                    logger.warning(
-                        f"LanceDB 写入失败 (zotero_meta): {item.title}, 错误: {e}"
-                    )
-                    success_count = 0
-                    failed_ids = []
-                if success_count > 0:
-                    meta_doc_id = f"zotero_meta_{item.item_id}"
-                    result = doc_chunk_service.create_document(
-                        source_file=f"zotero_meta_{item.item_id}",
-                        source_path=f"zotero://item/{item.item_id}",
-                        file_hash="",
-                        nodes=nodes,
-                        file_size=len(text.encode("utf-8")),
-                        doc_id=meta_doc_id,
-                        zotero_doc_id=str(item.item_id),
-                        failed_node_ids=failed_ids if failed_ids else None,
-                    )
-                    if result:
-                        total_nodes += success_count
+                        all_failed_ids = list(set(failed_ids + emb_failed_ids))
+                        failed_ids = all_failed_ids if all_failed_ids else failed_ids
+                    except Exception as e:
+                        logger.warning(
+                            f"LanceDB 写入失败 (zotero_meta): {item.title}, 错误: {e}"
+                        )
+                        success_count = 0
+                        error_reason = f"LanceDB write failed for zotero_meta: {e}"
+                    total_nodes += len(nodes)
+                    if success_count > 0:
                         all_nodes.extend(
                             [
                                 n
@@ -658,6 +660,21 @@ class ZoteroImporter:
                             f"[{item.title}] 附件 embedding 全部失败 ({len(nodes)} 个节点): {file_path}"
                         )
 
+                    all_failed_ids = list(set(failed_ids))
+                    result = doc_chunk_service.create_document(
+                        source_file=file_path.name,
+                        source_path=str(file_path),
+                        file_hash=file_hash,
+                        nodes=nodes,
+                        file_size=file_size,
+                        doc_id=doc_id,
+                        zotero_doc_id=zotero_doc_id,
+                        failed_node_ids=all_failed_ids if all_failed_ids else None,
+                    )
+                    if not result:
+                        logger.warning(f"文档记录创建失败: {file_path}")
+                        continue
+
                     try:
                         success_count, skipped, emb_failed_ids = (
                             self.processor._upsert_nodes(
@@ -668,33 +685,22 @@ class ZoteroImporter:
                         failed_ids = all_failed_ids if all_failed_ids else failed_ids
                     except Exception as e:
                         logger.warning(f"LanceDB 写入失败: {file_path}, 错误: {e}")
+                        error_reason = f"LanceDB write failed: {e}"
+                        total_nodes += len(nodes)
                         continue
 
+                    total_nodes += len(nodes)
                     if success_count > 0:
-                        result = doc_chunk_service.create_document(
-                            source_file=file_path.name,
-                            source_path=str(file_path),
-                            file_hash=file_hash,
-                            nodes=nodes,
-                            file_size=file_size,
-                            doc_id=doc_id,
-                            zotero_doc_id=zotero_doc_id,
-                            failed_node_ids=failed_ids if failed_ids else None,
+                        all_nodes.extend(
+                            [
+                                n
+                                for n in nodes
+                                if hasattr(n, "embedding")
+                                and n.embedding
+                                and not all(v == 0.0 for v in n.embedding)
+                            ]
                         )
-                        if result:
-                            total_nodes += success_count
-                            all_nodes.extend(
-                                [
-                                    n
-                                    for n in nodes
-                                    if hasattr(n, "embedding")
-                                    and n.embedding
-                                    and not all(v == 0.0 for v in n.embedding)
-                                ]
-                            )
-                            processed_sources.append(str(file_path))
-                        else:
-                            logger.warning(f"文档记录创建失败: {file_path}")
+                        processed_sources.append(str(file_path))
             else:
                 logger.warning(f"文档处理返回空结果: {file_path}")
 
