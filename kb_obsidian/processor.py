@@ -465,6 +465,9 @@ class ObsidianImporter:
                 success_count, skipped, emb_failed_ids = self.processor._upsert_nodes(lance_store, nodes)
                 if emb_failed_ids:
                     doc_chunk_service.mark_chunks_failed(emb_failed_ids)
+                success_node_ids = [n.node_id for n in nodes if hasattr(n, "embedding") and n.embedding and not all(v == 0.0 for v in n.embedding)]
+                if success_node_ids:
+                    doc_chunk_service.mark_chunks_success(success_node_ids)
             except Exception as write_ex:
                 logger.warning(f"LanceDB 写入失败（SQLite 已保存）: {file_path}, 错误: {write_ex}")
                 node_ids = [n.node_id for n in nodes]
@@ -578,6 +581,9 @@ class ObsidianImporter:
                         success_count, skipped, emb_failed_ids = self.processor._upsert_nodes(lance_store, all_file_nodes)
                         if emb_failed_ids:
                             doc_chunk_service.mark_chunks_failed(emb_failed_ids)
+                        success_node_ids = [n.node_id for n in all_file_nodes if hasattr(n, "embedding") and n.embedding and not all(v == 0.0 for v in n.embedding)]
+                        if success_node_ids:
+                            doc_chunk_service.mark_chunks_success(success_node_ids)
                     except Exception as e:
                         logger.warning(f"LanceDB 写入失败: {pdf_path}, 错误: {e}")
                         node_ids = [n.node_id for n in all_file_nodes]

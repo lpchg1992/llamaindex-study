@@ -125,7 +125,7 @@ class DocumentChunkService:
                 if node_id in failed_set:
                     emb_status = 2
                 elif hasattr(node, "embedding") and node.embedding and not all(v == 0.0 for v in node.embedding):
-                    emb_status = 1
+                    emb_status = 0
                 else:
                     emb_status = 0
 
@@ -322,6 +322,16 @@ class DocumentChunkService:
             return chunk_db.mark_failed_bulk(chunk_ids)
         except Exception as e:
             logger.error(f"[{self.kb_id}] mark_chunks_failed failed: {e}")
+            return 0
+
+    def mark_chunks_success(self, chunk_ids: List[str]) -> int:
+        if not chunk_ids:
+            return 0
+        try:
+            chunk_db = self._get_chunk_db()
+            return chunk_db.mark_success_bulk(chunk_ids)
+        except Exception as e:
+            logger.error(f"[{self.kb_id}] mark_chunks_success failed: {e}")
             return 0
 
     def get_stats(self) -> Dict[str, int]:

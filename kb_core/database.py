@@ -1711,6 +1711,17 @@ class ChunkDB:
             )
             return result.rowcount or 0
 
+    def mark_success_bulk(self, chunk_ids: List[str]) -> int:
+        if not chunk_ids:
+            return 0
+        with self.db.session_scope() as session:
+            result = session.execute(
+                update(ChunkModel)
+                .where(ChunkModel.id.in_(chunk_ids))
+                .values(embedding_generated=1, updated_at=time.time())
+            )
+            return result.rowcount or 0
+
     def get_failed_chunks(self, kb_id: str, limit: int = 1000) -> List[Dict[str, Any]]:
         with self.db.session_scope() as session:
             rows = session.scalars(

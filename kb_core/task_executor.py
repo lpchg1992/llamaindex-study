@@ -557,6 +557,9 @@ class TaskExecutor:
                         success_count, skipped, _ = processor._upsert_nodes(
                             lance_store, nodes
                         )
+                        success_node_ids = [n.node_id for n in nodes if hasattr(n, "embedding") and n.embedding and not all(v == 0.0 for v in n.embedding)]
+                        if success_node_ids:
+                            doc_chunk_svc.mark_chunks_success(success_node_ids)
                     except Exception as write_ex:
                         logger.warning(f"LanceDB 写入失败（SQLite 已保存）: {rel_path}, 错误: {write_ex}")
                         continue
@@ -1623,6 +1626,9 @@ class TaskExecutor:
                                 )
                                 if emb_failed_ids:
                                     doc_chunk_svc.mark_chunks_failed(emb_failed_ids)
+                                success_node_ids = [n.node_id for n in nodes if hasattr(n, "embedding") and n.embedding and not all(v == 0.0 for v in n.embedding)]
+                                if success_node_ids:
+                                    doc_chunk_svc.mark_chunks_success(success_node_ids)
                             except Exception as write_ex:
                                 logger.warning(
                                     f"LanceDB 写入失败（SQLite 已保存）: {file_path}, 错误: {write_ex}"
