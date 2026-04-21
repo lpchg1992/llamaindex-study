@@ -16,8 +16,6 @@ from pathlib import Path
 from typing import Any, Callable, List, Optional, Tuple
 
 from llama_index.core.schema import Document as LlamaDocument
-from llama_index.core.node_parser import HierarchicalNodeParser
-from rag.config import get_settings
 from rag.logger import get_logger
 
 logger = get_logger(__name__)

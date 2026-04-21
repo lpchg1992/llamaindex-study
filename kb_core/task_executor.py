@@ -625,6 +625,9 @@ class TaskExecutor:
         task_id = task.task_id
         items = params.get("items", [])
         prefix = params.get("prefix", "[kb]")
+        chunk_strategy = params.get("chunk_strategy")
+        chunk_size = params.get("chunk_size")
+        hierarchical_chunk_sizes = params.get("hierarchical_chunk_sizes")
 
         logger.info(f"[{task_id}] 开始选择性导入: kb_id={kb_id}, items={len(items)}")
 
@@ -777,6 +780,9 @@ class TaskExecutor:
                         options=item_options,
                         refresh_topics=False,
                         prefix=prefix,
+                        chunk_strategy=chunk_strategy,
+                        chunk_size=chunk_size,
+                        hierarchical_chunk_sizes=hierarchical_chunk_sizes,
                     )
                     logger.info(
                         f"[{task_id}] Zotero 文献导入结果: nodes={result.get('nodes', 0)}, items={result.get('items', 0)}"
@@ -815,6 +821,9 @@ class TaskExecutor:
                             vault_path=vault_path,
                             folder_path=folder_path,
                             refresh_topics=False,
+                            chunk_strategy=chunk_strategy,
+                            chunk_size=chunk_size,
+                            hierarchical_chunk_sizes=hierarchical_chunk_sizes,
                         )
                         stats["files"] += (
                             result.get("files", 0) if result.get("nodes", 0) > 0 else 0
@@ -846,6 +855,9 @@ class TaskExecutor:
                             kb_id=kb_id,
                             path=path,
                             refresh_topics=False,
+                            chunk_strategy=chunk_strategy,
+                            chunk_size=chunk_size,
+                            hierarchical_chunk_sizes=hierarchical_chunk_sizes,
                         )
                         stats["files"] += (
                             result.get("files", 0) if result.get("nodes", 0) > 0 else 0

@@ -44,6 +44,9 @@ class SelectiveImportRequest:
     async_mode: bool = True
     refresh_topics: bool = False
     prefix: str = "[kb]"
+    chunk_strategy: Optional[str] = None
+    chunk_size: Optional[int] = None
+    hierarchical_chunk_sizes: Optional[List[int]] = None
 
 
 class ImportApplicationService:
@@ -173,6 +176,12 @@ class ImportApplicationService:
             "refresh_topics": req.refresh_topics,
             "prefix": req.prefix,
         }
+        if req.chunk_strategy:
+            params["chunk_strategy"] = req.chunk_strategy
+        if req.chunk_size:
+            params["chunk_size"] = req.chunk_size
+        if req.hierarchical_chunk_sizes:
+            params["hierarchical_chunk_sizes"] = req.hierarchical_chunk_sizes
         source = f"selective:{req.source_type}:{len(req.items)}items"
         return TaskService.submit(
             task_type="selective",
