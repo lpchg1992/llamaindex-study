@@ -266,17 +266,39 @@ class GenericImporter:
                     for doc in docs:
                         doc.id_ = f"doc_{doc_id_hash}"
                         nodes = node_parser.get_nodes_from_documents([doc])
-                        saved, failed_ids = self.processor.save_nodes(vector_store, nodes, progress)
-                        stats["nodes"] += saved
-                        stats["files"] += 1
-                        all_nodes.extend(nodes)
-                        all_failed_ids.extend(failed_ids)
+
+                        # Generate embeddings inline (same pattern as _execute_generic)
+                        if nodes:
+                            texts = [node.get_content() for node in nodes]
+                            failed_node_ids = []
+                            for j, text in enumerate(texts):
+                                try:
+                                    ep = embed_model._get_best_endpoint()
+                                    ep_name, embedding, error = embed_model._get_embedding_with_retry(text, ep)
+                                    if error:
+                                        failed_node_ids.append(nodes[j].node_id)
+                                    elif all(v == 0.0 for v in embedding):
+                                        failed_node_ids.append(nodes[j].node_id)
+                                    else:
+                                        nodes[j].embedding = embedding
+                                except Exception as emb_err:
+                                    print(f"      ⚠️  Embedding 失败: {emb_err}")
+                                    failed_node_ids.append(nodes[j].node_id)
+
+                            all_failed_ids.extend(failed_node_ids)
+                            all_nodes.extend(nodes)
+
+                    if not all_nodes:
+                        stats["failed"] += 1
+                        continue
 
                     doc_id = f"doc_{doc_id_hash}"
+
+                    # Write to SQLite FIRST (correct order)
                     try:
                         doc_chunk_service = get_document_chunk_service(self.kb_id)
                         file_hash = self.processor.compute_file_hash(str(file_path))
-                        doc_chunk_service.create_document(
+                        result = doc_chunk_service.create_document(
                             source_file=file_path.name,
                             source_path=str(file_path),
                             file_hash=file_hash,
@@ -285,8 +307,27 @@ class GenericImporter:
                             doc_id=doc_id,
                             failed_node_ids=all_failed_ids if all_failed_ids else None,
                         )
+                        if not result:
+                            print(f"   ⚠️  SQLite 文档记录创建失败: {file_path}")
+                            continue
                     except Exception as e:
                         print(f"   ⚠️  写入 Document 记录失败: {e}")
+                        continue
+
+                    # Then write to LanceDB (correct order)
+                    try:
+                        lance_store = vector_store._get_lance_vector_store()
+                        success_count, skipped, emb_failed_ids = self.processor._upsert_nodes(lance_store, all_nodes)
+                        if emb_failed_ids:
+                            doc_chunk_service.mark_chunks_failed(emb_failed_ids)
+                            all_failed_ids.extend(emb_failed_ids)
+                        stats["nodes"] += success_count
+                        stats["files"] += 1
+                    except Exception as write_ex:
+                        print(f"   ⚠️  LanceDB 写入失败（SQLite 已保存）: {file_path}, 错误: {write_ex}")
+                        node_ids = [n.node_id for n in all_nodes]
+                        doc_chunk_service.mark_chunks_failed(node_ids)
+                        continue
 
                     if progress:
                         progress.processed_items.append(path_str)
