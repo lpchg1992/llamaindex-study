@@ -1570,9 +1570,15 @@ class TaskExecutor:
                             ) in embed_processor.process_batch_streaming(texts):
                                 results[idx] = result
 
+                            failed_node_ids = []
                             for j, (ep_name, embedding, error) in enumerate(results):
                                 if results[j] is not None:
-                                    nodes[j].embedding = embedding
+                                    if error:
+                                        failed_node_ids.append(nodes[j].node_id)
+                                    elif all(v == 0.0 for v in embedding):
+                                        failed_node_ids.append(nodes[j].node_id)
+                                    else:
+                                        nodes[j].embedding = embedding
 
                             file_nodes.extend(nodes)
 
@@ -1600,6 +1606,7 @@ class TaskExecutor:
                                     nodes=nodes,
                                     file_size=file_size,
                                     metadata={"source": "generic"},
+                                    failed_node_ids=failed_node_ids if failed_node_ids else None,
                                 )
                                 if not result:
                                     logger.warning(f"SQLite 文档记录创建失败 {file_path}")
@@ -1611,9 +1618,11 @@ class TaskExecutor:
                             # Then write to LanceDB
                             try:
                                 processor = DocumentProcessor()
-                                success_count, skipped, failed_ids = (
+                                success_count, skipped, emb_failed_ids = (
                                     processor._upsert_nodes(lance_store, nodes)
                                 )
+                                if emb_failed_ids:
+                                    doc_chunk_svc.mark_chunks_failed(emb_failed_ids)
                             except Exception as write_ex:
                                 logger.warning(
                                     f"LanceDB 写入失败（SQLite 已保存）: {file_path}, 错误: {write_ex}"

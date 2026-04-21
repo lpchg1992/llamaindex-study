@@ -540,6 +540,8 @@ class ZoteroImporter:
                                 vector_store._get_lance_vector_store(), nodes
                             )
                         )
+                        if emb_failed_ids:
+                            doc_chunk_service.mark_chunks_failed(emb_failed_ids)
                         all_failed_ids = list(set(all_failed_ids + failed_ids + emb_failed_ids))
                     except Exception as e:
                         logger.warning(
@@ -684,6 +686,8 @@ class ZoteroImporter:
                                 vector_store._get_lance_vector_store(), nodes
                             )
                         )
+                        if emb_failed_ids:
+                            doc_chunk_service.mark_chunks_failed(emb_failed_ids)
                         all_failed_ids = list(set(all_failed_ids + failed_ids + emb_failed_ids))
                     except Exception as e:
                         logger.warning(f"LanceDB 写入失败: {file_path}, 错误: {e}")
