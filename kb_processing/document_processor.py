@@ -1560,41 +1560,52 @@ class DocumentProcessor:
 
         from kb_processing.parallel_embedding import get_parallel_processor
 
-        saved = 0
-        processed_batch = []
-
         processed_batch = list(nodes)
 
-        # 批量处理
         if processed_batch and self.embed_model:
             texts = [node.get_content() for node in processed_batch]
             try:
                 processor = get_parallel_processor()
-                embeddings = processor.get_text_embeddings(texts)
-                for node, embedding in zip(processed_batch, embeddings):
-                    node.embedding = embedding
+                results = processor.get_text_embeddings_with_errors(texts)
+                failed_node_ids = []
+                for node, (ep_name, embedding, error) in zip(processed_batch, results):
+                    if error:
+                        failed_node_ids.append(node.node_id)
+                    elif all(v == 0.0 for v in embedding):
+                        failed_node_ids.append(node.node_id)
+                    else:
+                        node.embedding = embedding
+                for node in processed_batch[:]:
+                    if node.node_id in failed_node_ids:
+                        processed_batch.remove(node)
             except Exception as e:
                 print(f"\n   ⚠️  批量 Embedding 失败: {e}")
                 failed = []
                 for node in processed_batch:
                     try:
-                        node.embedding = self.embed_model.get_text_embedding(
-                            node.get_content()
+                        ep = self.embed_model._get_best_endpoint()
+                        ep_name, embedding, error = self.embed_model._get_embedding_with_retry(
+                            node.get_content(), ep
                         )
+                        if error or all(v == 0.0 for v in embedding):
+                            failed.append(node)
+                        else:
+                            node.embedding = embedding
                     except Exception as ex:
                         print(f"      ⚠️  Embedding 失败: {ex}")
                         failed.append(node)
                 for node in failed:
                     processed_batch.remove(node)
 
-        # 保存所有节点
-        try:
-            lance_store = vector_store._get_lance_vector_store()
-            saved, skipped, failed_ids = self._upsert_nodes(
-                lance_store, processed_batch
-            )
-        except Exception as e:
-            raise RuntimeError(f"向量数据库写入失败: {e}")
+        saved = 0
+        if processed_batch:
+            try:
+                lance_store = vector_store._get_lance_vector_store()
+                saved, skipped, failed_ids = self._upsert_nodes(
+                    lance_store, processed_batch
+                )
+            except Exception as e:
+                raise RuntimeError(f"向量数据库写入失败: {e}")
 
         if progress:
             progress.total_nodes += saved

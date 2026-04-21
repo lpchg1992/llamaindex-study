@@ -761,6 +761,14 @@ class ParallelEmbeddingProcessor:
         """同步批量获取 embeddings"""
         return self._run_sync(self.aget_text_embeddings(texts))
 
+    def get_text_embeddings_with_errors(self, texts: List[str]) -> List[EmbeddingResult]:
+        """同步批量获取 embeddings，包含错误信息
+
+        Returns:
+            List[EmbeddingResult] - [(ep_name, embedding, error), ...]
+        """
+        return self._run_sync(self.process_batch(texts))
+
     def get_stats(self) -> Dict[str, int]:
         """获取统计信息"""
         return self._stats.copy()

@@ -420,6 +420,31 @@ class ObsidianImporter:
 
             nodes = [clean_node_metadata(n) for n in nodes]
 
+            texts = [node.get_content() for node in nodes]
+            failed_node_ids = []
+            for i, node in enumerate(nodes):
+                try:
+                    ep = embed_model._get_best_endpoint()
+                    ep_name, embedding, error = embed_model._get_embedding_with_retry(texts[i], ep)
+                    text_len = len(texts[i])
+                    if error:
+                        logger.warning(
+                            f"[{file_path.name}] Embedding failed (endpoint={ep_name}, node={node.node_id[:8]}, text_len={text_len}): {error}"
+                        )
+                        failed_node_ids.append(node.node_id)
+                    elif all(v == 0.0 for v in embedding):
+                        logger.warning(
+                            f"[{file_path.name}] Embedding returned zero vector (endpoint={ep_name}, node={node.node_id[:8]}, text_len={text_len})"
+                        )
+                        failed_node_ids.append(node.node_id)
+                    else:
+                        node.embedding = embedding
+                except Exception as emb_err:
+                    logger.error(
+                        f"[{file_path.name}] Embedding exception (node={node.node_id[:8]}): {type(emb_err).__name__}: {emb_err}"
+                    )
+                    failed_node_ids.append(node.node_id)
+
             doc_chunk_service = get_document_chunk_service(self.kb_id)
             file_hash = self.processor.compute_file_hash(str(file_path))
             result = doc_chunk_service.create_document(
@@ -429,6 +454,7 @@ class ObsidianImporter:
                 nodes=nodes,
                 file_size=file_path.stat().st_size,
                 doc_id=doc_id,
+                failed_node_ids=failed_node_ids if failed_node_ids else None,
             )
             if not result:
                 logger.warning(f"SQLite 文档记录创建失败: {file_path}")
@@ -436,7 +462,9 @@ class ObsidianImporter:
 
             try:
                 lance_store = vector_store._get_lance_vector_store()
-                success_count, skipped, failed_ids = self.processor._upsert_nodes(lance_store, nodes)
+                success_count, skipped, emb_failed_ids = self.processor._upsert_nodes(lance_store, nodes)
+                if emb_failed_ids:
+                    doc_chunk_service.mark_chunks_failed(emb_failed_ids)
             except Exception as write_ex:
                 logger.warning(f"LanceDB 写入失败（SQLite 已保存）: {file_path}, 错误: {write_ex}")
                 node_ids = [n.node_id for n in nodes]
@@ -515,6 +543,22 @@ class ObsidianImporter:
                     all_file_nodes.extend(nodes)
 
                 if all_file_nodes:
+                    texts = [node.get_content() for node in all_file_nodes]
+                    failed_node_ids = []
+                    for i, node in enumerate(all_file_nodes):
+                        try:
+                            ep = embed_model._get_best_endpoint()
+                            ep_name, embedding, error = embed_model._get_embedding_with_retry(texts[i], ep)
+                            if error:
+                                failed_node_ids.append(node.node_id)
+                            elif all(v == 0.0 for v in embedding):
+                                failed_node_ids.append(node.node_id)
+                            else:
+                                node.embedding = embedding
+                        except Exception as emb_err:
+                            logger.error(f"PDF Embedding exception: {emb_err}")
+                            failed_node_ids.append(node.node_id)
+
                     file_hash = self.processor.compute_file_hash(str(pdf_path))
                     result = doc_chunk_service.create_document(
                         source_file=pdf_path.name,
@@ -523,6 +567,7 @@ class ObsidianImporter:
                         nodes=all_file_nodes,
                         file_size=pdf_path.stat().st_size,
                         doc_id=f"obsidian_pdf_{pdf_path.stat().st_ino}",
+                        failed_node_ids=failed_node_ids if failed_node_ids else None,
                     )
                     if not result:
                         logger.warning(f"SQLite 文档记录创建失败: {pdf_path}")
@@ -530,7 +575,9 @@ class ObsidianImporter:
 
                     try:
                         lance_store = vector_store._get_lance_vector_store()
-                        success_count, skipped, failed_ids = self.processor._upsert_nodes(lance_store, all_file_nodes)
+                        success_count, skipped, emb_failed_ids = self.processor._upsert_nodes(lance_store, all_file_nodes)
+                        if emb_failed_ids:
+                            doc_chunk_service.mark_chunks_failed(emb_failed_ids)
                     except Exception as e:
                         logger.warning(f"LanceDB 写入失败: {pdf_path}, 错误: {e}")
                         node_ids = [n.node_id for n in all_file_nodes]
