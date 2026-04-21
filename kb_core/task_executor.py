@@ -1619,6 +1619,8 @@ class TaskExecutor:
                                     f"LanceDB 写入失败（SQLite 已保存）: {file_path}, 错误: {write_ex}"
                                 )
                                 error_reason = f"LanceDB write failed: {write_ex}"
+                                node_ids = [n.node_id for n in nodes]
+                                doc_chunk_svc.mark_chunks_failed(node_ids)
                                 self.queue.update_file_progress(
                                     task.task_id,
                                     file_id,

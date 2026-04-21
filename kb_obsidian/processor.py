@@ -439,6 +439,8 @@ class ObsidianImporter:
                 success_count, skipped, failed_ids = self.processor._upsert_nodes(lance_store, nodes)
             except Exception as write_ex:
                 logger.warning(f"LanceDB 写入失败（SQLite 已保存）: {file_path}, 错误: {write_ex}")
+                node_ids = [n.node_id for n in nodes]
+                doc_chunk_service.mark_chunks_failed(node_ids)
                 continue
 
             stats["nodes"] += len(nodes)
@@ -513,31 +515,32 @@ class ObsidianImporter:
                     all_file_nodes.extend(nodes)
 
                 if all_file_nodes:
-                    try:
-                        lance_store = vector_store._get_lance_vector_store()
-                        success_count, skipped = self.processor._upsert_nodes(lance_store, all_file_nodes)
-                    except Exception as e:
-                        logger.warning(f"LanceDB 写入失败: {pdf_path}, 错误: {e}")
+                    file_hash = self.processor.compute_file_hash(str(pdf_path))
+                    result = doc_chunk_service.create_document(
+                        source_file=pdf_path.name,
+                        source_path=str(pdf_path),
+                        file_hash=file_hash,
+                        nodes=all_file_nodes,
+                        file_size=pdf_path.stat().st_size,
+                        doc_id=f"obsidian_pdf_{pdf_path.stat().st_ino}",
+                    )
+                    if not result:
+                        logger.warning(f"SQLite 文档记录创建失败: {pdf_path}")
                         continue
 
-                    if success_count > 0:
-                        valid_nodes = [n for n in all_file_nodes if hasattr(n, "embedding") and n.embedding]
-                        try:
-                            file_hash = self.processor.compute_file_hash(str(pdf_path))
-                            doc_chunk_service.create_document(
-                                source_file=pdf_path.name,
-                                source_path=str(pdf_path),
-                                file_hash=file_hash,
-                                nodes=valid_nodes,
-                                file_size=pdf_path.stat().st_size,
-                                doc_id=f"obsidian_pdf_{pdf_path.stat().st_ino}",
-                            )
-                            stats["nodes"] += success_count
-                            stats["files"] += 1
-                            stats["processed_sources"].append(str(pdf_path))
-                            if progress:
-                                progress.processed_items.append(str(pdf_path))
-                        except Exception as e:
-                            logger.error(f"Document 记录创建失败: {pdf_path}, 错误: {e}")
+                    try:
+                        lance_store = vector_store._get_lance_vector_store()
+                        success_count, skipped, failed_ids = self.processor._upsert_nodes(lance_store, all_file_nodes)
+                    except Exception as e:
+                        logger.warning(f"LanceDB 写入失败: {pdf_path}, 错误: {e}")
+                        node_ids = [n.node_id for n in all_file_nodes]
+                        doc_chunk_service.mark_chunks_failed(node_ids)
+                        continue
+
+                    stats["nodes"] += len(all_file_nodes)
+                    stats["files"] += 1
+                    stats["processed_sources"].append(str(pdf_path))
+                    if progress:
+                        progress.processed_items.append(str(pdf_path))
 
         return stats
