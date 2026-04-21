@@ -1541,7 +1541,7 @@ class DocumentProcessor:
 
     def save_nodes(
         self, vector_store, nodes: List, progress: ProcessingProgress = None
-    ) -> int:
+    ) -> Tuple[int, List[str]]:
         """
         保存节点到向量存储
 
@@ -1553,21 +1553,21 @@ class DocumentProcessor:
             progress: 进度记录
 
         Returns:
-            成功保存的节点数
+            Tuple of (成功保存的节点数, 失败的节点ID列表)
         """
         if not nodes:
-            return 0
+            return (0, [])
 
         from kb_processing.parallel_embedding import get_parallel_processor
 
         processed_batch = list(nodes)
+        failed_node_ids = []
 
         if processed_batch and self.embed_model:
             texts = [node.get_content() for node in processed_batch]
             try:
                 processor = get_parallel_processor()
                 results = processor.get_text_embeddings_with_errors(texts)
-                failed_node_ids = []
                 for node, (ep_name, embedding, error) in zip(processed_batch, results):
                     if error:
                         failed_node_ids.append(node.node_id)
@@ -1596,21 +1596,23 @@ class DocumentProcessor:
                         failed.append(node)
                 for node in failed:
                     processed_batch.remove(node)
+                    failed_node_ids.append(node.node_id)
 
         saved = 0
         if processed_batch:
             try:
                 lance_store = vector_store._get_lance_vector_store()
-                saved, skipped, failed_ids = self._upsert_nodes(
+                saved, skipped, emb_failed_ids = self._upsert_nodes(
                     lance_store, processed_batch
                 )
+                failed_node_ids.extend(emb_failed_ids)
             except Exception as e:
                 raise RuntimeError(f"向量数据库写入失败: {e}")
 
         if progress:
             progress.total_nodes += saved
 
-        return saved
+        return (saved, failed_node_ids)
 
     def process_directory(
         self,
@@ -1675,7 +1677,7 @@ class DocumentProcessor:
                 docs = self.process_file(str(file_path))
                 if docs:
                     nodes = self.parse_to_nodes(docs)
-                    saved = self.save_nodes(vector_store, nodes, progress)
+                    saved, failed_ids = self.save_nodes(vector_store, nodes, progress)
                     stats["nodes"] += saved
                     stats["files"] += 1
 

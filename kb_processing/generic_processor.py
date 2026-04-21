@@ -261,14 +261,16 @@ class GenericImporter:
 
                     all_nodes = []
                     doc_id_hash = hashlib.md5(str(file_path).encode()).hexdigest()[:16]
+                    all_failed_ids = []
 
                     for doc in docs:
                         doc.id_ = f"doc_{doc_id_hash}"
                         nodes = node_parser.get_nodes_from_documents([doc])
-                        saved = self.processor.save_nodes(vector_store, nodes, progress)
+                        saved, failed_ids = self.processor.save_nodes(vector_store, nodes, progress)
                         stats["nodes"] += saved
                         stats["files"] += 1
                         all_nodes.extend(nodes)
+                        all_failed_ids.extend(failed_ids)
 
                     doc_id = f"doc_{doc_id_hash}"
                     try:
@@ -281,6 +283,7 @@ class GenericImporter:
                             nodes=all_nodes,
                             file_size=file_path.stat().st_size,
                             doc_id=doc_id,
+                            failed_node_ids=all_failed_ids if all_failed_ids else None,
                         )
                     except Exception as e:
                         print(f"   ⚠️  写入 Document 记录失败: {e}")
