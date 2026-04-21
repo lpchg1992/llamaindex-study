@@ -315,6 +315,13 @@ class SelectiveImportRequest(BaseModel):
     async_mode: bool = Field(True, description="是否异步处理")
     refresh_topics: bool = Field(False, description="任务完成后是否刷新 topics")
     prefix: str = Field("[kb]", description="Zotero 附件标题前缀标记")
+    chunk_strategy: Optional[str] = Field(
+        None, description="分块策略: hierarchical/sentence/semantic/markdown"
+    )
+    chunk_size: Optional[int] = Field(None, description="分块大小")
+    hierarchical_chunk_sizes: Optional[List[int]] = Field(
+        None, description="hierarchical 模式分层大小列表"
+    )
 
 
 class FilesImportRequest(BaseModel):

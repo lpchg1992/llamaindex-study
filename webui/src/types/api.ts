@@ -160,6 +160,9 @@ export interface SelectiveImportRequest {
   async_mode?: boolean
   refresh_topics?: boolean
   prefix?: string
+  chunk_strategy?: string
+  chunk_size?: number
+  hierarchical_chunk_sizes?: number[]
 }
 
 export interface FilesImportRequest {

@@ -264,6 +264,9 @@ def ingest_selective(kb_id: str, req: SelectiveImportRequest):
         async_mode=req.async_mode,
         refresh_topics=req.refresh_topics,
         prefix=req.prefix,
+        chunk_strategy=req.chunk_strategy,
+        chunk_size=req.chunk_size,
+        hierarchical_chunk_sizes=req.hierarchical_chunk_sizes,
     )
 
     task = ImportApplicationService.submit_selective_import(kb_id, service_req)
