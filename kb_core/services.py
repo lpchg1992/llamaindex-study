@@ -351,6 +351,9 @@ class ObsidianService:
         refresh_topics: bool = True,
         force_delete: bool = True,
         progress_callback: Optional[Callable[[str], None]] = None,
+        chunk_strategy: Optional[str] = None,
+        chunk_size: Optional[int] = None,
+        hierarchical_chunk_sizes: Optional[List[int]] = None,
     ) -> Dict[str, Any]:
         """
         导入 Obsidian 笔记
@@ -363,6 +366,9 @@ class ObsidianService:
             exclude_patterns: 排除模式
             rebuild: 是否重建
             progress_callback: 进度回调
+            chunk_strategy: 分块策略
+            chunk_size: 分块大小
+            hierarchical_chunk_sizes: 层级分块大小列表
 
         Returns:
             导入统计
@@ -384,11 +390,17 @@ class ObsidianService:
         vs = VectorStoreService.get_vector_store(kb_id)
         persist_dir = VectorStoreService.get_persist_dir(kb_id)
 
-        # 创建导入器
+        settings = get_settings()
+        config = DocumentProcessorConfig(
+            chunk_size=chunk_size or settings.chunk_size,
+            chunk_strategy=chunk_strategy or settings.chunk_strategy,
+            hierarchical_chunk_sizes=hierarchical_chunk_sizes or settings.hierarchical_chunk_sizes,
+        )
         importer = ObsidianImporter(
             vault_root=vault_path,
             kb_id=kb_id,
             persist_dir=persist_dir,
+            config=config,
         )
 
         exclude_patterns = exclude_patterns or [
@@ -560,6 +572,9 @@ class ZoteroService:
         refresh_topics: bool = True,
         progress_callback: Optional[Callable[[str], None]] = None,
         prefix: str = "[kb]",
+        chunk_strategy: Optional[str] = None,
+        chunk_size: Optional[int] = None,
+        hierarchical_chunk_sizes: Optional[List[int]] = None,
     ) -> Dict[str, Any]:
         """
         导入单个 Zotero 文献
@@ -575,7 +590,7 @@ class ZoteroService:
             导入统计
         """
         from kb_zotero.processor import ZoteroImporter
-        from kb_processing.document_processor import ProcessingProgress
+        from kb_processing.document_processor import DocumentProcessorConfig, ProcessingProgress
 
         if progress_callback:
             progress_callback(f"开始导入 Zotero 文献: {item_id}")
@@ -583,7 +598,13 @@ class ZoteroService:
         vs = VectorStoreService.get_vector_store(kb_id)
         persist_dir = vs.persist_dir or Path.home() / ".llamaindex" / "storage" / kb_id
 
-        importer = ZoteroImporter(kb_id=kb_id)
+        settings = get_settings()
+        config = DocumentProcessorConfig(
+            chunk_size=chunk_size or settings.chunk_size,
+            chunk_strategy=chunk_strategy or settings.chunk_strategy,
+            hierarchical_chunk_sizes=hierarchical_chunk_sizes or settings.hierarchical_chunk_sizes,
+        )
+        importer = ZoteroImporter(config=config, kb_id=kb_id)
         try:
             item = importer.get_item(int(item_id), prefix=prefix)
             if not item:
@@ -761,6 +782,9 @@ class GenericService:
         path: str,
         refresh_topics: bool = True,
         progress_callback: Optional[Callable[[str], None]] = None,
+        chunk_strategy: Optional[str] = None,
+        chunk_size: Optional[int] = None,
+        hierarchical_chunk_sizes: Optional[List[int]] = None,
     ) -> Dict[str, Any]:
         """
         导入单个文件
@@ -769,11 +793,15 @@ class GenericService:
             kb_id: 知识库 ID
             path: 文件路径
             progress_callback: 进度回调
+            chunk_strategy: 分块策略
+            chunk_size: 分块大小
+            hierarchical_chunk_sizes: 层级分块大小列表
 
         Returns:
             导入统计
         """
         from kb_processing.generic_processor import GenericImporter
+        from kb_processing.document_processor import DocumentProcessorConfig
 
         file_path = Path(path)
         if not file_path.exists():
@@ -781,7 +809,14 @@ class GenericService:
 
         vs = VectorStoreService.get_vector_store(kb_id)
         persist_dir = VectorStoreService.get_persist_dir(kb_id)
-        importer = GenericImporter(kb_id=kb_id, persist_dir=persist_dir)
+
+        settings = get_settings()
+        config = DocumentProcessorConfig(
+            chunk_size=chunk_size or settings.chunk_size,
+            chunk_strategy=chunk_strategy or settings.chunk_strategy,
+            hierarchical_chunk_sizes=hierarchical_chunk_sizes or settings.hierarchical_chunk_sizes,
+        )
+        importer = GenericImporter(kb_id=kb_id, persist_dir=persist_dir, processor_config=config)
 
         if progress_callback:
             progress_callback(f"开始导入: {file_path.name}")
@@ -2848,9 +2883,8 @@ class ConsistencyService:
                 "status": "error",
             }
 
-        missing_count = max(0, chunk_count_stored - lance_rows)
+        missing_count = max(0, chunk_count_actual - lance_rows)
         orphan_count = max(0, lance_rows - chunk_count_actual)
-        actual_mismatch = lance_rows - chunk_count_stored
 
         embedding_stats = chunk_db.get_embedding_stats(kb_id)
         emb_success = embedding_stats.get("success", 0)
@@ -2873,7 +2907,7 @@ class ConsistencyService:
                     {
                         "type": "orphan_stats_error",
                         "count": orphan_count,
-                        "description": f"LanceDB 比 documents.chunk_count 总和多 {orphan_count} 个，可能是统计错误导致",
+                        "description": f"LanceDB 比实际 chunk 总数多 {orphan_count} 个（同时存在统计错误，需先修正统计）",
                     }
                 )
             else:
@@ -2953,14 +2987,17 @@ class ConsistencyService:
         """
         校验知识库一致性（兼容旧接口）
 
-        比较 documents 表中的 chunk 总数与 LanceDB 实际行数。
+        比较 chunks 表中的实际 chunk 总数与 LanceDB 实际行数。
         """
-        from .database import init_document_db
+        from .database import init_document_db, init_chunk_db
 
         doc_db = init_document_db()
+        chunk_db = init_chunk_db()
         docs = doc_db.get_by_kb(kb_id)
         doc_files = len(docs)
         doc_chunks = sum(d.get("chunk_count", 0) for d in docs)
+
+        actual_chunks = sum(chunk_db.count_by_doc(d.get("id")) for d in docs)
 
         try:
             vs = VectorStoreService.get_vector_store(kb_id)
@@ -2974,8 +3011,8 @@ class ConsistencyService:
                 "status": "error",
             }
 
-        missing_chunks = max(0, doc_chunks - lance_rows)
-        orphan_rows = max(0, lance_rows - doc_chunks)
+        missing_chunks = max(0, actual_chunks - lance_rows)
+        orphan_rows = max(0, lance_rows - actual_chunks)
         consistent = missing_chunks == 0 and orphan_rows == 0
 
         if consistent:
@@ -2991,6 +3028,7 @@ class ConsistencyService:
             "kb_id": kb_id,
             "doc_files": doc_files,
             "doc_chunks": doc_chunks,
+            "actual_chunks": actual_chunks,
             "lance_rows": lance_rows,
             "consistent": consistent,
             "missing_chunks": missing_chunks,
@@ -3142,9 +3180,10 @@ class ConsistencyService:
     @staticmethod
     def repair(kb_id: str) -> Dict[str, Any]:
         """
-        修复知识库一致性
+        修复知识库统计信息
 
-        修正 documents 表的 chunk_count 统计（安全操作，不删数据）
+        注意：此方法仅修正 documents 表的 chunk_count 统计（安全操作，不删数据）。
+        对于实际的 orphans 或 missing chunks，需要手动处理或重新导入相关文档。
         """
         return ConsistencyService.fix_doc_stats(kb_id)
 
@@ -3222,11 +3261,11 @@ class ConsistencyService:
             }
 
         from .database import init_document_db
-        import lancedb
 
         doc_db = init_document_db()
 
         deleted_sources = 0
+        deleted_vectors = 0
         for source in sources:
             try:
                 doc = doc_db.get_by_source_path(kb_id, source)
@@ -3238,43 +3277,12 @@ class ConsistencyService:
                         )
 
                         svc = DocumentChunkService(kb_id)
-                        svc.delete_document_cascade(doc_id, delete_lance=True)
+                        result = svc.delete_document_cascade(doc_id, delete_lance=True)
                         deleted_sources += 1
+                        deleted_vectors += result.get("lance", 0)
             except Exception as e:
                 logger.warning(f"删除文档记录失败 {source}: {e}")
 
-        # 2. 从 LanceDB 删除向量
-        deleted_vectors = 0
-        try:
-            vs = VectorStoreService.get_vector_store(kb_id)
-            persist_dir = vs.persist_dir or vs._get_uri()
-
-            db = lancedb.connect(str(persist_dir))
-            if kb_id in db.list_tables().tables:
-                table = db.open_table(kb_id)
-
-                for source in sources:
-                    try:
-                        escaped_source = source.replace("'", "''")
-                        result = table.delete(f"source = '{escaped_source}'")
-                        if hasattr(result, "num_deleted"):
-                            deleted_vectors += result.num_deleted
-                        elif hasattr(result, "count"):
-                            deleted_vectors += result.count
-                    except Exception as e:
-                        logger.warning(f"从 LanceDB 删除 {source} 失败: {e}")
-
-        except Exception as e:
-            logger.error(f"LanceDB 删除失败: {e}")
-            return {
-                "kb_id": kb_id,
-                "deleted_sources": deleted_sources,
-                "deleted_vectors": deleted_vectors,
-                "success": False,
-                "message": f"LanceDB 删除失败: {e}",
-            }
-
-        # 3. 验证结果
         verify = ConsistencyService.verify(kb_id)
         consistent = verify.get("consistent", False)
 
