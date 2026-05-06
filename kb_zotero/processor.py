@@ -564,6 +564,10 @@ class ZoteroImporter:
                             ]
                         )
                         processed_sources.append("zotero_meta")
+            else:
+                logger.debug(
+                    f"[{item.title}] zotero_meta 跳过: 标注/笔记内容过短 ({len(text.strip())} 字符)"
+                )
 
         if item.annotations or item.notes:
             logger.debug(

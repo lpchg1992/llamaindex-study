@@ -11,8 +11,8 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 
 @router.get("/tables")
 def list_tables():
-    import os
-    base = Path(os.getenv("LLAMAINDEX_STORAGE_BASE", "/Volumes/online/llamaindex"))
+    from rag.config import get_settings
+    base = Path(get_settings().llamaindex_storage_base)
     tables = []
 
     for kb_dir in base.iterdir():
@@ -82,6 +82,7 @@ def restart_scheduler():
 def restart_api():
     import os
     import signal
+    import threading
     from pathlib import Path
     from rag.logger import get_logger
 
@@ -93,10 +94,8 @@ def restart_api():
     restart_flag.write_text(str(os.getpid()))
     logger.info(f"重启标记已写入 PID: {os.getpid()}")
 
-    try:
-        os.kill(os.getpid(), signal.SIGTERM)
-    except OSError:
-        pass
+    # 延迟杀进程，确保 HTTP 响应先发送
+    threading.Timer(0.5, lambda: os.kill(os.getpid(), signal.SIGTERM)).start()
 
     return {"status": "restarting", "message": "API 服务正在重启..."}
 

@@ -2,36 +2,36 @@
 Task queue management endpoints.
 """
 
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException
 
-from api.schemas import TaskResponse
+from api.schemas import TaskResponse, TaskCreateRequest
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 
 @router.post("", response_model=TaskResponse)
-def create_task(req: dict):
+def create_task(req: TaskCreateRequest):
     from kb_core.task_queue import task_queue
 
     task_id = task_queue.submit_task(
-        task_type=req.get("task_type", "generic"),
-        kb_id=req.get("kb_id", ""),
-        params=req.get("params", {}),
-        source=req.get("source", ""),
+        task_type=req.task_type,
+        kb_id=req.kb_id,
+        params=req.params,
+        source=req.source,
     )
 
     return TaskResponse(
         task_id=task_id,
         status="pending",
-        kb_id=req.get("kb_id", ""),
+        kb_id=req.kb_id,
         message="任务已提交",
     )
 
 
 @router.get("", response_model=List[TaskResponse])
-def list_tasks(kb_id: str = None, status: str = None, limit: int = 50):
+def list_tasks(kb_id: Optional[str] = None, status: Optional[str] = None, limit: int = 50):
     from kb_core.task_queue import task_queue
 
     tasks = task_queue.list_tasks(kb_id=kb_id, status=status, limit=limit)

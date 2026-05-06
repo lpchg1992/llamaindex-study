@@ -6,7 +6,6 @@ Extracted from api.py to avoid circular imports.
 from __future__ import annotations
 
 import asyncio
-import asyncio
 import markdown
 import threading
 from typing import Optional
@@ -71,21 +70,25 @@ async def lifespan(app: FastAPI):
 
 
 def get_cors_origins() -> list:
-    """Get allowed CORS origins."""
-    return [
+    """Get allowed CORS origins from environment and defaults."""
+    from rag.config import get_settings
+
+    s = get_settings()
+    origins = [
         "http://127.0.0.1:5174",
         "http://localhost:5174",
         "http://127.0.0.1:5173",
         "http://localhost:5173",
         "http://127.0.0.1:37241",
         "http://localhost:37241",
-        # 远程 LAN 访问
-        "http://100.66.1.2:5173",
-        "http://100.66.1.2:37241",
-        # 用户 LAN 访问
-        "http://192.168.31.207:5173",
-        "http://192.168.31.207:37241",
     ]
+    extra = s.cors_extra_origins
+    if extra:
+        for origin in extra.split(","):
+            origin = origin.strip()
+            if origin:
+                origins.append(origin)
+    return origins
 
 
 # ============== API Documentation Renderer ==============

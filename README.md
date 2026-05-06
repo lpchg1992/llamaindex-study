@@ -141,16 +141,25 @@ curl -X POST http://localhost:37241/kbs/HTE_history/topics/refresh \
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
-| `SILICONFLOW_API_KEY` | - | 硅基流动 API 密钥 |
-| `OLLAMA_EMBED_MODEL` | `bge-m3` | Embedding 模型 |
-| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama 地址 |
+| `PERSIST_DIR` | `~/.llamaindex/storage` | 向量数据库持久化目录 |
+| `LLAMAINDEX_STORAGE_BASE` | `~/.llamaindex/storage` | 知识库存储根目录 |
 | `CHUNK_STRATEGY` | `hierarchical` | 分块策略：`hierarchical`/`sentence`/`semantic` |
 | `CHUNK_SIZE` | `1024` | 分块大小 |
 | `CHUNK_OVERLAP` | `100` | 分块重叠 |
 | `HIERARCHICAL_CHUNK_SIZES` | `2048,1024,512` | 层级分块各层大小 |
 | `USE_AUTO_MERGING` | `false` | 启用 Auto-Merging |
+| `USE_HYBRID_SEARCH` | `false` | 启用混合搜索（向量+BM25） |
+| `MAX_CONCURRENT_TASKS` | `10` | 最大并发任务数 |
+| `CORS_EXTRA_ORIGINS` | - | 额外的 CORS 来源（逗号分隔） |
 
-详细配置请参考 [docs/API.md](docs/API.md#环境变量配置)。
+> **模型配置**（LLM、Embedding、Reranker）通过 CLI/API 管理，存储在数据库中：
+> ```bash
+> uv run llamaindex-study vendor add ollama --api-base=http://localhost:11434
+> uv run llamaindex-study model add ollama/bge-m3 --vendor ollama --type embedding
+> ```
+> 详见 `uv run llamaindex-study vendor add --help` 和 `uv run llamaindex-study model add --help`
+
+详细配置请参考 [docs/API.md](docs/API.md#环境变量配置) 和 [.env.example](.env.example)。
 
 ## 文档
 
@@ -177,9 +186,18 @@ llamaindex-study/
 │   ├── reranker.py           # 重排序
 │   └── rag_evaluator.py      # RAG 评估
 ├── kb_core/                  # 核心服务（业务逻辑）
-│   ├── services.py           # 核心服务类
+│   ├── services/             # 服务层（拆分后）
+│   │   ├── vector_store.py   # 向量存储服务
+│   │   ├── knowledge_base.py # 知识库管理
+│   │   ├── search.py         # 检索服务
+│   │   ├── query_router.py   # 自动路由
+│   │   ├── task.py           # 任务管理
+│   │   ├── consistency.py    # 一致性校验
+│   │   └── ...               # 其他服务
+│   ├── database.py           # SQLite 数据库层
 │   ├── scheduler.py          # 调度器入口（独立进程）
 │   ├── task_executor.py      # 任务执行器
+│   ├── task_queue.py         # 任务队列
 │   └── import_service.py     # 导入服务（统一入口）
 ├── kb_storage/               # 存储服务
 ├── kb_processing/            # 处理服务（Embedding 等）

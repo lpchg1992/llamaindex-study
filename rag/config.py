@@ -157,6 +157,13 @@ class Settings:
 
         # ========== API 服务配置 ==========
         self.api_port: int = int(os.getenv("API_PORT", str(self._DEFAULT_API_PORT)))
+        self.cors_extra_origins: str = os.getenv("CORS_EXTRA_ORIGINS", "")
+
+        # ========== 知识库存储根目录 ==========
+        self.llamaindex_storage_base: str = self._resolve_dir(
+            os.getenv("LLAMAINDEX_STORAGE_BASE", str(Path.home() / ".llamaindex" / "storage")),
+            str(Path.home() / ".llamaindex" / "storage"),
+        )
 
     def __repr__(self) -> str:
         return f"Settings(top_k={self.top_k})"

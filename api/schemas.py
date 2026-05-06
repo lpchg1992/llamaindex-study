@@ -157,6 +157,13 @@ class KBUpdateRequest(BaseModel):
     description: Optional[str] = Field(None, description="知识库描述")
 
 
+class TaskCreateRequest(BaseModel):
+    task_type: str = Field("generic", description="任务类型: generic, initialize, revector, check_mark_failed")
+    kb_id: str = Field(..., description="知识库 ID")
+    params: Dict[str, Any] = Field(default_factory=dict, description="任务参数")
+    source: str = Field("", description="任务来源标识")
+
+
 class TaskResponse(BaseModel):
     task_id: str
     task_type: Optional[str] = None
@@ -264,7 +271,6 @@ class ZoteroPreviewResponse(BaseModel):
     ineligible_items: int
     duplicate_items: int
     items: List[ZoteroPreviewItem]
-    filtering_rules: List[str] = []
     filtering_rules: List[str] = []
 
 

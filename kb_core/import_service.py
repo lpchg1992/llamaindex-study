@@ -163,6 +163,7 @@ class ImportApplicationService:
             Task submission dict
         """
         params = {
+            "source_type": req.source_type,
             "items": [
                 {
                     "type": item.type,

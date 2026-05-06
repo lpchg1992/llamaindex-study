@@ -2,8 +2,6 @@
 Zotero integration endpoints.
 """
 
-import os
-
 from fastapi import APIRouter, HTTPException
 
 from api.schemas import (
@@ -51,20 +49,22 @@ def get_all_collections_with_items():
 @router.post("/preview", response_model=ZoteroPreviewResponse)
 def preview_zotero_import(req: ZoteroPreviewRequest):
     from pathlib import Path
+    from rag.config import get_settings
     from kb_zotero.processor import ZoteroImporter
     from kb_core.database import init_document_db
     from kb_core.services import KnowledgeBaseService
 
     importer = ZoteroImporter()
-    mddocs_base = Path(os.getenv("LLAMAINDEX_STORAGE_BASE", "/Volumes/online/llamaindex")) / "mddocs"
+    mddocs_base = Path(get_settings().llamaindex_storage_base) / "mddocs"
 
     document_db = None
     kb_info = KnowledgeBaseService.get_info(req.kb_id)
     if kb_info and Path(kb_info.get("persist_dir", "")).exists():
         try:
             document_db = init_document_db()
-        except Exception:
-            pass
+        except Exception as e:
+            from rag.logger import get_logger
+            get_logger(__name__).warning(f"无法初始化 document 数据库，去重检查将不可用: {e}")
 
     item_ids = list(req.item_ids) if req.item_ids else []
 
@@ -89,8 +89,31 @@ def preview_zotero_import(req: ZoteroPreviewRequest):
     duplicate_items = []
 
     for item_id in item_ids:
-        item = importer.get_item(item_id, prefix=prefix)
+        try:
+            item = importer.get_item(item_id, prefix=prefix)
+        except Exception as e:
+            from rag.logger import get_logger
+            get_logger(__name__).warning(f"获取 Zotero 文献 {item_id} 失败: {e}")
+            preview_item = ZoteroPreviewItem(
+                item_id=item_id,
+                title=f"文献 #{item_id}",
+                creators=[],
+                has_attachment=False,
+                is_eligible=False,
+                ineligible_reason=f"获取文献失败: {type(e).__name__}",
+            )
+            ineligible_items.append(preview_item)
+            continue
         if not item:
+            preview_item = ZoteroPreviewItem(
+                item_id=item_id,
+                title=f"文献 #{item_id} (无法获取)",
+                creators=[],
+                has_attachment=False,
+                is_eligible=False,
+                ineligible_reason=f"无法获取文献信息（文献可能不存在或附件不含 {prefix} 标记）",
+            )
+            ineligible_items.append(preview_item)
             continue
 
         attachment_path = item.file_path

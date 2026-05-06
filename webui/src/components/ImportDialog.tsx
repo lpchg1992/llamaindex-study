@@ -155,7 +155,7 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
     return buildTree(null)
   }, [zoteroCollectionsData])
 
-  const convertObsidianItem = (item: ObsidianVaultTree['items'][0]): FileTreeItem => {
+  const convertObsidianItem = useCallback((item: ObsidianVaultTree['items'][0]): FileTreeItem => {
     return {
       id: item.path || item.name,
       name: item.name,
@@ -166,7 +166,7 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
       has_children: item.has_children,
       children: item.children?.map(convertObsidianItem),
     }
-  }
+  }, [])
 
   const obsidianTreeItems = useMemo<FileTreeItem[]>(() => {
     if (!obsidianTree?.items) return []
@@ -198,7 +198,7 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
       return
     }
 
-    // 检查缓存：如果缓存的itemIds与当前一致，直接使用缓存
+    // 检查缓存：长度相同且顺序一致才命中缓存
     if (previewCache && 
         previewCache.itemIds.length === itemIds.length &&
         previewCache.itemIds.every((id, idx) => id === itemIds[idx])) {
@@ -252,11 +252,7 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
     setZoteroConfirmedItems(confirmedItems)
     setZoteroPreviewConfirmed(true)
 
-    setZoteroForceOcrIds((prev) => {
-      const next = new Set(prev)
-      forceOcrIds.forEach((id) => next.add(id))
-      return next
-    })
+    setZoteroForceOcrIds(new Set(forceOcrIds))
 
     setZoteroManualScannedIds(new Set(manualScannedIds))
 

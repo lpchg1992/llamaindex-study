@@ -560,6 +560,8 @@ class TaskExecutor:
                         success_node_ids = [n.node_id for n in nodes if hasattr(n, "embedding") and n.embedding and not all(v == 0.0 for v in n.embedding)]
                         if success_node_ids:
                             doc_chunk_svc.mark_chunks_success(success_node_ids)
+                        if failed_ids:
+                            doc_chunk_svc.mark_chunks_failed(failed_ids)
                     except Exception as write_ex:
                         logger.warning(f"LanceDB 写入失败（SQLite 已保存）: {rel_path}, 错误: {write_ex}")
                         continue
@@ -624,6 +626,7 @@ class TaskExecutor:
         params = task.params
         task_id = task.task_id
         items = params.get("items", [])
+        source_type = params.get("source_type")
         prefix = params.get("prefix", "[kb]")
         chunk_strategy = params.get("chunk_strategy")
         chunk_size = params.get("chunk_size")
@@ -667,25 +670,26 @@ class TaskExecutor:
         self.queue.set_file_progress(task_id, file_list)
 
         item_titles = {}
-        try:
-            from kb_zotero.processor import ZoteroImporter
+        if source_type == "zotero":
+            try:
+                from kb_zotero.processor import ZoteroImporter
 
-            for item in items:
-                if item.get("type") == "item":
-                    item_id = item.get("id")
-                    if item_id:
-                        try:
-                            importer = ZoteroImporter(kb_id=kb_id)
-                            zotero_item = importer.get_item(int(item_id), prefix=prefix)
-                            if zotero_item and zotero_item.title:
-                                item_titles[str(item_id)] = zotero_item.title
-                            importer.close()
-                        except Exception as e:
-                            logger.debug(
-                                f"Failed to fetch title for item {item_id}: {e}"
-                            )
-        except Exception as e:
-            logger.debug(f"Failed to pre-fetch Zotero titles: {e}")
+                zotero_importer = ZoteroImporter(kb_id=kb_id)
+                for item in items:
+                    if item.get("type") == "item":
+                        item_id = item.get("id")
+                        if item_id:
+                            try:
+                                zotero_item = zotero_importer.get_item(int(item_id), prefix=prefix)
+                                if zotero_item and zotero_item.title:
+                                    item_titles[str(item_id)] = zotero_item.title
+                            except Exception as e:
+                                logger.warning(
+                                    f"Failed to fetch Zotero title for item {item_id}: {e}"
+                                )
+                zotero_importer.close()
+            except Exception as e:
+                logger.warning(f"Failed to pre-fetch Zotero titles: {e}")
 
         if item_titles:
             for idx, item in enumerate(items):
@@ -728,7 +732,7 @@ class TaskExecutor:
                 return
 
             item_type = item.get("type", "")
-            item_id = item.get("id") or item.get("path", "")
+            item_id = item.get("id") or item.get("path", "") or f"item_{i}"
             file_id = file_list[i]["file_id"]
 
             self.queue.update_file_progress(
