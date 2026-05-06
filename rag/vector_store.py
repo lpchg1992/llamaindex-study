@@ -300,12 +300,17 @@ class LanceDBVectorStore:
         deleted = 0
         for source in sources:
             try:
-                escaped_source = source.replace("'", "''")
-                result = table.delete(f"source = '{escaped_source}'")
-                if hasattr(result, "num_deleted"):
-                    deleted += result.num_deleted
-                elif hasattr(result, "count"):
-                    deleted += result.count
+                df = table.to_pandas()
+                matching = df[df["metadata"].apply(
+                    lambda m: m.get("source", "") if isinstance(m, dict) else ""
+                ).str.contains(source, na=False)]
+                if matching.empty:
+                    continue
+                node_ids = matching["id"].tolist()
+                for node_id in node_ids:
+                    result = table.delete(f"id = '{node_id}'")
+                    if hasattr(result, "num_deleted_rows"):
+                        deleted += result.num_deleted_rows
             except Exception as e:
                 logger.warning(f"删除 source {source} 失败: {e}")
 

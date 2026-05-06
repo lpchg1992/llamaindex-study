@@ -551,11 +551,20 @@ class LanceCRUDService:
 
         table = db.open_table(table_name)
 
-        # 通过 metadata 中的 source 字段匹配
+        # 先查询匹配的 node_ids，然后逐个删除
         escaped = source_file.replace("'", "''")
-        result = table.delete(f"metadata:source LIKE '%{escaped}%'")
+        try:
+            df = table.to_pandas()
+            matching = df[df["metadata"].apply(lambda m: m.get("source", "") if isinstance(m, dict) else "").str.contains(source_file, na=False)]
+            node_ids = matching["id"].tolist()
+        except Exception as e:
+            logger.error(f"查询匹配的节点失败: {e}")
+            return 0
 
-        return getattr(result, "num_deleted", 0)
+        if not node_ids:
+            return 0
+
+        return LanceCRUDService.delete_by_node_ids(kb_id, node_ids, table_name)
 
     @staticmethod
     def delete_by_node_ids(

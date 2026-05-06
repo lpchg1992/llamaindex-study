@@ -82,7 +82,7 @@ function TaskDetailDialog({ taskId, open, onOpenChange }: TaskDetailDialogProps)
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
           </div>
         ) : task ? (
-          <ScrollArea className="h-[70vh]">
+          <ScrollArea className="h-[70vh] w-full min-w-0">
             <div className="space-y-4 p-1">
               {task.task_type === 'initialize' ? (
                 <div className="border rounded-lg p-4 bg-orange-50 dark:bg-orange-950/20">

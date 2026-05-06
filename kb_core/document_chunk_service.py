@@ -125,7 +125,7 @@ class DocumentChunkService:
                 if node_id in failed_set:
                     emb_status = 2
                 elif hasattr(node, "embedding") and node.embedding and not all(v == 0.0 for v in node.embedding):
-                    emb_status = 0
+                    emb_status = 1
                 else:
                     emb_status = 0
 
