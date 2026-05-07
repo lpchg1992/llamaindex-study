@@ -88,13 +88,8 @@ def restart_api():
 
     logger = get_logger(__name__)
     PROJECT_ROOT = Path(__file__).parent.parent
-    pid_file = PROJECT_ROOT / ".api.pid"
-    restart_flag = PROJECT_ROOT / ".api_restart_required"
 
-    restart_flag.write_text(str(os.getpid()))
-    logger.info(f"重启标记已写入 PID: {os.getpid()}")
-
-    # 延迟杀进程，确保 HTTP 响应先发送
+    logger.info(f"重启 API 服务 (PID: {os.getpid()})")
     threading.Timer(0.5, lambda: os.kill(os.getpid(), signal.SIGTERM)).start()
 
     return {"status": "restarting", "message": "API 服务正在重启..."}
@@ -111,7 +106,12 @@ def reload_config():
         registry.reload()
         s = get_settings()
         s.load_runtime_settings()
-        logger.info("模型注册表和运行时设置已重新加载")
+        try:
+            from kb_processing.parallel_embedding import get_parallel_processor
+            get_parallel_processor().refresh_endpoints()
+        except Exception:
+            pass
+        logger.info("模型注册表、运行时设置和 embedding 端点已重新加载")
         return {"status": "success", "message": "配置已重新加载"}
     except Exception as e:
         logger.error(f"配置重载失败: {e}")
