@@ -38,6 +38,7 @@ import re
 import subprocess
 import tempfile
 import time
+from functools import lru_cache
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from typing import Optional, List, Callable
@@ -390,75 +391,84 @@ class DocumentProcessor:
 
         return progress.file_hashes.get(file_path) != current_hash
 
+    _CHAR_RE = re.compile(r"[\u4e00-\u9fff]|[a-zA-Z]|[0-9]")
+
     def is_scanned_pdf(self, pdf_path: str) -> bool:
         """
         检测 PDF 是否为扫描件
 
         方法：
-        1. 文字密度（字符数/页面面积）
-        2. 图片比例
-        3. 综合判断：只有同时满足"低密度"和"高图片比例"才认为是扫描件
+        1. 快速启发式：首页文字量 > 200 字符 → 非扫描件
+        2. 文字密度（字符数/页面面积）
+        3. 图片比例
+        4. 综合判断：低密度 + 高图片比例 = 扫描件
         """
+        # LRU-style cache per file path (capped at 256 entries)
+        if not hasattr(self, "_scanned_cache"):
+            self._scanned_cache = {}
+        if pdf_path in self._scanned_cache:
+            return self._scanned_cache[pdf_path]
+        if len(self._scanned_cache) > 256:
+            self._scanned_cache.clear()
+
         try:
             from pypdf import PdfReader
 
             reader = PdfReader(pdf_path)
             total_pages = len(reader.pages)
             if total_pages == 0:
+                self._scanned_cache[pdf_path] = True
                 return True
 
             pages_to_check = min(total_pages, 5)
+            char_re = self._CHAR_RE
 
-            # 1. 检查文字密度
             total_text_len = 0
             total_page_area = 0
+            image_pages = 0
 
-            for page in reader.pages[:pages_to_check]:
+            for i, page in enumerate(reader.pages[:pages_to_check]):
                 text = page.extract_text() or ""
-                chinese_chars = len(re.findall(r"[\u4e00-\u9fff]", text))
-                english_chars = len(re.findall(r"[a-zA-Z]", text))
-                number_chars = len(re.findall(r"[0-9]", text))
-                valid_chars = chinese_chars + english_chars + number_chars
+
+                # Early exit: first page has significant text → not scanned
+                if i == 0 and len(text.strip()) > 200:
+                    self._scanned_cache[pdf_path] = False
+                    return False
+
+                # Single regex pass for Chinese + English + digits
+                valid_chars = len(char_re.findall(text))
                 total_text_len += valid_chars
 
                 width = float(page.mediabox.width)
                 height = float(page.mediabox.height)
                 total_page_area += width * height
 
-            avg_density = total_text_len / (total_page_area / (72 * 72))
-
-            # 2. 检查图片比例
-            image_pages = 0
-            for page in reader.pages[:pages_to_check]:
+                # Check images
                 try:
                     if "/Resources" in page and "/XObject" in page["/Resources"]:
                         xobjects = page["/Resources"]["/XObject"].get_object()
-                        image_count = sum(
-                            1
-                            for obj in xobjects.values()
-                            if obj.get("/Subtype") == "/Image"
-                        )
-                        if image_count > 0:
-                            image_pages += 1
+                        for obj in xobjects.values():
+                            if obj.get("/Subtype") == "/Image":
+                                image_pages += 1
+                                break  # one image per page is enough
                 except Exception:
                     pass
 
+            avg_density = total_text_len / (total_page_area / (72 * 72)) if total_page_area > 0 else 0
             image_ratio = image_pages / pages_to_check
 
-            if avg_density < 10 and image_ratio > 0.7:
-                return True
-
-            if avg_density < 30 and image_ratio > 0.5:
-                return True
-
-            if avg_density < self.config.pdf_scan_threshold and image_ratio > 0.5:
-                return True
-
-            return False
+            result = (
+                (avg_density < 10 and image_ratio > 0.7)
+                or (avg_density < 30 and image_ratio > 0.5)
+                or (avg_density < self.config.pdf_scan_threshold and image_ratio > 0.5)
+            )
+            self._scanned_cache[pdf_path] = result
+            return result
 
         except Exception as e:
             print(f"   ⚠️  PDF 检测失败: {e}")
-            return True  # 保守处理
+            self._scanned_cache[pdf_path] = True
+            return True
 
     def convert_pdf_to_markdown(
         self, pdf_path: str, timeout: int = None
