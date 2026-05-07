@@ -65,6 +65,8 @@ def is_scheduler_running() -> bool:
     """检查调度器是否正在运行（基于文件锁）"""
     import fcntl
     pid_file = get_scheduler_pid_file()
+    if not pid_file.exists():
+        return False
     fd = None
     try:
         fd = open(pid_file, "r")
