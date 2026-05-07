@@ -334,7 +334,7 @@ function KBDetailsPanel({ kb }: { kb: KBInfo }) {
 
                     {/* Sync All Missing Button */}
                     {(consistency.vector_integrity?.missing_count ?? 0) > 0 && (
-                      <Button size="sm" variant="default" onClick={handleSyncAllMissing} disabled={revectorTask.isPending}>
+                      <Button size="sm" variant="default" onClick={() => handleSyncAllMissing()} disabled={revectorTask.isPending}>
                         {revectorTask.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-1" />}
                         同步所有缺失向量 ({consistency.vector_integrity?.missing_count?.toLocaleString()})
                       </Button>
