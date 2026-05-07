@@ -408,6 +408,7 @@ class ZoteroImporter:
         force_ocr: bool = False,
         is_scanned: Optional[bool] = None,
         has_md_cache: Optional[bool] = None,
+        cancel_event: Any = None,
     ) -> Tuple[int, List[Any], List[str], Optional[str], List[str]]:
         """
         导入单个文献
@@ -482,6 +483,9 @@ class ZoteroImporter:
                 error_reason = None
                 MAX_TEXT_LEN = 8000
                 for i, node in enumerate(nodes):
+                    if cancel_event and cancel_event.is_set():
+                        logger.warning(f"[{item.title}] 任务已取消，停止 embedding")
+                        break
                     text = texts[i]
                     text_len = len(text)
                     if text_len > MAX_TEXT_LEN:
@@ -648,6 +652,9 @@ class ZoteroImporter:
                     failed_ids = []
                     MAX_TEXT_LEN = 8000
                     for i, node in enumerate(nodes):
+                        if cancel_event and cancel_event.is_set():
+                            logger.warning(f"[{item.title}] 任务已取消，停止 embedding")
+                            break
                         text = texts[i]
                         text_len = len(text)
                         if text_len > MAX_TEXT_LEN:

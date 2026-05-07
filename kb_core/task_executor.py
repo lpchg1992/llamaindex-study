@@ -778,6 +778,7 @@ class TaskExecutor:
                         f"[{task_id}] 处理 Zotero 文献: item_id={item_id}, prefix={prefix}, options={item.get('options', {})}"
                     )
                     item_options = item.get("options", {})
+                    cancel_event = self._cancel_events.get(task_id)
                     result = ZoteroService.import_item(
                         kb_id=kb_id,
                         item_id=item.get("id"),
@@ -787,6 +788,7 @@ class TaskExecutor:
                         chunk_strategy=chunk_strategy,
                         chunk_size=chunk_size,
                         hierarchical_chunk_sizes=hierarchical_chunk_sizes,
+                        cancel_event=cancel_event,
                     )
                     logger.info(
                         f"[{task_id}] Zotero 文献导入结果: nodes={result.get('nodes', 0)}, items={result.get('items', 0)}"
