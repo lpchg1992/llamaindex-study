@@ -1891,7 +1891,9 @@ def _stop_scheduler() -> bool:
         print(f"停止调度器 (PID: {pid})...")
         time.sleep(1)
         _kill_pid(pid, signal.SIGKILL, "scheduler")
+        pid_file.unlink(missing_ok=True)
         return True
+    pid_file.unlink(missing_ok=True)
     return False
 
 
@@ -1973,10 +1975,21 @@ def _start_api() -> None:
     """启动 API 服务"""
     import subprocess
 
-    # 先检查端口是否可用
-    if _is_port_in_use(37241):
-        print("API 服务已在运行，跳过启动")
-        return
+    from rag.config import get_settings
+
+    settings = get_settings()
+    api_port = getattr(settings, "api_port", 37241)
+
+    if _is_port_in_use(api_port):
+        print(f"端口 {api_port} 仍被占用，正在强制清理...")
+        subprocess.run(
+            f"lsof -ti:{api_port} 2>/dev/null | xargs kill -9 2>/dev/null || true",
+            shell=True,
+        )
+        time.sleep(2)
+        if _is_port_in_use(api_port):
+            print(f"错误: 端口 {api_port} 无法释放，请手动检查")
+            return
 
     pid_file = PROJECT_ROOT / ".api.pid"
     print("启动 API 服务...")

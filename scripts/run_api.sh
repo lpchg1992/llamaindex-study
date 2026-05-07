@@ -3,7 +3,8 @@
 # 自动重启崩溃的服务，确保 API 始终可用
 # macOS 兼容版本
 
-PROJECT_DIR="/Users/luopingcheng/Documents/GitHub/llamaindex-study"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 VENV_DIR="$PROJECT_DIR/.venv"
 LOG_DIR="$PROJECT_DIR/logs"
 API_PORT="${API_PORT:-37241}"
