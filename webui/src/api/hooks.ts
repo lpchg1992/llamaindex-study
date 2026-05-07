@@ -943,12 +943,14 @@ export function useCheckAndMarkFailed() {
 }
 
 export function useRevectorTask() {
-  return useMutation<RevectorResult, Error, { kbId: string; includePending?: boolean; includeFailed?: boolean; includeEmbedded?: boolean }>({
-    mutationFn: async ({ kbId, includePending = true, includeFailed = true, includeEmbedded = false }) => {
+  return useMutation<RevectorResult, Error, { kbId: string; includePending?: boolean; includeFailed?: boolean; includeEmbedded?: boolean; limit?: number }>({
+    mutationFn: async ({ kbId, includePending = true, includeFailed = true, includeEmbedded = false, limit }) => {
+      const params: Record<string, any> = { include_pending: includePending, include_failed: includeFailed, include_embedded: includeEmbedded }
+      if (limit) params.limit = limit
       const { data } = await apiClient.post<RevectorResult>(
         `${API_BASE}/kbs/${kbId}/chunks/revector`,
         {},
-        { params: { include_pending: includePending, include_failed: includeFailed, include_embedded: includeEmbedded } }
+        { params }
       )
       return data
     },

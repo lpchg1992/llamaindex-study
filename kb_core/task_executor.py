@@ -957,10 +957,11 @@ class TaskExecutor:
         )
 
     async def _execute_revector(self, task: "Task") -> None:
-        """执行重新向量化任务（处理 pending、failed 和 orphaned success chunks）- 批量优化版"""
+        """执行重新向量化任务（处理 pending、failed chunks）- 批量优化版"""
         from .database import init_chunk_db
         from kb_storage.lance_crud import LanceCRUDService
         from kb_processing.parallel_embedding import get_parallel_processor
+        from .task_queue import FileStatus
 
         kb_id = task.kb_id
         params = task.params
@@ -1005,6 +1006,19 @@ class TaskExecutor:
 
         all_chunks = pending_chunks + failed_chunks + embedded_chunks
         total_chunks = len(all_chunks)
+
+        # Setup file_progress for progress bar display
+        import hashlib
+        file_id = hashlib.md5(f"{task_id}:revector".encode()).hexdigest()[:12]
+        self.queue.set_file_progress(task_id, [{
+            "file_id": file_id,
+            "file_name": f"Re-vector KB: {kb_id}",
+            "status": FileStatus.PROCESSING.value,
+            "total_chunks": total_chunks,
+            "processed_chunks": 0,
+            "db_written": False,
+            "error": None,
+        }])
 
         if total_chunks == 0:
             self.queue.complete_task(
@@ -1117,6 +1131,12 @@ class TaskExecutor:
 
             if batch_failed_ids:
                 chunk_db.mark_failed_bulk(batch_failed_ids)
+
+            self.queue.update_file_progress(
+                task_id, file_id,
+                processed_chunks=processed,
+                total_chunks=total_chunks,
+            )
 
             progress_pct = int(processed / total_chunks * 100)
             await self._update_and_notify(

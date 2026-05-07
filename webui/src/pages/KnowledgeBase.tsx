@@ -73,13 +73,14 @@ function KBDetailsPanel({ kb }: { kb: KBInfo }) {
     }
   }
 
-  const handleSyncAllMissing = async () => {
+  const handleSyncAllMissing = async (maxChunks?: number) => {
     try {
       const result = await revectorTask.mutateAsync({
         kbId: kb.id,
         includePending: true,
         includeFailed: true,
         includeEmbedded: false,
+        limit: maxChunks,
       })
       if (result.task_id) {
         toast.success(`任务已提交: ${result.task_id}`)
