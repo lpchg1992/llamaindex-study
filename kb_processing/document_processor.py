@@ -251,6 +251,7 @@ class DocumentProcessor:
         data = []
         skipped = 0
         failed_ids = []
+        writable_ids = []
         doc_ids = set()
         for node in nodes:
             if not hasattr(node, "embedding") or node.embedding is None:
@@ -280,9 +281,10 @@ class DocumentProcessor:
                 "metadata": metadata_dict,
             }
             data.append(row)
+            writable_ids.append(node.node_id)
 
         if not data:
-            return (0, skipped, failed_ids)
+            return (0, [], skipped, failed_ids)
 
         df = pa.Table.from_pylist(data)
         written_count = 0
@@ -330,7 +332,9 @@ class DocumentProcessor:
                     add_logger.error(f"追加写入也失败: {add_e}")
                     written_count = 0
 
-        return (written_count, skipped, failed_ids)
+        if written_count > 0:
+            return (written_count, writable_ids, skipped, failed_ids)
+        return (0, [], skipped, failed_ids)
 
     def _get_valid_metadata_keys(self, lance_store) -> set:
         try:
@@ -1654,7 +1658,7 @@ class DocumentProcessor:
         if processed_batch:
             try:
                 lance_store = vector_store._get_lance_vector_store()
-                saved, skipped, emb_failed_ids = self._upsert_nodes(
+                saved, _, skipped, emb_failed_ids = self._upsert_nodes(
                     lance_store, processed_batch
                 )
                 failed_node_ids.extend(emb_failed_ids)

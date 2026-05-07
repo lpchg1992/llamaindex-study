@@ -315,7 +315,9 @@ class GenericImporter:
                     # Then write to LanceDB (correct order)
                     try:
                         lance_store = vector_store._get_lance_vector_store()
-                        success_count, skipped, emb_failed_ids = self.processor._upsert_nodes(lance_store, all_nodes)
+                        success_count, written_ids, _, emb_failed_ids = self.processor._upsert_nodes(lance_store, all_nodes)
+                        if written_ids:
+                            doc_chunk_service.mark_chunks_success(written_ids)
                         if emb_failed_ids:
                             doc_chunk_service.mark_chunks_failed(emb_failed_ids)
                             all_failed_ids.extend(emb_failed_ids)

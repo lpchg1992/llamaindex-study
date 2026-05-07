@@ -546,16 +546,15 @@ class ZoteroImporter:
                 else:
                     meta_node_ids = [n.node_id for n in nodes]
                     try:
-                        success_count, skipped, emb_failed_ids = (
+                        success_count, written_ids, _, emb_failed_ids = (
                             self.processor._upsert_nodes(
                                 vector_store._get_lance_vector_store(), nodes
                             )
                         )
+                        if written_ids:
+                            doc_chunk_service.mark_chunks_success(written_ids)
                         if emb_failed_ids:
                             doc_chunk_service.mark_chunks_failed(emb_failed_ids)
-                        success_node_ids = [n.node_id for n in nodes if hasattr(n, "embedding") and n.embedding and not all(v == 0.0 for v in n.embedding)]
-                        if success_node_ids:
-                            doc_chunk_service.mark_chunks_success(success_node_ids)
                         all_failed_ids = list(set(all_failed_ids + failed_ids + emb_failed_ids))
                     except Exception as e:
                         logger.warning(
@@ -728,7 +727,7 @@ class ZoteroImporter:
                             # 每批嵌入后立即写入 LanceDB 并更新 SQLite 状态
                             if batch_nodes:
                                 try:
-                                    b_success, b_skipped, b_failed = (
+                                    b_success, b_written_ids, _, b_failed = (
                                         self.processor._upsert_nodes(
                                             vector_store._get_lance_vector_store(), batch_nodes
                                         )
@@ -740,12 +739,10 @@ class ZoteroImporter:
                                         logger.warning(
                                             f"LanceDB 批次部分写入: 预期 {len(batch_nodes)}, 实际 {b_success}"
                                         )
-                                    if b_success > 0:
-                                        b_success_ids = [n.node_id for n in batch_nodes[:b_success] if hasattr(n, "embedding") and n.embedding and not all(v == 0.0 for v in n.embedding)]
-                                        if b_success_ids:
-                                            doc_chunk_service.mark_chunks_success(b_success_ids)
+                                    if b_written_ids:
+                                        doc_chunk_service.mark_chunks_success(b_written_ids)
                                         total_nodes += b_success
-                                        all_nodes.extend([n for n in batch_nodes[:b_success] if hasattr(n, "embedding") and n.embedding and not all(v == 0.0 for v in n.embedding)])
+                                        all_nodes.extend([n for n in batch_nodes if n.node_id in b_written_ids])
                                         if not processed_sources or processed_sources[-1] != str(file_path):
                                             processed_sources.append(str(file_path))
                                 except Exception as e:
