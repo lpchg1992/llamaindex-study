@@ -466,13 +466,13 @@ class ParallelEmbeddingProcessor:
                 )
                 return (ep.name, [0.0] * ep.dimensions, "SiliconFlow 端点不可用")
             model = self._get_model(sf_ep)
-            max_retries = 3
+            max_retries = 5
             for retry in range(max_retries):
                 try:
                     emb = model.get_text_embedding(text[:8192])
                     if all(v == 0.0 for v in emb):
                         if retry < max_retries - 1:
-                            wait = (retry + 1) * 2.0
+                            wait = (retry + 1) * 3.0
                             logger.warning(
                                 f"[{sf_ep.name}] SiliconFlow 返回零向量，"
                                 f"重试 {retry + 1}/{max_retries - 1} (等待 {wait:.1f}s, text_len={text_len})"
@@ -481,8 +481,9 @@ class ParallelEmbeddingProcessor:
                             continue
                         logger.warning(
                             f"[{sf_ep.name}] SiliconFlow 返回零向量"
-                            f" (已重试 {max_retries} 次, text_len={text_len})"
+                            f" (已重试 {max_retries} 次, text_len={text_len})，尝试 Ollama 兜底..."
                         )
+                        break
                     self._record_embedding(sf_ep, text_len, False)
                     return (sf_ep.name, emb, None)
                 except Exception as sf_err:
@@ -499,8 +500,27 @@ class ParallelEmbeddingProcessor:
                         f"[{sf_ep.name}] SiliconFlow fallback 失败"
                         f" (text_len={text_len}): {type(sf_err).__name__}: {sf_err}"
                     )
+
+            # SF 重试全部耗尽，逐个尝试 Ollama 端点（即使标记为 unhealthy）
+            ollama_eps = [e for e in self.endpoints if e.url != "siliconflow://"]
+            for ollama_ep in ollama_eps:
+                try:
+                    emb = self._call_ollama_embed(ollama_ep, text)
+                    if emb and not all(v == 0.0 for v in emb):
+                        with self._lock:
+                            ollama_ep.is_healthy = True
+                            ollama_ep.last_error = None
+                            self._consecutive_failures[ollama_ep.name] = 0
+                        logger.info(
+                            f"[{ollama_ep.name}] Ollama 兜底成功，已恢复为健康 (text_len={text_len})"
+                        )
+                        self._record_embedding(ollama_ep, text_len, False)
+                        return (ollama_ep.name, emb, None)
+                except Exception as ollama_err:
+                    logger.debug(f"[{ollama_ep.name}] 兜底尝试失败: {ollama_err}")
+
             self._record_embedding(sf_ep, 0, True)
-            return (sf_ep.name, [0.0] * sf_ep.dimensions, f"SiliconFlow 重试 {max_retries} 次仍然失败")
+            return (sf_ep.name, [0.0] * sf_ep.dimensions, f"所有端点重试 {max_retries} 次均失败")
 
         if ep.url == "siliconflow://":
             return call_sf()
