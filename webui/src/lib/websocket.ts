@@ -45,9 +45,8 @@ function getWsBase(): string {
     const host = base.replace(/^https?:\/\//, '')
     return `${protocol}//${host}`
   }
-  const hostname = window.location.hostname
-  const port = import.meta.env.VITE_API_PORT || '37241'
-  return `ws://${hostname}:${port}`
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  return `${protocol}//${window.location.host}`
 }
 
 export function useTaskWebSocket(enabled: boolean = true) {

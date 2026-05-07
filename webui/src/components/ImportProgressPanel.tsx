@@ -44,9 +44,8 @@ export function ImportProgressPanel({
       const host = base.replace(/^https?:\/\//, '')
       wsUrl = `${protocol}//${host}/ws/tasks`
     } else {
-      const hostname = window.location.hostname
-      const port = import.meta.env.VITE_API_PORT || '37241'
-      wsUrl = `ws://${hostname}:${port}/ws/tasks`
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      wsUrl = `${protocol}//${window.location.host}/ws/tasks`
     }
     const ws = new WebSocket(wsUrl)
     
