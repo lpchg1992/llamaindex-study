@@ -727,7 +727,7 @@ class TaskExecutor:
                         "partial": True,
                         "file_progress": self.queue.get_file_progress(task_id),
                     },
-                    error="任务已暂停",
+                    error="任务已取消",
                 )
                 return
 
@@ -1035,9 +1035,9 @@ class TaskExecutor:
                     result={
                         **stats,
                         "processed": processed,
-                        "message": "任务已暂停",
+                        "message": "任务已取消",
                     },
-                    error="任务已暂停",
+                    error="任务已取消",
                 )
                 return
 
