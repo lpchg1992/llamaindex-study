@@ -242,7 +242,7 @@ class ParallelEmbeddingProcessor:
         return endpoints
 
     def _health_check_with_retry(self, url: str, model_name: str) -> bool:
-        """验证端点是否可用（仅检查 Ollama 服务是否启动）"""
+        """验证端点可用性（检查 Ollama 服务和指定模型）"""
         import httpx
 
         max_retries = 3
@@ -254,6 +254,13 @@ class ParallelEmbeddingProcessor:
             try:
                 response = httpx.get(f"{url}/api/tags", timeout=10.0)
                 if response.status_code == 200:
+                    data = response.json()
+                    models = [m.get("name", "") for m in data.get("models", [])]
+                    if model_name not in models:
+                        logger.warning(
+                            f"端点 {url} 模型 {model_name} 未找到，可用模型: {models[:5]}..."
+                        )
+                        return False
                     return True
                 elif response.status_code == 503:
                     logger.debug(
@@ -572,7 +579,9 @@ class ParallelEmbeddingProcessor:
                 return sf_ep
 
             logger.error("无可用端点（包含 SiliconFlow）")
-            return self.endpoints[0]
+            if self.endpoints:
+                return self.endpoints[0]
+            raise RuntimeError("没有配置任何 embedding 端点，无法进行 embedding")
 
     async def get_embedding(self, text: str, ep_name: str) -> EmbeddingResult:
         """异步获取单个 embedding"""
