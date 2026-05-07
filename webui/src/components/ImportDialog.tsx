@@ -719,7 +719,7 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
                 {showAdvanced && (
                   <div className="mt-3 space-y-3">
                     <div className="grid grid-cols-2 gap-3">
-                      <div className="space-y-1">
+                      <div className={`space-y-1 ${chunkStrategy === 'hierarchical' ? 'col-span-2' : ''}`}>
                         <Label htmlFor="chunk-strategy" className="text-xs">分块策略</Label>
                         <Select value={chunkStrategy} onValueChange={setChunkStrategy}>
                           <SelectTrigger id="chunk-strategy" className="h-8 text-xs">
@@ -733,16 +733,18 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
                           </SelectContent>
                         </Select>
                       </div>
-                      <div className="space-y-1">
-                        <Label htmlFor="chunk-size" className="text-xs">分块大小</Label>
-                        <Input
-                          id="chunk-size"
-                          type="number"
-                          value={chunkSize}
-                          onChange={(e) => setChunkSize(parseInt(e.target.value) || 1024)}
-                          className="h-8 text-xs"
-                        />
-                      </div>
+                      {chunkStrategy !== 'hierarchical' && (
+                        <div className="space-y-1">
+                          <Label htmlFor="chunk-size" className="text-xs">分块大小</Label>
+                          <Input
+                            id="chunk-size"
+                            type="number"
+                            value={chunkSize}
+                            onChange={(e) => setChunkSize(parseInt(e.target.value) || 1024)}
+                            className="h-8 text-xs"
+                          />
+                        </div>
+                      )}
                     </div>
                     {chunkStrategy === 'hierarchical' && (
                       <div className="space-y-1">
