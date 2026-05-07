@@ -47,7 +47,7 @@
 
 **说明：**
 - **TaskQueue**：SQLite 持久化队列，API 将任务放入队列
-- **Scheduler**：独立进程（`kb_core/scheduler.py`），定时轮询 TaskQueue，分发任务给 TaskExecutor
+- **Scheduler**：独立进程（`kb_core/task_scheduler.py`），定时轮询 TaskQueue，分发任务给 TaskExecutor
 - **TaskExecutor**：执行具体任务（文档解析、Embedding、写入 LanceDB）
 - **WebSocket**：任务状态实时推送
 
@@ -89,10 +89,23 @@ class LanceDBWriteQueue:
             self._queue.task_done()
 ```
 
-### 3. 并行 Embedding 处理器（自适应负载均衡 + 动态健康检查）
+### 3. 并行 Embedding 处理器（并发 + 自适应负载均衡 + 动态健康检查）
+
+导入时使用 `ThreadPoolExecutor(max_workers=4)` 并发处理 chunk embedding，
+多端点同时利用，自动负载均衡（inflight 最少优先）：
 
 ```python
-# kb_processing/parallel_embedding.py
+# kb_zotero/processor.py — 并发 embedding 循环
+MAX_CONCURRENT = 4
+for batch_start in range(0, total, MAX_CONCURRENT):
+    with ThreadPoolExecutor(max_workers=MAX_CONCURRENT) as executor:
+        # 4 个 chunk 同时提交，负载均衡器自动分配到多个端点
+        futures = {executor.submit(embed_one, i, node, text): i for i in range(batch_start, batch_end)}
+        for future in as_completed(futures):
+            idx, node, embedding, error = future.result()
+            # 处理结果，更新进度
+
+# kb_processing/parallel_embedding.py — 端点管理
 class ParallelEmbeddingProcessor:
     def __init__(self):
         self.endpoints = self._load_embedding_endpoints()

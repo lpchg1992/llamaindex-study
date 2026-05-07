@@ -143,7 +143,7 @@ curl -X POST http://localhost:37241/kbs/HTE_history/topics/refresh \
 |--------|--------|------|
 | `PERSIST_DIR` | `~/.llamaindex/storage` | 向量数据库持久化目录 |
 | `LLAMAINDEX_STORAGE_BASE` | `~/.llamaindex/storage` | 知识库存储根目录 |
-| `CHUNK_STRATEGY` | `hierarchical` | 分块策略：`hierarchical`/`sentence`/`semantic` |
+| `CHUNK_STRATEGY` | `hierarchical` | 分块策略：`hierarchical`/`sentence`/`semantic`/`markdown` |
 | `CHUNK_SIZE` | `1024` | 分块大小 |
 | `CHUNK_OVERLAP` | `100` | 分块重叠 |
 | `HIERARCHICAL_CHUNK_SIZES` | `2048,1024,512` | 层级分块各层大小 |

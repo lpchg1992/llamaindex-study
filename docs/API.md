@@ -23,8 +23,14 @@
 ## 启动服务
 
 ```bash
-cd ~/文档/GitHub/llamaindex-study
+cd llamaindex-study
 uv run python -m api.main
+```
+
+或者使用 CLI 一键启动：
+
+```bash
+uv run llamaindex-study service start
 ```
 
  - 服务地址: `http://localhost:37241`
@@ -598,7 +604,7 @@ curl -X POST "http://localhost:37241/kbs/HTE_history/topics/refresh" \
 
 #### GET /kbs/{kb_id}/consistency
 
-校验知识库一致性，比较 documents 表与 LanceDB 实际向量数据：
+校验知识库一致性，比较 documents 表、chunks 表与 LanceDB 实际向量数据：
 
 ```bash
 curl "http://localhost:37241/kbs/animal_nutrition_breeding/consistency"
@@ -607,13 +613,22 @@ curl "http://localhost:37241/kbs/animal_nutrition_breeding/consistency"
 ```json
 {
   "kb_id": "animal_nutrition_breeding",
-  "doc_files": 221,
-  "doc_chunks": 1247,
-  "lance_rows": 1247,
-  "consistent": true,
-  "missing_chunks": 0,
-  "orphan_rows": 0,
-  "status": "consistent"
+  "status": "issues_found",
+  "summary": {
+    "doc_count": 221,
+    "chunk_count_stored": 1247,
+    "chunk_count_actual": 1247,
+    "lance_rows": 1200
+  },
+  "doc_stats": { "accurate": true, "mismatched_count": 0, "issues": [] },
+  "embedding_stats": {
+    "total": 1247, "success": 1200, "pending": 0, "failed": 47,
+    "in_lance": 1200, "missing_in_lance": 0
+  },
+  "vector_integrity": {
+    "status": "missing", "missing_count": 47, "orphan_count": 0, "issues": [...]
+  },
+  "recommendations": [...]
 }
 ```
 
@@ -621,13 +636,15 @@ curl "http://localhost:37241/kbs/animal_nutrition_breeding/consistency"
 
 | 字段 | 说明 |
 |------|------|
-| `doc_files` | documents 表的文件数 |
-| `doc_chunks` | documents 表的 chunk 总数 |
-| `lance_rows` | LanceDB 实际行数 |
-| `consistent` | 是否一致 |
-| `missing_chunks` | LanceDB 缺失的 chunk 数 |
-| `orphan_rows` | LanceDB 多余的行数 |
-| `status` | 状态：`consistent`、`missing_data`、`orphan_data`、`mixed_inconsistency` |
+| `summary.doc_count` | documents 表的文档数 |
+| `summary.chunk_count_actual` | chunks 表的实际 chunk 总数 |
+| `summary.lance_rows` | LanceDB 实际向量行数 |
+| `embedding_stats.total` | chunks 表总 chunk 数（同 chunk_count_actual） |
+| `embedding_stats.success` | emb_status=1 的 chunk 数 |
+| `embedding_stats.pending` | emb_status=0 的 chunk 数 |
+| `embedding_stats.failed` | emb_status=2 的 chunk 数 |
+| `vector_integrity.missing_count` | SQLite 有但 LanceDB 缺少的 chunk 数 |
+| `vector_integrity.orphan_count` | LanceDB 有但 SQLite 无的行数 |
 
 #### POST /kbs/{kb_id}/consistency/repair
 
@@ -1130,7 +1147,9 @@ curl http://localhost:37241/settings
   "use_reranker": true,
   "response_mode": "compact",
   "progress_update_interval": 10,
-  "max_concurrent_tasks": 10
+  "max_concurrent_tasks": 10,
+  "max_retries": 5,
+  "retry_delay": 2.0
 }
 ```
 
@@ -1152,8 +1171,9 @@ curl -X PUT http://localhost:37241/settings \
 
 | 设置类别 | 设置项 | 持久化位置 | 生效方式 |
 |----------|--------|------------|----------|
-| 运行时设置 | `embed_batch_size`, `top_k`, `use_hybrid_search`, `use_auto_merging`, `use_hyde`, `use_multi_query`, `num_multi_queries`, `hybrid_search_alpha`, `use_reranker`, `response_mode` | `.runtime_settings.json` | 立即生效 |
+| 运行时设置 | `embed_batch_size`, `top_k`, `use_hybrid_search`, `use_auto_merging`, `use_hyde`, `use_multi_query`, `num_multi_queries`, `hybrid_search_alpha`, `use_reranker`, `response_mode`, `max_retries`, `retry_delay` | `.runtime_settings.json` | 立即生效 |
 | Chunk 设置 | `chunk_strategy`, `chunk_size`, `chunk_overlap`, `hierarchical_chunk_sizes` | `.runtime_settings.json` | 立即生效，**仅影响新导入的文档** |
+| Task 设置 | `progress_update_interval`, `max_concurrent_tasks` | `.runtime_settings.json` | 立即生效 |
 | 模型配置 | LLM/Embedding/Reranker 模型 | 模型数据库 | 通过 `models` API 管理 |
 
 **注意：**
@@ -1623,9 +1643,8 @@ curl -X POST "http://localhost:37241/search" \
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `OLLAMA_EMBED_MODEL` | `bge-m3` | Embedding 模型名称 |
-| `EMBEDDING_DIM` | `1024` | Embedding 向量维度 |
 
-> **注意**: Ollama 供应商通过 CLI/API 管理（`vendor add` / `model add`），端点配置存储在数据库中。
+> **注意**: Ollama 供应商通过 CLI/API 管理（`vendor add` / `model add`），端点配置和模型维度存储在数据库中。
 
 ### 任务处理配置
 
@@ -1640,9 +1659,8 @@ curl -X POST "http://localhost:37241/search" \
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `MAX_RETRIES` | `3` | 每个端点最大重试次数 |
-| `RETRY_DELAY` | `1.0` | 重试延迟（秒） |
-| `OLLAMA_SHORT_TEXT_THRESHOLD` | `600` | 短文本优先单端点阈值（已废弃，仅保留兼容性） |
+| `MAX_RETRIES` | `5` | 每个端点最大重试次数 |
+| `RETRY_DELAY` | `2.0` | 重试延迟（秒） |
 | `EMBED_BATCH_SIZE` | `32` | Embedding 批处理大小 |
 
 ### 检索配置
@@ -1695,9 +1713,10 @@ curl -X POST "http://localhost:37241/search" \
 
 ~/.llamaindex/                    # 项目数据库目录
 ├── project.db                   # SQLite 数据库
-│   ├── sync_states              # 同步状态
 │   ├── progress                 # 处理进度
-│   ├── knowledge_bases          # 知识库元数据（唯一数据源）
+│   ├── knowledge_bases          # 知识库元数据
+│   ├── documents                # 文档记录（含去重信息）
+│   └── chunks                   # chunk 记录（含 emb_status）
 └── tasks.db                     # 任务队列
 ```
 
