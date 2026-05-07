@@ -668,7 +668,6 @@ class ZoteroImporter:
                     if progress_callback:
                         progress_callback(0, len(nodes))
 
-                    # Phase 2: 并发生成 embedding（多端点并行利用）
                     total = len(nodes)
                     texts = [node.get_content() for node in nodes]
                     embeddings_generated = False
@@ -679,7 +678,7 @@ class ZoteroImporter:
                     from concurrent.futures import ThreadPoolExecutor, as_completed
                     import threading
 
-                    processed_count = [0]  # mutable counter for thread-safe progress
+                    processed_count = [0]
 
                     def embed_one(idx: int, node, text: str):
                         if cancel_event and cancel_event.is_set():
@@ -710,6 +709,7 @@ class ZoteroImporter:
                                     )
                                 futures[executor.submit(embed_one, i, nodes[i], texts[i])] = i
 
+                            batch_nodes = []
                             for future in as_completed(futures):
                                 idx, node, embedding, result_info = future.result()
                                 if embedding is None or all(v == 0.0 for v in embedding):
@@ -720,49 +720,35 @@ class ZoteroImporter:
                                 else:
                                     node.embedding = embedding
                                     embeddings_generated = True
+                                    batch_nodes.append(node)
                                 processed_count[0] += 1
                                 if progress_callback:
                                     progress_callback(processed_count[0], total)
 
-                    if not embeddings_generated:
-                        logger.warning(
-                            f"[{item.title}] 附件 embedding 全部失败 ({len(nodes)} 个节点): {file_path}"
-                        )
-
-                    # Phase 3: LanceDB 写入 + 更新 SQLite 状态
-                    try:
-                        success_count, skipped, emb_failed_ids = (
-                            self.processor._upsert_nodes(
-                                vector_store._get_lance_vector_store(), nodes
-                            )
-                        )
-                        if emb_failed_ids:
-                            doc_chunk_service.mark_chunks_failed(emb_failed_ids)
-                        success_node_ids = [n.node_id for n in nodes if hasattr(n, "embedding") and n.embedding and not all(v == 0.0 for v in n.embedding)]
-                        if success_node_ids:
-                            doc_chunk_service.mark_chunks_success(success_node_ids)
-                        all_failed_ids = list(set(all_failed_ids + failed_ids + emb_failed_ids))
-                    except Exception as e:
-                        logger.warning(f"LanceDB 写入失败: {file_path}, 错误: {e}")
-                        error_reason = f"LanceDB write failed: {e}"
-                        failed_node_ids = list(set(failed_ids + [n.node_id for n in nodes]))
-                        doc_chunk_service.mark_chunks_failed(failed_node_ids)
-                        all_failed_ids = list(set(all_failed_ids + failed_node_ids))
-                        total_nodes += len(nodes)
-                        continue
-
-                    total_nodes += len(nodes)
-                    if success_count > 0:
-                        all_nodes.extend(
-                            [
-                                n
-                                for n in nodes
-                                if hasattr(n, "embedding")
-                                and n.embedding
-                                and not all(v == 0.0 for v in n.embedding)
-                            ]
-                        )
-                        processed_sources.append(str(file_path))
+                            # 每批嵌入后立即写入 LanceDB 并更新 SQLite 状态
+                            if batch_nodes:
+                                try:
+                                    b_success, b_skipped, b_failed = (
+                                        self.processor._upsert_nodes(
+                                            vector_store._get_lance_vector_store(), batch_nodes
+                                        )
+                                    )
+                                    if b_failed:
+                                        doc_chunk_service.mark_chunks_failed(b_failed)
+                                        all_failed_ids = list(set(all_failed_ids + b_failed))
+                                    b_success_ids = [n.node_id for n in batch_nodes if hasattr(n, "embedding") and n.embedding and not all(v == 0.0 for v in n.embedding)]
+                                    if b_success_ids:
+                                        doc_chunk_service.mark_chunks_success(b_success_ids)
+                                    total_nodes += len(batch_nodes)
+                                    all_nodes.extend([n for n in batch_nodes if hasattr(n, "embedding") and n.embedding and not all(v == 0.0 for v in n.embedding)])
+                                    if not processed_sources or processed_sources[-1] != str(file_path):
+                                        processed_sources.append(str(file_path))
+                                except Exception as e:
+                                    logger.warning(f"LanceDB 批次写入失败: {file_path}, 错误: {e}")
+                                    failed_node_ids = list(set(failed_ids + [n.node_id for n in batch_nodes]))
+                                    doc_chunk_service.mark_chunks_failed(failed_node_ids)
+                                    all_failed_ids = list(set(all_failed_ids + failed_node_ids))
+                                    total_nodes += len(batch_nodes)
             else:
                 logger.warning(f"文档处理返回空结果: {file_path}")
 
