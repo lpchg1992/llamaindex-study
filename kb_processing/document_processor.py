@@ -464,12 +464,12 @@ class DocumentProcessor:
         self, pdf_path: str, timeout: int = None
     ) -> Optional[str]:
         """将 PDF 转换为 Markdown"""
+        from rag.config import get_settings
         timeout = timeout or self.config.pdf_convert_timeout
         print(f"   🔄 正在转换 PDF 为 Markdown...")
 
-        md_file_path = (
-            Path("/Volumes/online/llamaindex/mddocs") / f"{Path(pdf_path).stem}.md"
-        )
+        mddocs_base = Path(get_settings().llamaindex_storage_base) / "mddocs"
+        md_file_path = mddocs_base / f"{Path(pdf_path).stem}.md"
 
         if md_file_path.exists() and md_file_path.stat().st_size > 100:
             meta = ConversionMetadata.load(md_file_path)
@@ -519,17 +519,16 @@ class DocumentProcessor:
 
     def _convert_single_pdf(self, pdf_path: str, timeout: int = None) -> Optional[str]:
         """转换单个 PDF（不拆分）"""
-        md_file_path = (
-            Path("/Volumes/online/llamaindex/mddocs") / f"{Path(pdf_path).stem}.md"
-        )
-        if md_file_path.exists() and md_file_path.stat().st_size > 100:
-            print(f"   📄 本地 md 已存在，跳过云端转换: {md_file_path.name}")
-            try:
-                return md_file_path.read_text(encoding="utf-8")
-            except Exception:
-                pass
-
         from rag.config import get_settings
+        mddocs_base = Path(get_settings().llamaindex_storage_base) / "mddocs"
+        md_file_path = mddocs_base / f"{Path(pdf_path).stem}.md"
+        if md_file_path.exists() and md_file_path.stat().st_size > 100:
+            meta = ConversionMetadata.load(md_file_path)
+            if meta and not meta.is_truncated:
+                print(f"   📄 本地 md 已存在，跳过云端转换: {md_file_path.name}")
+                return md_file_path.read_text(encoding="utf-8")
+            elif meta and meta.is_truncated:
+                print(f"   📄 本地 MD 存在但被截断，将重新转换: {md_file_path.name}")
 
         settings = get_settings()
 
@@ -577,7 +576,8 @@ class DocumentProcessor:
         self, md_content: str, pdf_path: str, mineru_truncated: bool = False
     ) -> None:
         """保存 md 内容到本地"""
-        md_save_dir = Path("/Volumes/online/llamaindex/mddocs")
+        from rag.config import get_settings
+        md_save_dir = Path(get_settings().llamaindex_storage_base) / "mddocs"
         md_save_dir.mkdir(parents=True, exist_ok=True)
         md_file_path = md_save_dir / f"{Path(pdf_path).stem}.md"
         try:
@@ -1267,9 +1267,9 @@ class DocumentProcessor:
         docs = []
         ext = Path(pdf_path).suffix.lower()
 
-        md_file_path = (
-            Path("/Volumes/online/llamaindex/mddocs") / f"{Path(pdf_path).stem}.md"
-        )
+        from rag.config import get_settings
+        mddocs_base = Path(get_settings().llamaindex_storage_base) / "mddocs"
+        md_file_path = mddocs_base / f"{Path(pdf_path).stem}.md"
 
         if force_ocr and md_file_path.exists():
             try:
