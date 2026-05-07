@@ -109,6 +109,11 @@ class ZoteroService:
                 kb_id=kb_id,
             )
 
+            failed_ids = stats.get("failed_ids", [])
+            if failed_ids:
+                doc_svc = get_document_chunk_service(kb_id)
+                doc_svc.mark_chunks_failed(failed_ids, error="embedding returned zero vector or failed during import")
+
             progress_file.unlink(missing_ok=True)
 
             if progress_callback:
@@ -196,6 +201,10 @@ class ZoteroService:
                 cancel_event=cancel_event,
                 progress_callback=chunk_progress_callback,
             )
+
+            if failed_ids:
+                doc_svc = get_document_chunk_service(kb_id)
+                doc_svc.mark_chunks_failed(failed_ids, error="embedding returned zero vector or failed during import")
 
             if progress_callback:
                 progress_callback(f"完成！导入 {nodes} 个节点")

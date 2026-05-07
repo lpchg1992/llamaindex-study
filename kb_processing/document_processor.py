@@ -316,7 +316,21 @@ class DocumentProcessor:
                                     f"删除 {deleted_count} 个已存在的节点 (doc_id 去重)"
                                 )
                         except Exception as delete_err:
-                            add_logger.warning(f"删除旧节点失败: {delete_err}")
+                            add_logger.error(
+                                f"删除旧节点失败: {delete_err}，回退到追加写入"
+                            )
+                            try:
+                                table.add(data)
+                                written_count = len(data)
+                            except Exception as add_e:
+                                add_logger.error(f"追加写入也失败: {add_e}")
+                                written_count = 0
+                            # Skip merge_insert since delete failed and we already handled it
+                            if written_count > 0:
+                                if written_count == len(data):
+                                    return (written_count, writable_ids, skipped, failed_ids)
+                                return (written_count, [], skipped, failed_ids)
+                            return (0, [], skipped, failed_ids)
                 merge_result = table.merge_insert("id").when_not_matched_insert_all().execute(df)
                 written_count = getattr(merge_result, "num_inserted_rows", 0)
                 if written_count == 0 and len(data) > 0:
@@ -332,9 +346,15 @@ class DocumentProcessor:
                     add_logger.error(f"追加写入也失败: {add_e}")
                     written_count = 0
 
-        if written_count > 0:
-            return (written_count, writable_ids, skipped, failed_ids)
-        return (0, [], skipped, failed_ids)
+        if written_count == 0:
+            return (0, [], skipped, failed_ids)
+        if written_count < len(data):
+            add_logger.warning(
+                f"partial write: only {written_count}/{len(data)} rows inserted; "
+                "marking none as success to prevent phantom status (consistency check will recover)"
+            )
+            return (written_count, [], skipped, failed_ids)
+        return (written_count, writable_ids, skipped, failed_ids)
 
     def _get_valid_metadata_keys(self, lance_store) -> set:
         try:

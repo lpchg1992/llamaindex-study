@@ -879,4 +879,9 @@ class ZoteroImporter:
             f"节点: {stats['nodes']}"
         )
 
+        failed_ids = stats.pop("failed_ids", [])
+        if failed_ids:
+            doc_svc = get_document_chunk_service(kb_id or self.kb_id or "default")
+            doc_svc.mark_chunks_failed(failed_ids, error="embedding returned zero vector or failed during import")
+
         return stats
