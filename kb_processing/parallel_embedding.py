@@ -250,32 +250,34 @@ class ParallelEmbeddingProcessor:
         backoff_factor = 1.5
         delay = initial_delay
 
-        for attempt in range(max_retries):
-            try:
-                response = httpx.get(f"{url}/api/tags", timeout=10.0)
-                if response.status_code == 200:
-                    data = response.json()
-                    models = [m.get("name", "") for m in data.get("models", [])]
-                    if model_name not in models:
-                        logger.warning(
-                            f"端点 {url} 模型 {model_name} 未找到，可用模型: {models[:5]}..."
+        transport = httpx.HTTPTransport(proxy=None)
+        with httpx.Client(transport=transport) as client:
+            for attempt in range(max_retries):
+                try:
+                    response = client.get(f"{url}/api/tags", timeout=10.0)
+                    if response.status_code == 200:
+                        data = response.json()
+                        models = [m.get("name", "") for m in data.get("models", [])]
+                        if model_name not in models:
+                            logger.warning(
+                                f"端点 {url} 模型 {model_name} 未找到，可用模型: {models[:5]}..."
+                            )
+                            return False
+                        return True
+                    elif response.status_code == 503:
+                        logger.debug(
+                            f"端点 {url} 服务加载中 (尝试 {attempt + 1}/{max_retries})，等待 {delay:.1f}s"
                         )
+                        time.sleep(delay)
+                        delay *= backoff_factor
+                    else:
                         return False
-                    return True
-                elif response.status_code == 503:
-                    logger.debug(
-                        f"端点 {url} 服务加载中 (尝试 {attempt + 1}/{max_retries})，等待 {delay:.1f}s"
-                    )
+                except Exception as e:
+                    logger.debug(f"健康检查失败 {url}: {e}")
+                    if attempt == max_retries - 1:
+                        return False
                     time.sleep(delay)
                     delay *= backoff_factor
-                else:
-                    return False
-            except Exception as e:
-                logger.debug(f"健康检查失败 {url}: {e}")
-                if attempt == max_retries - 1:
-                    return False
-                time.sleep(delay)
-                delay *= backoff_factor
         return False
 
     def _health_check(self, url: str, model_name: str, timeout: float = 5.0) -> bool:
@@ -326,26 +328,29 @@ class ParallelEmbeddingProcessor:
 
     def _sync_health_check_with_retry(self, ep: EmbeddingEndpoint) -> bool:
         """同步健康检查（仅检查 Ollama 服务是否启动）"""
+        import httpx
         max_retries = 3
         initial_delay = 2.0
         backoff_factor = 1.5
         delay = initial_delay
 
-        for attempt in range(max_retries):
-            try:
-                response = httpx.get(f"{ep.url}/api/tags", timeout=10.0)
-                if response.status_code == 200:
-                    return True
-                elif response.status_code == 503:
+        transport = httpx.HTTPTransport(proxy=None)
+        with httpx.Client(transport=transport) as client:
+            for attempt in range(max_retries):
+                try:
+                    response = client.get(f"{ep.url}/api/tags", timeout=10.0)
+                    if response.status_code == 200:
+                        return True
+                    elif response.status_code == 503:
+                        time.sleep(delay)
+                        delay *= backoff_factor
+                    else:
+                        return False
+                except Exception:
+                    if attempt == max_retries - 1:
+                        return False
                     time.sleep(delay)
                     delay *= backoff_factor
-                else:
-                    return False
-            except Exception:
-                if attempt == max_retries - 1:
-                    return False
-                time.sleep(delay)
-                delay *= backoff_factor
         return False
 
     def set_model_by_model_id(self, model_id: str) -> None:
