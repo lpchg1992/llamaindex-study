@@ -486,6 +486,7 @@ class ZoteroImporter:
                 for i, node in enumerate(nodes):
                     if cancel_event and cancel_event.is_set():
                         logger.warning(f"[{item.title}] 任务已取消，停止 embedding")
+                        failed_ids.extend(n.node_id for n in nodes[i:])
                         break
                     text = texts[i]
                     text_len = len(text)
@@ -672,6 +673,7 @@ class ZoteroImporter:
                     for i, node in enumerate(nodes):
                         if cancel_event and cancel_event.is_set():
                             logger.warning(f"[{item.title}] 任务已取消，停止 embedding")
+                            failed_ids.extend(n.node_id for n in nodes[i:])
                             break
                         text = texts[i]
                         text_len = len(text)
