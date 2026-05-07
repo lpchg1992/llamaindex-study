@@ -466,20 +466,41 @@ class ParallelEmbeddingProcessor:
                 )
                 return (ep.name, [0.0] * ep.dimensions, "SiliconFlow 端点不可用")
             model = self._get_model(sf_ep)
-            try:
-                emb = model.get_text_embedding(text[:8192])
-                if all(v == 0.0 for v in emb):
-                    logger.warning(
-                        f"[{sf_ep.name}] SiliconFlow 返回零向量 (text_len={text_len})"
+            max_retries = 3
+            for retry in range(max_retries):
+                try:
+                    emb = model.get_text_embedding(text[:8192])
+                    if all(v == 0.0 for v in emb):
+                        if retry < max_retries - 1:
+                            wait = (retry + 1) * 2.0
+                            logger.warning(
+                                f"[{sf_ep.name}] SiliconFlow 返回零向量，"
+                                f"重试 {retry + 1}/{max_retries - 1} (等待 {wait:.1f}s, text_len={text_len})"
+                            )
+                            time.sleep(wait)
+                            continue
+                        logger.warning(
+                            f"[{sf_ep.name}] SiliconFlow 返回零向量"
+                            f" (已重试 {max_retries} 次, text_len={text_len})"
+                        )
+                    self._record_embedding(sf_ep, text_len, False)
+                    return (sf_ep.name, emb, None)
+                except Exception as sf_err:
+                    if retry < max_retries - 1:
+                        wait = (retry + 1) * 1.5
+                        logger.warning(
+                            f"[{sf_ep.name}] SiliconFlow 异常，"
+                            f"重试 {retry + 1}/{max_retries - 1} (等待 {wait:.1f}s, text_len={text_len}): "
+                            f"{type(sf_err).__name__}: {sf_err}"
+                        )
+                        time.sleep(wait)
+                        continue
+                    logger.error(
+                        f"[{sf_ep.name}] SiliconFlow fallback 失败"
+                        f" (text_len={text_len}): {type(sf_err).__name__}: {sf_err}"
                     )
-                self._record_embedding(sf_ep, text_len, False)
-                return (sf_ep.name, emb, None)
-            except Exception as sf_err:
-                logger.error(
-                    f"[{sf_ep.name}] SiliconFlow fallback 失败 (text_len={text_len}): {type(sf_err).__name__}: {sf_err}"
-                )
-                self._record_embedding(sf_ep, 0, True)
-                return (sf_ep.name, [0.0] * sf_ep.dimensions, str(sf_err))
+            self._record_embedding(sf_ep, 0, True)
+            return (sf_ep.name, [0.0] * sf_ep.dimensions, f"SiliconFlow 重试 {max_retries} 次仍然失败")
 
         if ep.url == "siliconflow://":
             return call_sf()
