@@ -409,6 +409,7 @@ class ZoteroImporter:
         is_scanned: Optional[bool] = None,
         has_md_cache: Optional[bool] = None,
         cancel_event: Any = None,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
     ) -> Tuple[int, List[Any], List[str], Optional[str], List[str]]:
         """
         导入单个文献
@@ -647,6 +648,23 @@ class ZoteroImporter:
                     doc_id = doc.id_
                     zotero_doc_id = str(item.item_id)
 
+                    # Phase 1: 先创建文档和 chunk 记录（emb_status=0），立即可查询
+                    result = doc_chunk_service.create_document(
+                        source_file=file_path.name,
+                        source_path=str(file_path),
+                        file_hash=file_hash,
+                        nodes=nodes,
+                        file_size=file_size,
+                        doc_id=doc_id,
+                        zotero_doc_id=zotero_doc_id,
+                        failed_node_ids=None,
+                    )
+                    if not result:
+                        logger.warning(f"文档记录创建失败: {file_path}")
+                        continue
+
+                    # Phase 2: 逐个生成 embedding（带进度回调）
+                    total = len(nodes)
                     texts = [node.get_content() for node in nodes]
                     embeddings_generated = False
                     failed_ids = []
@@ -685,27 +703,16 @@ class ZoteroImporter:
                                 f"[{item.title}] Embedding exception (file={file_path.name}, node={node.node_id[:8]}): {type(emb_err).__name__}: {emb_err}"
                             )
                             failed_ids.append(node.node_id)
+                        finally:
+                            if progress_callback:
+                                progress_callback(i + 1, total)
 
                     if not embeddings_generated:
                         logger.warning(
                             f"[{item.title}] 附件 embedding 全部失败 ({len(nodes)} 个节点): {file_path}"
                         )
 
-                    current_failed_ids = list(set(failed_ids))
-                    result = doc_chunk_service.create_document(
-                        source_file=file_path.name,
-                        source_path=str(file_path),
-                        file_hash=file_hash,
-                        nodes=nodes,
-                        file_size=file_size,
-                        doc_id=doc_id,
-                        zotero_doc_id=zotero_doc_id,
-                        failed_node_ids=current_failed_ids if current_failed_ids else None,
-                    )
-                    if not result:
-                        logger.warning(f"文档记录创建失败: {file_path}")
-                        continue
-
+                    # Phase 3: LanceDB 写入 + 更新 SQLite 状态
                     try:
                         success_count, skipped, emb_failed_ids = (
                             self.processor._upsert_nodes(

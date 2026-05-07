@@ -138,6 +138,7 @@ class ZoteroService:
         chunk_size: Optional[int] = None,
         hierarchical_chunk_sizes: Optional[List[int]] = None,
         cancel_event: Any = None,
+        chunk_progress_callback: Any = None,
     ) -> Dict[str, Any]:
         """
         导入单个 Zotero 文献
@@ -193,6 +194,7 @@ class ZoteroService:
                 is_scanned=is_scanned_override,
                 has_md_cache=has_md_cache,
                 cancel_event=cancel_event,
+                progress_callback=chunk_progress_callback,
             )
 
             if progress_callback:

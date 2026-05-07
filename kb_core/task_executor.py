@@ -779,6 +779,16 @@ class TaskExecutor:
                     )
                     item_options = item.get("options", {})
                     cancel_event = self._cancel_events.get(task_id)
+
+                    def make_progress_callback(fid: str):
+                        def cb(processed: int, total: int):
+                            self.queue.update_file_progress(
+                                task_id, fid,
+                                total_chunks=total,
+                                processed_chunks=processed,
+                            )
+                        return cb
+
                     result = ZoteroService.import_item(
                         kb_id=kb_id,
                         item_id=item.get("id"),
@@ -789,6 +799,7 @@ class TaskExecutor:
                         chunk_size=chunk_size,
                         hierarchical_chunk_sizes=hierarchical_chunk_sizes,
                         cancel_event=cancel_event,
+                        chunk_progress_callback=make_progress_callback(file_id) if file_id else None,
                     )
                     logger.info(
                         f"[{task_id}] Zotero 文献导入结果: nodes={result.get('nodes', 0)}, items={result.get('items', 0)}"
