@@ -24,31 +24,63 @@ def get_scheduler_pid_file() -> Path:
     import tempfile
     return Path(tempfile.gettempdir()) / "llamaindex_scheduler.pid"
 
+_scheduler_lock_fd = None
+
+def acquire_scheduler_lock() -> bool:
+    """获取排他文件锁，确保只有一个调度器实例运行"""
+    global _scheduler_lock_fd
+    import fcntl
+    pid_file = get_scheduler_pid_file()
+    try:
+        _scheduler_lock_fd = open(pid_file, "w")
+        fcntl.flock(_scheduler_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _scheduler_lock_fd.write(str(os.getpid()))
+        _scheduler_lock_fd.flush()
+        return True
+    except OSError:
+        if _scheduler_lock_fd:
+            _scheduler_lock_fd.close()
+            _scheduler_lock_fd = None
+        return False
+
+def release_scheduler_lock() -> None:
+    """释放文件锁"""
+    global _scheduler_lock_fd
+    import fcntl
+    if _scheduler_lock_fd:
+        try:
+            fcntl.flock(_scheduler_lock_fd, fcntl.LOCK_UN)
+            _scheduler_lock_fd.close()
+        except Exception:
+            pass
+        _scheduler_lock_fd = None
+    pid_file = get_scheduler_pid_file()
+    if pid_file.exists():
+        try:
+            pid_file.unlink()
+        except OSError:
+            pass
 
 def is_scheduler_running() -> bool:
-    """检查调度器是否正在运行"""
+    """检查调度器是否正在运行（基于文件锁）"""
+    import fcntl
     pid_file = get_scheduler_pid_file()
-    if not pid_file.exists():
-        return False
+    fd = None
     try:
-        pid = int(pid_file.read_text().strip())
-        os.kill(pid, 0)
-        return True
-    except (ProcessLookupError, ValueError, OSError):
+        fd = open(pid_file, "r")
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(fd, fcntl.LOCK_UN)
         return False
-
-
-def write_scheduler_pid() -> None:
-    """写入当前进程 PID 到文件"""
-    pid_file = get_scheduler_pid_file()
-    pid_file.write_text(str(os.getpid()))
+    except OSError:
+        return True
+    finally:
+        if fd:
+            fd.close()
 
 
 def cleanup_scheduler_pid() -> None:
-    """清理 PID 文件"""
-    pid_file = get_scheduler_pid_file()
-    if pid_file.exists():
-        pid_file.unlink()
+    """释放锁并清理 PID 文件"""
+    release_scheduler_lock()
     SchedulerStarter.reset_verified()
 
 
@@ -227,9 +259,11 @@ class SchedulerStarter:
 def main():
     print(f"调度器启动 (PID: {os.getpid()})")
 
-    configure_all_loggers(get_log_dir(), level=logging.INFO)
+    if not acquire_scheduler_lock():
+        print("错误: 已有另一个调度器正在运行")
+        sys.exit(1)
 
-    write_scheduler_pid()
+    configure_all_loggers(get_log_dir(), level=logging.INFO)
 
     try:
         loop = asyncio.new_event_loop()
