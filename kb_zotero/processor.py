@@ -668,50 +668,61 @@ class ZoteroImporter:
                     if progress_callback:
                         progress_callback(0, len(nodes))
 
-                    # Phase 2: 逐个生成 embedding（带进度回调）
+                    # Phase 2: 并发生成 embedding（多端点并行利用）
                     total = len(nodes)
                     texts = [node.get_content() for node in nodes]
                     embeddings_generated = False
                     failed_ids = []
                     MAX_TEXT_LEN = 8000
-                    for i, node in enumerate(nodes):
+                    MAX_CONCURRENT = 4
+
+                    from concurrent.futures import ThreadPoolExecutor, as_completed
+                    import threading
+
+                    processed_count = [0]  # mutable counter for thread-safe progress
+
+                    def embed_one(idx: int, node, text: str):
                         if cancel_event and cancel_event.is_set():
-                            logger.warning(f"[{item.title}] 任务已取消，停止 embedding")
-                            failed_ids.extend(n.node_id for n in nodes[i:])
-                            break
-                        text = texts[i]
+                            return idx, node, None, "已取消"
                         text_len = len(text)
                         if text_len > MAX_TEXT_LEN:
                             text = text[:MAX_TEXT_LEN]
-                            logger.warning(
-                                f"[{item.title}] 文本过长被截断 (file={file_path.name}, node={node.node_id[:8]}, orig_len={text_len}, truncated_to={MAX_TEXT_LEN})"
-                            )
-                        try:
-                            ep = embed_model._get_best_endpoint()
-                            ep_name, embedding, error = (
-                                embed_model._get_embedding_with_retry(text, ep)
-                            )
-                            if error:
-                                logger.warning(
-                                    f"[{item.title}] Embedding failed (file={file_path.name}, endpoint={ep_name}, node={node.node_id[:8]}, text_len={text_len}): {error}"
-                                )
-                                failed_ids.append(node.node_id)
-                            elif embedding is None or all(v == 0.0 for v in embedding):
-                                logger.warning(
-                                    f"[{item.title}] Embedding returned {'None' if embedding is None else 'zero vector'} (file={file_path.name}, endpoint={ep_name}, node={node.node_id[:8]}, text_len={text_len})"
-                                )
-                                failed_ids.append(node.node_id)
-                            else:
-                                node.embedding = embedding
-                                embeddings_generated = True
-                        except Exception as emb_err:
-                            logger.error(
-                                f"[{item.title}] Embedding exception (file={file_path.name}, node={node.node_id[:8]}): {type(emb_err).__name__}: {emb_err}"
-                            )
-                            failed_ids.append(node.node_id)
-                        finally:
-                            if progress_callback:
-                                progress_callback(i + 1, total)
+                        ep = embed_model._get_best_endpoint()
+                        ep_name, embedding, error = embed_model._get_embedding_with_retry(text, ep)
+                        return idx, node, embedding, error or ep_name
+
+                    for batch_start in range(0, total, MAX_CONCURRENT):
+                        if cancel_event and cancel_event.is_set():
+                            logger.warning(f"[{item.title}] 任务已取消，停止 embedding")
+                            for i in range(batch_start, total):
+                                failed_ids.append(nodes[i].node_id)
+                            break
+
+                        batch_end = min(batch_start + MAX_CONCURRENT, total)
+                        with ThreadPoolExecutor(max_workers=MAX_CONCURRENT) as executor:
+                            futures = {}
+                            for i in range(batch_start, batch_end):
+                                text = texts[i]
+                                text_len = len(text)
+                                if text_len > MAX_TEXT_LEN:
+                                    logger.warning(
+                                        f"[{item.title}] 文本过长被截断 (file={file_path.name}, node={nodes[i].node_id[:8]}, orig_len={text_len}, truncated_to={MAX_TEXT_LEN})"
+                                    )
+                                futures[executor.submit(embed_one, i, nodes[i], texts[i])] = i
+
+                            for future in as_completed(futures):
+                                idx, node, embedding, result_info = future.result()
+                                if embedding is None or all(v == 0.0 for v in embedding):
+                                    logger.warning(
+                                        f"[{item.title}] Embedding failed or zero vector (file={file_path.name}, node={node.node_id[:8]}, text_len={len(texts[idx])}): {result_info}"
+                                    )
+                                    failed_ids.append(node.node_id)
+                                else:
+                                    node.embedding = embedding
+                                    embeddings_generated = True
+                                processed_count[0] += 1
+                                if progress_callback:
+                                    progress_callback(processed_count[0], total)
 
                     if not embeddings_generated:
                         logger.warning(
