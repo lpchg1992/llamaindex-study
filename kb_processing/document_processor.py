@@ -397,11 +397,12 @@ class DocumentProcessor:
         """
         检测 PDF 是否为扫描件
 
-        方法：
+        多维判断：
         1. 快速启发式：首页文字量 > 200 字符 → 非扫描件
-        2. 文字密度（字符数/页面面积）
-        3. 图片比例
-        4. 综合判断：低密度 + 高图片比例 = 扫描件
+        2. 字体检测：页面有嵌入字体 → 非扫描件（文本 PDF）
+        3. 文字密度（有效字符数/页面面积）
+        4. 图片比例 + 覆盖度
+        5. 综合判断：无字体 + 低密度 + 高图片比 = 扫描件
         """
         # LRU-style cache per file path (capped at 256 entries)
         if not hasattr(self, "_scanned_cache"):
@@ -420,12 +421,22 @@ class DocumentProcessor:
                 self._scanned_cache[pdf_path] = True
                 return True
 
-            pages_to_check = min(total_pages, 5)
+            # Adaptive sampling: more pages for larger documents
+            if total_pages <= 5:
+                pages_to_check = total_pages
+            elif total_pages <= 20:
+                pages_to_check = 5
+            else:
+                pages_to_check = 10
+            pages_to_check = min(pages_to_check, total_pages)
+
             char_re = self._CHAR_RE
 
             total_text_len = 0
             total_page_area = 0
             image_pages = 0
+            font_pages = 0
+            high_coverage_pages = 0
 
             for i, page in enumerate(reader.pages[:pages_to_check]):
                 text = page.extract_text() or ""
@@ -441,22 +452,55 @@ class DocumentProcessor:
 
                 width = float(page.mediabox.width)
                 height = float(page.mediabox.height)
-                total_page_area += width * height
+                page_area = width * height
+                total_page_area += page_area
 
-                # Check images
+                # Check fonts: embedded fonts = text PDF, not scanned
+                try:
+                    if "/Resources" in page and "/Font" in page["/Resources"]:
+                        fonts = page["/Resources"]["/Font"].get_object()
+                        if len(fonts) > 0:
+                            font_pages += 1
+                except Exception:
+                    pass
+
+                # Check images with size estimation
                 try:
                     if "/Resources" in page and "/XObject" in page["/Resources"]:
                         xobjects = page["/Resources"]["/XObject"].get_object()
+                        has_image = False
                         for obj in xobjects.values():
                             if obj.get("/Subtype") == "/Image":
-                                image_pages += 1
-                                break  # one image per page is enough
+                                has_image = True
+                                # Check image coverage relative to page
+                                img_w = float(obj.get("/Width", 0))
+                                img_h = float(obj.get("/Height", 0))
+                                if img_w > 0 and img_h > 0 and page_area > 0:
+                                    img_area = img_w * img_h
+                                    if img_area / page_area > 0.3:
+                                        high_coverage_pages += 1
+                                        break
+                        if has_image:
+                            image_pages += 1
                 except Exception:
                     pass
 
             avg_density = total_text_len / (total_page_area / (72 * 72)) if total_page_area > 0 else 0
             image_ratio = image_pages / pages_to_check
+            font_ratio = font_pages / pages_to_check
+            high_cov_ratio = high_coverage_pages / pages_to_check
 
+            # Font detection: if most pages have fonts, it's a text PDF
+            if font_ratio > 0.5:
+                self._scanned_cache[pdf_path] = False
+                return False
+
+            # No fonts + high image coverage → strong scanned signal
+            if font_ratio == 0 and high_cov_ratio > 0.5:
+                self._scanned_cache[pdf_path] = True
+                return True
+
+            # Standard density + image heuristics
             result = (
                 (avg_density < 10 and image_ratio > 0.7)
                 or (avg_density < 30 and image_ratio > 0.5)
