@@ -2216,7 +2216,6 @@ CONFIG_OPTION_DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "OLLAMA_EMBED_MODEL": ("Embedding", "Embedding 模型名称（需先添加供应商）"),
     "OLLAMA_SHORT_TEXT_THRESHOLD": ("Embedding", "短文本优先单端点阈值"),
     "OLLAMA_FANOUT_TEXT_THRESHOLD": ("Embedding", "长文本阈值（已废弃）"),
-    "OLLAMA_FANOUT_TEXT_THRESHOLD": ("Embedding", "长文本阈值（已废弃）"),
     "MAX_RETRIES": ("Embedding", "每个端点最大重试次数"),
     "RETRY_DELAY": ("Embedding", "重试延迟（秒）"),
     "OBSIDIAN_VAULT_ROOT": ("存储", "Obsidian Vault 根目录"),
