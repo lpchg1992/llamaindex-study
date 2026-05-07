@@ -461,6 +461,10 @@ class SystemSettings(BaseModel):
     progress_update_interval: int = Field(10, ge=1, description="进度更新间隔")
     max_concurrent_tasks: int = Field(10, ge=1, description="最大并发任务数")
 
+    # Retry
+    max_retries: int = Field(5, ge=1, le=20, description="Embedding 最大重试次数")
+    retry_delay: float = Field(2.0, ge=0.5, le=30, description="重试间隔（秒）")
+
 
 class SettingsUpdateRequest(BaseModel):
     """设置更新请求"""
@@ -502,6 +506,10 @@ class SettingsUpdateRequest(BaseModel):
     # Task
     progress_update_interval: Optional[int] = Field(None, ge=1, description="进度更新间隔")
     max_concurrent_tasks: Optional[int] = Field(None, ge=1, description="最大并发任务数")
+
+    # Retry
+    max_retries: Optional[int] = Field(None, ge=1, le=20, description="Embedding 最大重试次数")
+    retry_delay: Optional[float] = Field(None, ge=0.5, le=30, description="重试间隔（秒）")
 
 
 # ============== Helper Functions ==============

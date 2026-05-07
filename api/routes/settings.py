@@ -37,6 +37,8 @@ def get_settings():
         response_mode=s.response_mode,
         progress_update_interval=s.progress_update_interval,
         max_concurrent_tasks=s.max_concurrent_tasks,
+        max_retries=s.max_retries,
+        retry_delay=s.retry_delay,
     )
 
 
@@ -69,6 +71,8 @@ def update_settings(req: SettingsUpdateRequest):
             response_mode=s.response_mode,
             progress_update_interval=s.progress_update_interval,
             max_concurrent_tasks=s.max_concurrent_tasks,
+            max_retries=s.max_retries,
+            retry_delay=s.retry_delay,
         )
 
     runtime_settings = {}
@@ -95,6 +99,8 @@ def update_settings(req: SettingsUpdateRequest):
             "response_mode",
             "progress_update_interval",
             "max_concurrent_tasks",
+            "max_retries",
+            "retry_delay",
         ):
             if key == "hierarchical_chunk_sizes" and isinstance(value, list):
                 if len(value) != 3:

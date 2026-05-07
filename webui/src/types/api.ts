@@ -661,6 +661,8 @@ export interface SystemSettings {
   response_mode: string
   progress_update_interval: number
   max_concurrent_tasks: number
+  max_retries: number
+  retry_delay: number
 }
 
 export interface SettingsUpdateRequest {
@@ -682,6 +684,8 @@ export interface SettingsUpdateRequest {
   response_mode?: string
   progress_update_interval?: number
   max_concurrent_tasks?: number
+  max_retries?: number
+  retry_delay?: number
 }
 
 export interface RestartResponse {

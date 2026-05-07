@@ -901,6 +901,41 @@ export function SettingsPage() {
                 </div>
               </div>
 
+              <div className="border rounded-lg p-4 mt-4">
+                <h4 className="font-medium mb-4">Embedding Retry Settings</h4>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="max-retries">Max Retries</Label>
+                    <Input
+                      id="max-retries"
+                      type="number"
+                      min={1}
+                      max={20}
+                      value={localSettings.max_retries}
+                      onChange={(e) => updateField('max_retries', parseInt(e.target.value) || 5)}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Retry embedding calls up to N times on failure
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="retry-delay">Retry Delay (seconds)</Label>
+                    <Input
+                      id="retry-delay"
+                      type="number"
+                      min={0.5}
+                      max={30}
+                      step={0.5}
+                      value={localSettings.retry_delay}
+                      onChange={(e) => updateField('retry_delay', parseFloat(e.target.value) || 2.0)}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Wait time between retry attempts
+                    </p>
+                  </div>
+                </div>
+              </div>
+
               <div className="bg-muted/50 p-4 rounded-lg">
                 <h4 className="font-medium mb-2">When to use these:</h4>
                 <ul className="text-sm text-muted-foreground space-y-1 list-disc list-inside">
