@@ -38,6 +38,18 @@ interface FileProgressItem {
   completed_at?: number
 }
 
+function getWsBase(): string {
+  if (import.meta.env.VITE_API_BASE) {
+    const base = import.meta.env.VITE_API_BASE
+    const protocol = base.startsWith('https') ? 'wss:' : 'ws:'
+    const host = base.replace(/^https?:\/\//, '')
+    return `${protocol}//${host}`
+  }
+  const hostname = window.location.hostname
+  const port = import.meta.env.VITE_API_PORT || '37241'
+  return `ws://${hostname}:${port}`
+}
+
 export function useTaskWebSocket(enabled: boolean = true) {
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -46,16 +58,7 @@ export function useTaskWebSocket(enabled: boolean = true) {
   const connect = useCallback(() => {
     if (!enabled) return
 
-    let wsUrl: string
-    if (import.meta.env.VITE_API_BASE) {
-      const base = import.meta.env.VITE_API_BASE
-      const protocol = base.startsWith('https') ? 'wss:' : 'ws:'
-      const host = base.replace(/^https?:\/\//, '')
-      wsUrl = `${protocol}//${host}/ws/tasks`
-    } else {
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-      wsUrl = `${protocol}//${window.location.host}/ws/tasks`
-    }
+    const wsUrl = `${getWsBase()}/ws/tasks`
 
     try {
       wsRef.current = new WebSocket(wsUrl)
