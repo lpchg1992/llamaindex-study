@@ -160,14 +160,11 @@ def preview_zotero_import(req: ZoteroPreviewRequest):
                 preview_item.is_scanned_pdf = is_scanned
 
                 md_cache_path = mddocs_base / f"{pdf_path.stem}.md"
-                has_cache = md_cache_path.exists() and md_cache_path.stat().st_size > 100
-                if has_cache:
-                    try:
-                        from kb_processing.document_processor import ConversionMetadata
-                        meta = ConversionMetadata.load(md_cache_path)
-                        has_cache = meta is None or not meta.is_truncated
-                    except Exception:
-                        pass
+                has_cache = False
+                if md_cache_path.exists() and md_cache_path.stat().st_size > 100:
+                    from kb_processing.document_processor import ConversionMetadata
+                    meta = ConversionMetadata.load(md_cache_path)
+                    has_cache = meta is not None and not meta.is_truncated
                 preview_item.has_md_cache = has_cache
 
         preview_item.is_eligible = True
