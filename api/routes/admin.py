@@ -55,7 +55,10 @@ def delete_table(kb_id: str):
 
 @router.post("/restart-scheduler")
 def restart_scheduler():
-    from kb_core.task_scheduler import SchedulerStarter, is_scheduler_running, get_scheduler_pid_file
+    from kb_core.task_scheduler import (
+        SchedulerStarter, is_scheduler_running, get_scheduler_pid_file,
+        cleanup_scheduler_pid,
+    )
     from rag.logger import get_logger
 
     logger = get_logger(__name__)
@@ -64,14 +67,22 @@ def restart_scheduler():
     if is_scheduler_running():
         import os
         import signal
+        import time
 
         try:
             with open(pid_file, "r") as f:
                 old_pid = int(f.read().strip())
             os.kill(old_pid, signal.SIGTERM)
             logger.info(f"已发送停止信号到调度器 (PID: {old_pid})")
+            time.sleep(1)
+            try:
+                os.kill(old_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
         except (ProcessLookupError, OSError, ValueError) as e:
             logger.warning(f"停止调度器失败或进程不存在: {e}")
+
+        cleanup_scheduler_pid()
 
     SchedulerStarter.ensure_scheduler_running(wait_seconds=5.0)
 

@@ -1901,6 +1901,12 @@ def _start_scheduler() -> None:
     """启动调度器"""
     import subprocess
 
+    from kb_core.task_scheduler import is_scheduler_running
+
+    if is_scheduler_running():
+        print("调度器已在运行，跳过启动")
+        return
+
     print("启动调度器...")
     subprocess.Popen(
         ["uv", "run", "python", "-m", "kb_core.task_scheduler"],
