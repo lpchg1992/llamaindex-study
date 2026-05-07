@@ -1070,18 +1070,29 @@ class TaskExecutor:
             chunk_ids = [chunk["id"] for chunk in chunk_batch]
             doc_ids = [chunk["doc_id"] for chunk in chunk_batch]
 
+            # Truncate long texts to avoid zero-vector embeddings
+            MAX_TEXT_LEN = 8000
+            for i, text in enumerate(texts):
+                if len(text) > MAX_TEXT_LEN:
+                    texts[i] = text[:MAX_TEXT_LEN]
+                    logger.warning(
+                        f"[{task_id}] Chunk {chunk_ids[i][:8]} text truncated "
+                        f"({len(text)} → {MAX_TEXT_LEN} chars)"
+                    )
+
             embedding_results = await processor.process_batch(texts)
 
             batch_failed_ids = []
             for idx, (ep_name, embedding, error) in enumerate(embedding_results):
                 chunk_id = chunk_ids[idx]
+                text_len = len(texts[idx])
 
                 try:
                     if error:
                         raise Exception(error)
 
-                    if all(v == 0.0 for v in embedding):
-                        raise Exception("Embedding returned zero vector")
+                    if embedding is None or all(v == 0.0 for v in embedding):
+                        raise Exception(f"zero vector from {ep_name}")
 
                     LanceCRUDService.upsert_vector(
                         chunk_id, doc_ids[idx], embedding, kb_id=kb_id
@@ -1122,7 +1133,7 @@ class TaskExecutor:
         remaining_embedded = len(chunk_db.get_embedded(kb_id, limit=1))
 
         skipped = stats["skipped"]
-        error_msg = f"{skipped} chunks failed to embed" if skipped > 0 else None
+        error_msg = f"{skipped}/{total_chunks} chunks failed (端点可能返回零向量，文本过长或服务不可用)" if skipped > 0 else None
 
         self.queue.complete_task(
             task_id,
