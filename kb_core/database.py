@@ -162,6 +162,7 @@ class ChunkModel(Base):
     hierarchy_level: Mapped[int] = mapped_column(Integer, default=0)
     metadata_json: Mapped[str] = mapped_column(Text, default="{}")
     embedding_generated: Mapped[int] = mapped_column(Integer, default=0)
+    embedding_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[float] = mapped_column(Float)
     updated_at: Mapped[float] = mapped_column(Float)
 
@@ -1211,6 +1212,7 @@ class ChunkDB:
             "hierarchy_level": row.hierarchy_level,
             "metadata": _json_load(row.metadata_json, {}),
             "embedding_generated": row.embedding_generated,
+            "embedding_error": row.embedding_error,
             "created_at": row.created_at,
             "updated_at": row.updated_at,
         }
@@ -1366,7 +1368,7 @@ class ChunkDB:
             result = session.execute(
                 update(ChunkModel)
                 .where(ChunkModel.id == chunk_id)
-                .values(embedding_generated=1, updated_at=time.time())
+                .values(embedding_generated=1, embedding_error=None, updated_at=time.time())
             )
             return (result.rowcount or 0) > 0
 
@@ -1377,18 +1379,18 @@ class ChunkDB:
             result = session.execute(
                 update(ChunkModel)
                 .where(ChunkModel.id.in_(chunk_ids))
-                .values(embedding_generated=1, updated_at=time.time())
+                .values(embedding_generated=1, embedding_error=None, updated_at=time.time())
             )
             return result.rowcount or 0
 
-    def mark_failed_bulk(self, chunk_ids: List[str]) -> int:
+    def mark_failed_bulk(self, chunk_ids: List[str], error: str = None) -> int:
         if not chunk_ids:
             return 0
         with self.db.session_scope() as session:
             result = session.execute(
                 update(ChunkModel)
                 .where(ChunkModel.id.in_(chunk_ids))
-                .values(embedding_generated=2, updated_at=time.time())
+                .values(embedding_generated=2, embedding_error=error, updated_at=time.time())
             )
             return result.rowcount or 0
 
@@ -1573,7 +1575,7 @@ class ChunkDB:
                     to_mark_failed.append(chunk["id"])
 
         if to_mark_failed:
-            self.mark_failed_bulk(to_mark_failed)
+            self.mark_failed_bulk(to_mark_failed, error="missing from LanceDB (consistency check)")
 
         return {"marked_failed": len(to_mark_failed), "total_checked": len(chunks)}
 

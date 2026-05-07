@@ -319,14 +319,14 @@ class GenericImporter:
                         if written_ids:
                             doc_chunk_service.mark_chunks_success(written_ids)
                         if emb_failed_ids:
-                            doc_chunk_service.mark_chunks_failed(emb_failed_ids)
+                            doc_chunk_service.mark_chunks_failed(emb_failed_ids, error="embedding unavailable (missing or zero vector)")
                             all_failed_ids.extend(emb_failed_ids)
                         stats["nodes"] += success_count
                         stats["files"] += 1
                     except Exception as write_ex:
                         print(f"   ⚠️  LanceDB 写入失败（SQLite 已保存）: {file_path}, 错误: {write_ex}")
                         node_ids = [n.node_id for n in all_nodes]
-                        doc_chunk_service.mark_chunks_failed(node_ids)
+                        doc_chunk_service.mark_chunks_failed(node_ids, error=f"LanceDB write failed: {write_ex}")
                         continue
 
                     if progress:

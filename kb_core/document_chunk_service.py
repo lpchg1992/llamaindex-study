@@ -314,12 +314,12 @@ class DocumentChunkService:
             logger.error(f"[{self.kb_id}] update_document_stats failed: {e}")
             return False
 
-    def mark_chunks_failed(self, chunk_ids: List[str]) -> int:
+    def mark_chunks_failed(self, chunk_ids: List[str], error: str = None) -> int:
         if not chunk_ids:
             return 0
         try:
             chunk_db = self._get_chunk_db()
-            return chunk_db.mark_failed_bulk(chunk_ids)
+            return chunk_db.mark_failed_bulk(chunk_ids, error=error)
         except Exception as e:
             logger.error(f"[{self.kb_id}] mark_chunks_failed failed: {e}")
             return 0

@@ -466,11 +466,11 @@ class ObsidianImporter:
                 if written_ids:
                     doc_chunk_service.mark_chunks_success(written_ids)
                 if emb_failed_ids:
-                    doc_chunk_service.mark_chunks_failed(emb_failed_ids)
+                    doc_chunk_service.mark_chunks_failed(emb_failed_ids, error="embedding unavailable (missing or zero vector)")
             except Exception as write_ex:
                 logger.warning(f"LanceDB 写入失败（SQLite 已保存）: {file_path}, 错误: {write_ex}")
                 node_ids = [n.node_id for n in nodes]
-                doc_chunk_service.mark_chunks_failed(node_ids)
+                doc_chunk_service.mark_chunks_failed(node_ids, error=f"LanceDB write failed: {write_ex}")
                 continue
 
             stats["nodes"] += len(nodes)
@@ -581,11 +581,11 @@ class ObsidianImporter:
                         if written_ids:
                             doc_chunk_service.mark_chunks_success(written_ids)
                         if emb_failed_ids:
-                            doc_chunk_service.mark_chunks_failed(emb_failed_ids)
+                            doc_chunk_service.mark_chunks_failed(emb_failed_ids, error="embedding unavailable (missing or zero vector)")
                     except Exception as e:
                         logger.warning(f"LanceDB 写入失败: {pdf_path}, 错误: {e}")
                         node_ids = [n.node_id for n in all_file_nodes]
-                        doc_chunk_service.mark_chunks_failed(node_ids)
+                        doc_chunk_service.mark_chunks_failed(node_ids, error=f"LanceDB write failed: {e}")
                         continue
 
                     stats["nodes"] += len(all_file_nodes)

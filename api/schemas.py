@@ -393,6 +393,7 @@ class ChunkResponse(BaseModel):
     hierarchy_level: int
     metadata: Dict[str, Any]
     embedding_generated: bool
+    embedding_error: Optional[str] = None
     created_at: float
     updated_at: float
 

@@ -554,7 +554,7 @@ class ZoteroImporter:
                         if written_ids:
                             doc_chunk_service.mark_chunks_success(written_ids)
                         if emb_failed_ids:
-                            doc_chunk_service.mark_chunks_failed(emb_failed_ids)
+                            doc_chunk_service.mark_chunks_failed(emb_failed_ids, error="embedding unavailable (missing or zero vector)")
                         all_failed_ids = list(set(all_failed_ids + failed_ids + emb_failed_ids))
                     except Exception as e:
                         logger.warning(
@@ -562,7 +562,7 @@ class ZoteroImporter:
                         )
                         success_count = 0
                         error_reason = f"LanceDB write failed for zotero_meta: {e}"
-                        doc_chunk_service.mark_chunks_failed(meta_node_ids)
+                        doc_chunk_service.mark_chunks_failed(meta_node_ids, error=error_reason)
                         all_failed_ids = list(set(all_failed_ids + meta_node_ids))
                     total_nodes += len(nodes)
                     if success_count > 0:
@@ -733,7 +733,7 @@ class ZoteroImporter:
                                         )
                                     )
                                     if b_failed:
-                                        doc_chunk_service.mark_chunks_failed(b_failed)
+                                        doc_chunk_service.mark_chunks_failed(b_failed, error="embedding unavailable (missing or zero vector)")
                                         all_failed_ids = list(set(all_failed_ids + b_failed))
                                     if b_success < len(batch_nodes):
                                         logger.warning(
@@ -748,7 +748,7 @@ class ZoteroImporter:
                                 except Exception as e:
                                     logger.warning(f"LanceDB 批次写入失败: {file_path}, 错误: {e}")
                                     failed_node_ids = list(set(failed_ids + [n.node_id for n in batch_nodes]))
-                                    doc_chunk_service.mark_chunks_failed(failed_node_ids)
+                                    doc_chunk_service.mark_chunks_failed(failed_node_ids, error=f"LanceDB batch write failed: {e}")
                                     all_failed_ids = list(set(all_failed_ids + failed_node_ids))
                                     total_nodes += len(batch_nodes)
             else:

@@ -523,14 +523,19 @@ class TaskExecutor:
                         results[idx] = result
 
                     failed_ids = []
+                    failed_errors: Dict[str, List[str]] = {}
                     for j in range(len(results)):
                         result_item = results[j]
                         if result_item is None:
-                            failed_ids.append(nodes[j].node_id)
+                            fid = nodes[j].node_id
+                            failed_ids.append(fid)
+                            failed_errors.setdefault("embedding failed: no result", []).append(fid)
                             continue
                         _, embedding, _ = result_item
                         if embedding is None or all(v == 0.0 for v in embedding):
-                            failed_ids.append(nodes[j].node_id)
+                            fid = nodes[j].node_id
+                            failed_ids.append(fid)
+                            failed_errors.setdefault("embedding returned zero vector", []).append(fid)
                             continue
                         nodes[j].embedding = embedding
 
@@ -560,9 +565,12 @@ class TaskExecutor:
                         if written_ids:
                             doc_chunk_svc.mark_chunks_success(written_ids)
                         if failed_ids:
-                            doc_chunk_svc.mark_chunks_failed(failed_ids)
+                            for reason, ids in failed_errors.items():
+                                doc_chunk_svc.mark_chunks_failed(ids, error=reason)
                     except Exception as write_ex:
                         logger.warning(f"LanceDB 写入失败（SQLite 已保存）: {rel_path}, 错误: {write_ex}")
+                        if failed_ids:
+                            doc_chunk_svc.mark_chunks_failed(failed_ids, error=f"LanceDB write failed: {write_ex}")
                         continue
 
                     processed_chunks += success_count
@@ -1096,6 +1104,7 @@ class TaskExecutor:
             embedding_results = await processor.process_batch(texts)
 
             batch_failed_ids = []
+            batch_failed_errors: Dict[str, List[str]] = {}
             for idx, (ep_name, embedding, error) in enumerate(embedding_results):
                 chunk_id = chunk_ids[idx]
                 text_len = len(texts[idx])
@@ -1121,15 +1130,17 @@ class TaskExecutor:
                     stats["success"] += 1
 
                 except Exception as e:
-                    logger.warning(f"Re-embed chunk {chunk_id} failed: {e}")
+                    reason = str(e)[:500]
+                    logger.warning(f"Re-embed chunk {chunk_id} failed: {reason}")
                     batch_failed_ids.append(chunk_id)
+                    batch_failed_errors.setdefault(reason, []).append(chunk_id)
                     stats["skipped"] += 1
 
             failed_ids.extend(batch_failed_ids)
             processed += len(chunk_batch)
 
-            if batch_failed_ids:
-                chunk_db.mark_failed_bulk(batch_failed_ids)
+            for reason, ids in batch_failed_errors.items():
+                chunk_db.mark_failed_bulk(ids, error=reason)
 
             self.queue.update_file_progress(
                 task_id, file_id,
@@ -1693,7 +1704,7 @@ class TaskExecutor:
                                     processor._upsert_nodes(lance_store, nodes)
                                 )
                                 if emb_failed_ids:
-                                    doc_chunk_svc.mark_chunks_failed(emb_failed_ids)
+                                    doc_chunk_svc.mark_chunks_failed(emb_failed_ids, error="embedding unavailable (missing or zero vector)")
                                 if written_ids:
                                     doc_chunk_svc.mark_chunks_success(written_ids)
                             except Exception as write_ex:
@@ -1702,7 +1713,7 @@ class TaskExecutor:
                                 )
                                 error_reason = f"LanceDB write failed: {write_ex}"
                                 node_ids = [n.node_id for n in nodes]
-                                doc_chunk_svc.mark_chunks_failed(node_ids)
+                                doc_chunk_svc.mark_chunks_failed(node_ids, error=error_reason)
                                 self.queue.update_file_progress(
                                     task.task_id,
                                     file_id,

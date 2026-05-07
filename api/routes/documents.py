@@ -195,7 +195,7 @@ def reembed_chunk(kb_id: str, chunk_id: str):
             "message": "embedding 已重新生成",
         }
     except Exception as e:
-        chunk_db.mark_failed_bulk([chunk_id])
+        chunk_db.mark_failed_bulk([chunk_id], error=f"single chunk re-embed failed: {e}")
         return {"status": "error", "chunk_id": chunk_id, "message": str(e)}
 
 
