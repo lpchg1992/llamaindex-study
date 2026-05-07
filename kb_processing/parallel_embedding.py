@@ -134,7 +134,7 @@ class ParallelEmbeddingProcessor:
         # 健康检查任务
         self._health_check_task: Optional[asyncio.Task] = None
         self._health_check_interval: float = 30.0  # 每30秒检查一次
-        self._failure_threshold: int = 8  # 连续8次失败才标记为不健康
+        self._failure_threshold: int = 15  # 连续15次失败才标记为不健康（高度信任 Ollama）
 
     def start_health_checks(self) -> None:
         """启动持续健康检查循环（在有事件循环的环境中调用）"""
@@ -526,6 +526,20 @@ class ParallelEmbeddingProcessor:
             return call_sf()
 
         if not ep.is_healthy:
+            try:
+                embedding = self._call_ollama_embed(ep, text)
+                if embedding and not all(v == 0.0 for v in embedding):
+                    with self._lock:
+                        ep.is_healthy = True
+                        ep.last_error = None
+                        self._consecutive_failures[ep.name] = 0
+                    logger.info(
+                        f"[{ep.name}] 恢复健康 (曾是 unhealthy，本次成功)"
+                    )
+                    self._record_embedding(ep, len(text) // 4, False)
+                    return (ep.name, embedding, None)
+            except Exception:
+                pass
             return call_sf()
 
         try:
@@ -759,7 +773,7 @@ class ParallelEmbeddingProcessor:
         for ep in self.endpoints:
             if not ep.is_healthy or ep.url == "siliconflow://":
                 continue
-            for _ in range(2):
+            for _ in range(4):
                 t = threading.Thread(target=worker, args=(ep,), daemon=True)
                 t.start()
                 threads.append(t)

@@ -16,9 +16,9 @@ from typing import Any, Callable, Dict, Optional
 logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT = 300.0
-DEFAULT_MAX_CONCURRENT = 2
-CIRCUIT_BREAKER_FAILURE_THRESHOLD = 20
-CIRCUIT_BREAKER_RECOVERY_TIMEOUT = 15.0
+DEFAULT_MAX_CONCURRENT = 8
+CIRCUIT_BREAKER_FAILURE_THRESHOLD = 30
+CIRCUIT_BREAKER_RECOVERY_TIMEOUT = 10.0
 
 
 def extract_llm_tokens(response: Any) -> tuple[int, int]:
@@ -147,7 +147,7 @@ class _PerURLQueue:
         self._semaphore.release()
 
     def call_with_queue(self, func: Callable[..., Any], *args, **kwargs) -> Any:
-        self.acquire()
+        # Semaphore already acquired by OllamaRequestQueue.call_with_queue
         try:
             future = self._executor.submit(func, *args, **kwargs)
             return future.result(timeout=self._timeout)
@@ -155,8 +155,6 @@ class _PerURLQueue:
             with self._request_lock:
                 self._timeouts += 1
             raise TimeoutError(f"Ollama request timed out after {self._timeout}s")
-        finally:
-            self.release()
 
     @property
     def stats(self) -> dict:
