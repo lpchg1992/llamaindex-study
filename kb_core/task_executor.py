@@ -779,14 +779,23 @@ class TaskExecutor:
                     )
                     item_options = item.get("options", {})
                     cancel_event = self._cancel_events.get(task_id)
+                    loop = asyncio.get_running_loop()
 
                     def make_progress_callback(fid: str):
+                        last_notified = [0]  # mutable counter for closure
                         def cb(processed: int, total: int):
                             self.queue.update_file_progress(
                                 task_id, fid,
                                 total_chunks=total,
                                 processed_chunks=processed,
                             )
+                            if processed - last_notified[0] >= 10 or processed == total:
+                                last_notified[0] = processed
+                                loop.call_soon_threadsafe(
+                                    lambda: asyncio.ensure_future(
+                                        self._notify_progress(task_id)
+                                    )
+                                )
                         return cb
 
                     result = ZoteroService.import_item(
