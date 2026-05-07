@@ -629,7 +629,7 @@ class DocumentProcessor:
     def _save_md_to_local(
         self, md_content: str, pdf_path: str, mineru_truncated: bool = False
     ) -> None:
-        """保存 md 内容到本地"""
+        """保存 md 内容和元数据到本地"""
         from rag.config import get_settings
         md_save_dir = Path(get_settings().llamaindex_storage_base) / "mddocs"
         md_save_dir.mkdir(parents=True, exist_ok=True)
@@ -640,9 +640,12 @@ class DocumentProcessor:
         except Exception as e:
             print(f"   ⚠️  保存 md 失败: {e}")
 
-        if mineru_truncated:
+        existing = ConversionMetadata.load(md_file_path)
+        if existing and not mineru_truncated:
+            existing.save(md_file_path)
+        else:
             meta = ConversionMetadata(
-                is_truncated=False,
+                is_truncated=mineru_truncated,
                 source_pdf=str(pdf_path),
             )
             meta.save(md_file_path)
@@ -650,17 +653,9 @@ class DocumentProcessor:
     def _convert_pdf_mineru(
         self, pdf_path: str, api_key: str, pipeline_id: str, timeout: int = None
     ) -> tuple:
-        """使用 MinerU 精准解析 API 转换 PDF
-
-        Args:
-            pdf_path: PDF 文件路径
-            api_key: MinerU API Key
-            pipeline_id: MinerU Pipeline ID (用于兼容旧接口，此参数不再使用)
-            timeout: 超时时间
-
-        Returns:
-            Markdown 内容，失败返回 None
-        """
+        """使用 MinerU 精准解析 API 转换 PDF"""
+        from rag.config import get_settings
+        mddocs_base = Path(get_settings().llamaindex_storage_base) / "mddocs"
         try:
             import io
             import zipfile
@@ -748,10 +743,7 @@ class DocumentProcessor:
 
                                             if "Output truncated" in md_content:
                                                 md_file_path = (
-                                                    Path(
-                                                        "/Volumes/online/llamaindex/mddocs"
-                                                    )
-                                                    / f"{Path(pdf_path).stem}.md"
+                                                    mddocs_base / f"{Path(pdf_path).stem}.md"
                                                 )
                                                 meta = ConversionMetadata(
                                                     is_truncated=True,
@@ -765,9 +757,7 @@ class DocumentProcessor:
                                                 )
                                                 return (None, True)
 
-                                            images_dir = Path(
-                                                "/Volumes/online/llamaindex/mddocs/images"
-                                            )
+                                            images_dir = mddocs_base / "images"
                                             for name in zf.namelist():
                                                 if name.startswith(
                                                     "images/"
@@ -781,10 +771,7 @@ class DocumentProcessor:
                                                     img_path.write_bytes(img_data)
 
                                             md_file_path = (
-                                                Path(
-                                                    "/Volumes/online/llamaindex/mddocs"
-                                                )
-                                                / f"{Path(pdf_path).stem}.md"
+                                                mddocs_base / f"{Path(pdf_path).stem}.md"
                                             )
                                             meta = ConversionMetadata(
                                                 mineru_batch_id=batch_id,
