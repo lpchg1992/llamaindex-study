@@ -467,13 +467,14 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
             if (zoteroMdCacheIds.has(item.item_id)) {
               options.has_md_cache = true
             }
-            // 强制 OCR 时，设置 is_scanned=true
+            // 强制 OCR：删除旧缓存，重新 OCR 替换
             if (zoteroForceOcrIds.has(item.item_id)) {
               options.force_ocr = true
               options.is_scanned = true
             }
-            // 如果没有 MD 缓存且被检测为扫描件，设置 is_scanned
-            if (!zoteroMdCacheIds.has(item.item_id) && (zoteroManualScannedIds.has(item.item_id) || zoteroDetectedScannedIds.has(item.item_id))) {
+            // 扫描开关打开时（系统检测 或 用户手动开启），标记为扫描件
+            // 后端根据 is_scanned + has_md_cache 决定使用 MD 缓存还是运行 OCR
+            if (zoteroManualScannedIds.has(item.item_id) || zoteroDetectedScannedIds.has(item.item_id)) {
               options.is_scanned = true
             }
             if (Object.keys(options).length > 0) {
