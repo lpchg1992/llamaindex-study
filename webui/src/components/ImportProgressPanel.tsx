@@ -37,8 +37,16 @@ export function ImportProgressPanel({
   useEffect(() => {
     if (!taskId) return
 
-    const wsUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.hostname}:${import.meta.env.VITE_API_PORT || '37241'}/ws/tasks`
-    
+    let wsUrl: string
+    if (import.meta.env.VITE_API_BASE) {
+      const base = import.meta.env.VITE_API_BASE
+      const protocol = base.startsWith('https') ? 'wss:' : 'ws:'
+      const host = base.replace(/^https?:\/\//, '')
+      wsUrl = `${protocol}//${host}/ws/tasks`
+    } else {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      wsUrl = `${protocol}//${window.location.host}/ws/tasks`
+    }
     const ws = new WebSocket(wsUrl)
     
     ws.onmessage = (event) => {
@@ -103,22 +111,26 @@ export function ImportProgressPanel({
   }
 
   const getProgressBar = (doc: DocumentProgress) => {
-    if (doc.chunksTotal === 0) return null
+    if (doc.chunksTotal === 0 && doc.status !== 'processing') return null
 
-    const progress = (doc.chunksProcessed / doc.chunksTotal) * 100
+    const progress = doc.chunksTotal > 0 ? (doc.chunksProcessed / doc.chunksTotal) * 100 : 0
     return (
       <div className="mt-1">
         <div className="h-1.5 bg-muted rounded-full overflow-hidden">
-          <div
-            className={cn(
-              'h-full transition-all duration-300',
-              doc.status === 'failed' ? 'bg-destructive' : 'bg-primary'
-            )}
-            style={{ width: `${progress}%` }}
-          />
+          {doc.chunksTotal > 0 ? (
+            <div
+              className={cn(
+                'h-full transition-all duration-300',
+                doc.status === 'failed' ? 'bg-destructive' : 'bg-primary'
+              )}
+              style={{ width: `${progress}%` }}
+            />
+          ) : (
+            <div className="h-full bg-primary animate-pulse rounded-full" style={{ width: '60%' }} />
+          )}
         </div>
         <p className="text-xs text-muted-foreground mt-0.5">
-          {doc.chunksProcessed}/{doc.chunksTotal} chunks
+          {doc.chunksTotal > 0 ? `${doc.chunksProcessed}/${doc.chunksTotal} chunks` : '处理中...'}
         </p>
       </div>
     )
