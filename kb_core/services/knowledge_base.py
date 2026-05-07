@@ -434,6 +434,13 @@ class KnowledgeBaseService:
 
         init_progress_db().reset(kb_id)
 
+        # 清理同步状态（去重记录）
+        try:
+            from ..database import init_sync_db
+            init_sync_db().clear(kb_id)
+        except Exception as e:
+            logger.debug(f"清理同步状态失败（可忽略）: {e}")
+
         return True
 
 # =============================================================================
