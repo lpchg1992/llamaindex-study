@@ -480,21 +480,28 @@ class ZoteroImporter:
                 embeddings_generated = False
                 failed_ids = []
                 error_reason = None
+                MAX_TEXT_LEN = 8000
                 for i, node in enumerate(nodes):
+                    text = texts[i]
+                    text_len = len(text)
+                    if text_len > MAX_TEXT_LEN:
+                        text = text[:MAX_TEXT_LEN]
+                        logger.warning(
+                            f"[{item.title}] 标注/笔记文本过长被截断 (node={node.node_id[:8]}, orig_len={text_len}, truncated_to={MAX_TEXT_LEN})"
+                        )
                     try:
                         ep = embed_model._get_best_endpoint()
                         ep_name, embedding, error = (
-                            embed_model._get_embedding_with_retry(texts[i], ep)
+                            embed_model._get_embedding_with_retry(text, ep)
                         )
-                        text_len = len(texts[i])
                         if error:
                             logger.warning(
                                 f"[{item.title}] Embedding failed (endpoint={ep_name}, node={node.node_id[:8]}, text_len={text_len}): {error}"
                             )
                             failed_ids.append(node.node_id)
-                        elif all(v == 0.0 for v in embedding):
+                        elif embedding is None or all(v == 0.0 for v in embedding):
                             logger.warning(
-                                f"[{item.title}] Embedding returned zero vector (endpoint={ep_name}, node={node.node_id[:8]}, text_len={text_len})"
+                                f"[{item.title}] Embedding returned {'None' if embedding is None else 'zero vector'} (endpoint={ep_name}, node={node.node_id[:8]}, text_len={text_len})"
                             )
                             failed_ids.append(node.node_id)
                         else:
@@ -639,21 +646,28 @@ class ZoteroImporter:
                     texts = [node.get_content() for node in nodes]
                     embeddings_generated = False
                     failed_ids = []
+                    MAX_TEXT_LEN = 8000
                     for i, node in enumerate(nodes):
+                        text = texts[i]
+                        text_len = len(text)
+                        if text_len > MAX_TEXT_LEN:
+                            text = text[:MAX_TEXT_LEN]
+                            logger.warning(
+                                f"[{item.title}] 文本过长被截断 (file={file_path.name}, node={node.node_id[:8]}, orig_len={text_len}, truncated_to={MAX_TEXT_LEN})"
+                            )
                         try:
                             ep = embed_model._get_best_endpoint()
                             ep_name, embedding, error = (
-                                embed_model._get_embedding_with_retry(texts[i], ep)
+                                embed_model._get_embedding_with_retry(text, ep)
                             )
-                            text_len = len(texts[i])
                             if error:
                                 logger.warning(
                                     f"[{item.title}] Embedding failed (file={file_path.name}, endpoint={ep_name}, node={node.node_id[:8]}, text_len={text_len}): {error}"
                                 )
                                 failed_ids.append(node.node_id)
-                            elif all(v == 0.0 for v in embedding):
+                            elif embedding is None or all(v == 0.0 for v in embedding):
                                 logger.warning(
-                                    f"[{item.title}] Embedding returned zero vector (file={file_path.name}, endpoint={ep_name}, node={node.node_id[:8]}, text_len={text_len})"
+                                    f"[{item.title}] Embedding returned {'None' if embedding is None else 'zero vector'} (file={file_path.name}, endpoint={ep_name}, node={node.node_id[:8]}, text_len={text_len})"
                                 )
                                 failed_ids.append(node.node_id)
                             else:

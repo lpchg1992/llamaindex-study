@@ -284,6 +284,7 @@ class DocumentProcessor:
             return (0, skipped, failed_ids)
 
         df = pa.Table.from_pylist(data)
+        written_count = len(data)  # fallback
 
         table = None
         try:
@@ -312,13 +313,15 @@ class DocumentProcessor:
                                 )
                         except Exception as delete_err:
                             add_logger.warning(f"删除旧节点失败: {delete_err}")
-                (table.merge_insert("id").when_not_matched_insert_all().execute(df))
-                add_logger.debug(f"UPSERT {len(data)} 节点 (按 doc_id 去重)")
+                merge_result = table.merge_insert("id").when_not_matched_insert_all().execute(df)
+                written_count = getattr(merge_result, "num_inserted_rows", len(data))
+                add_logger.debug(f"UPSERT {len(data)} 节点, 实际写入 {written_count} (按 doc_id 去重)")
             except Exception as e:
                 add_logger.warning(f"UPSERT 失败，回退到追加写入: {e}")
                 table.add(data)
+                written_count = len(data)
 
-        return (len(data), skipped, failed_ids)
+        return (written_count, skipped, failed_ids)
 
     def _get_valid_metadata_keys(self, lance_store) -> set:
         try:
