@@ -716,7 +716,7 @@ class ParallelEmbeddingProcessor:
 
         threads = []
         for ep in self.endpoints:
-            if not ep.is_healthy:
+            if not ep.is_healthy or ep.url == "siliconflow://":
                 continue
             for _ in range(2):
                 t = threading.Thread(target=worker, args=(ep,), daemon=True)
