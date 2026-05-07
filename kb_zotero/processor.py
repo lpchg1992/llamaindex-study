@@ -664,6 +664,10 @@ class ZoteroImporter:
                         logger.warning(f"文档记录创建失败: {file_path}")
                         continue
 
+                    # 分块完成，立即通知 total_chunks
+                    if progress_callback:
+                        progress_callback(0, len(nodes))
+
                     # Phase 2: 逐个生成 embedding（带进度回调）
                     total = len(nodes)
                     texts = [node.get_content() for node in nodes]
