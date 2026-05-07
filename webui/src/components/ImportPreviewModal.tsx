@@ -31,7 +31,7 @@ interface ImportPreviewModalProps {
   totalItems: number
   eligibleItems: number
   ineligibleItems: number
-  onConfirm: (selectedItems: ZoteroPreviewItem[], forceOcrIds: number[], manualScannedIds: number[]) => void
+  onConfirm: (selectedItems: ZoteroPreviewItem[], forceOcrIds: number[], manualScannedIds: number[], disabledScannedIds: number[]) => void
   onRefresh?: () => void
   isLoading?: boolean
 }
@@ -102,6 +102,7 @@ export function ImportPreviewModal({
   })
   const [forceOcrIds, setForceOcrIds] = useState<Set<number>>(new Set())
   const [manualScannedOverride, setManualScannedOverride] = useState<Set<number>>(new Set())
+  const [manualScannedDisabled, setManualScannedDisabled] = useState<Set<number>>(new Set())
 
   useMemo(() => {
     setSelectedIds(new Set(previewData.filter((item) => item.is_eligible && !item.is_duplicate).map((item) => item.item_id)))
@@ -141,6 +142,15 @@ export function ImportPreviewModal({
       }
       return next
     })
+    setManualScannedDisabled((prev) => {
+      const next = new Set(prev)
+      if (checked) {
+        next.delete(itemId)
+      } else {
+        next.add(itemId)
+      }
+      return next
+    })
   }
 
   const toggleAll = (checked: boolean) => {
@@ -161,7 +171,7 @@ export function ImportPreviewModal({
   }, [previewData, selectedIds])
 
   const handleConfirm = () => {
-    onConfirm(selectedItems, Array.from(forceOcrIds), Array.from(manualScannedOverride))
+    onConfirm(selectedItems, Array.from(forceOcrIds), Array.from(manualScannedOverride), Array.from(manualScannedDisabled))
     onOpenChange(false)
   }
 
@@ -298,13 +308,13 @@ export function ImportPreviewModal({
                       <TableCell>
                         <StatusBadges 
                           item={item} 
-                          isManualScanned={manualScannedOverride.has(item.item_id) ? true : item.is_scanned_pdf}
+                          isManualScanned={manualScannedDisabled.has(item.item_id) ? false : (manualScannedOverride.has(item.item_id) ? true : item.is_scanned_pdf)}
                           onToggleScanned={toggleManualScanned}
                         />
                       </TableCell>
                       <TableCell className="w-24">
                         {(() => {
-                          const isScanned = manualScannedOverride.has(item.item_id) ? true : item.is_scanned_pdf
+                          const isScanned = manualScannedDisabled.has(item.item_id) ? false : (manualScannedOverride.has(item.item_id) ? true : item.is_scanned_pdf)
                           if (item.is_eligible && !item.is_duplicate && isScanned) {
                             return (
                               <Checkbox

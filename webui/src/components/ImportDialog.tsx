@@ -239,7 +239,7 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
     }
   }
 
-  const handlePreviewConfirm = (selectedPreviewItems: ZoteroPreviewItem[], forceOcrIds: number[], manualScannedIds: number[]) => {
+  const handlePreviewConfirm = (selectedPreviewItems: ZoteroPreviewItem[], forceOcrIds: number[], manualScannedIds: number[], disabledScannedIds: number[] = []) => {
     const selectedItemIds = new Set(selectedPreviewItems.map((item) => item.item_id))
 
     const confirmedItems = zoteroSelectedItems
@@ -256,7 +256,10 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
 
     setZoteroManualScannedIds(new Set(manualScannedIds))
 
-    const detectedScanned = selectedPreviewItems.filter(item => item.is_scanned_pdf).map(item => item.item_id)
+    const disabledSet = new Set(disabledScannedIds)
+    const detectedScanned = selectedPreviewItems
+      .filter(item => item.is_scanned_pdf && !disabledSet.has(item.item_id))
+      .map(item => item.item_id)
     setZoteroDetectedScannedIds(new Set(detectedScanned))
 
     const mdCacheIds = selectedPreviewItems.filter(item => item.has_md_cache).map(item => item.item_id)
