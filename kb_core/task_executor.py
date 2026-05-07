@@ -782,14 +782,14 @@ class TaskExecutor:
                     loop = asyncio.get_running_loop()
 
                     def make_progress_callback(fid: str):
-                        last_notified = [0]  # mutable counter for closure
+                        last_notified = [-1]  # -1 ensures first call always notifies
                         def cb(processed: int, total: int):
                             self.queue.update_file_progress(
                                 task_id, fid,
                                 total_chunks=total,
                                 processed_chunks=processed,
                             )
-                            if processed - last_notified[0] >= 10 or processed == total:
+                            if processed - last_notified[0] >= 10 or processed == total or processed == 0:
                                 last_notified[0] = processed
                                 loop.call_soon_threadsafe(
                                     lambda: asyncio.ensure_future(
