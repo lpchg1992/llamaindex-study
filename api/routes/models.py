@@ -157,6 +157,39 @@ def create_model(req: ModelCreateRequest):
     return ModelInfo(**model_db.get(req.id))
 
 
+@router.get("/models/{model_id:path}", response_model=ModelInfo)
+def get_model(model_id: str):
+    from rag.config import get_model_registry
+
+    registry = get_model_registry()
+    model = registry.get_model(model_id)
+    if not model:
+        raise HTTPException(status_code=404, detail=f"模型 {model_id} 不存在")
+    return ModelInfo(**model)
+
+
+@router.delete("/models/{model_id:path}")
+def delete_model(model_id: str):
+    from kb_core.database import init_model_db
+    from rag.config import get_model_registry
+    from kb_processing.parallel_embedding import get_parallel_processor
+    from rag.logger import get_logger
+
+    logger = get_logger(__name__)
+    db = init_model_db()
+    if not db.get(model_id):
+        raise HTTPException(status_code=404, detail=f"模型 {model_id} 不存在")
+    db.delete(model_id)
+    get_model_registry().reload()
+    try:
+        get_parallel_processor().refresh_endpoints()
+    except Exception as e:
+        logger.error(
+            f"refresh_endpoints() failed after model delete: {e}", exc_info=True
+        )
+    return {"status": "deleted", "model_id": model_id}
+
+
 @router.put("/models/{model_id:path}/default")
 def set_default_model(model_id: str):
     from kb_core.database import init_model_db
@@ -181,3 +214,31 @@ def set_default_model(model_id: str):
 
 @router.put("/models/{model_id:path}", response_model=ModelInfo)
 def update_model(model_id: str, req: ModelCreateRequest):
+    from kb_core.database import init_model_db
+    from rag.config import get_model_registry
+    from kb_processing.parallel_embedding import get_parallel_processor
+    from rag.logger import get_logger
+
+    logger = get_logger(__name__)
+    db = init_model_db()
+    if not db.get(model_id):
+        raise HTTPException(status_code=404, detail=f"模型 {model_id} 不存在")
+    db.upsert(
+        model_id=model_id,
+        vendor_id=req.vendor_id,
+        name=req.name or model_id.split("/")[-1],
+        type=req.type,
+        is_active=req.is_active,
+        is_default=req.is_default,
+        config=req.config,
+    )
+    if req.is_default:
+        db.set_default(model_id)
+    get_model_registry().reload()
+    try:
+        get_parallel_processor().refresh_endpoints()
+    except Exception as e:
+        logger.error(
+            f"refresh_endpoints() failed after model update: {e}", exc_info=True
+        )
+    return ModelInfo(**db.get(model_id))
