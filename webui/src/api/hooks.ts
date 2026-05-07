@@ -741,7 +741,7 @@ export function useDeleteVendor() {
   const queryClient = useQueryClient()
   return useMutation<{ status: string; vendor_id: string }, Error, string>({
     mutationFn: async (vendorId) => {
-      const { data } = await apiClient.delete(`${API_BASE}/vendors/${encodeURIComponent(vendorId)}`)
+      const { data } = await apiClient.delete(`${API_BASE}/vendors/${vendorId}`)
       return data
     },
     onSuccess: async () => {
@@ -756,7 +756,7 @@ export function useUpdateVendor() {
   const queryClient = useQueryClient()
   return useMutation<VendorInfo, Error, VendorCreateRequest>({
     mutationFn: async (req) => {
-      const { data } = await apiClient.put<VendorInfo>(`${API_BASE}/vendors/${encodeURIComponent(req.id)}`, req)
+      const { data } = await apiClient.put<VendorInfo>(`${API_BASE}/vendors/${req.id}`, req)
       return data
     },
     onSuccess: async () => {
@@ -793,7 +793,7 @@ export function useDeleteModel() {
   const queryClient = useQueryClient()
   return useMutation<{ status: string; model_id: string }, Error, string>({
     mutationFn: async (modelId) => {
-      const { data } = await apiClient.delete(`${API_BASE}/models/${encodeURIComponent(modelId)}`)
+      const { data } = await apiClient.delete(`${API_BASE}/models/${modelId}`)
       return data
     },
     onSuccess: async () => {
@@ -815,7 +815,7 @@ export function useUpdateModel() {
   const queryClient = useQueryClient()
   return useMutation<ModelInfo, Error, { modelId: string; data: ModelCreateRequest }>({
     mutationFn: async ({ modelId, data }) => {
-      const { data: result } = await apiClient.put<ModelInfo>(`${API_BASE}/models/${encodeURIComponent(modelId)}`, data)
+      const { data: result } = await apiClient.put<ModelInfo>(`${API_BASE}/models/${modelId}`, data)
       return result
     },
     onSuccess: async () => {
@@ -837,7 +837,7 @@ export function useSetDefaultModel() {
   const queryClient = useQueryClient()
   return useMutation<{ status: string; model_id: string }, Error, string>({
     mutationFn: async (modelId) => {
-      const { data } = await apiClient.put(`${API_BASE}/models/${encodeURIComponent(modelId)}/default`)
+      const { data } = await apiClient.put(`${API_BASE}/models/${modelId}/default`)
       return data
     },
     onSuccess: async () => {
