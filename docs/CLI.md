@@ -346,7 +346,7 @@ uv run llamaindex-study ingest zotero <kb_id> \
 | `--collection-name` | 收藏夹名称（可能模糊匹配） |
 | `--rebuild` | **清空后重新导入**。启用后，会先删除知识库中的所有向量数据，再重新导入该收藏夹的文献 |
 | `--refresh-topics/--no-refresh-topics` | 导入后是否刷新 topics |
-| `--chunk-strategy` | 分块策略：`hierarchical`（默认）/ `sentence` / `semantic` |
+| `--chunk-strategy` | 分块策略：`hierarchical`（默认）/ `sentence` / `semantic` / `markdown` |
 | `--chunk-size` | 分块大小（默认: 1024） |
 | `--hierarchical-sizes` | hierarchical 模式分层大小，逗号分隔（默认: 2048,1024,512）|
 
@@ -1100,8 +1100,8 @@ CLI 工具读取以下环境变量（参见 `.env.example`）：
 
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
-| `SILICONFLOW_API_KEY` | 硅基流动 API Key | - |
-| `SILICONFLOW_MODEL` | LLM 模型 | `Pro/deepseek-ai/DeepSeek-V3.2` |
+| `SILICONFLOW_API_KEY` | 硅基流动 API Key（通过 CLI vendor add 管理） | - |
+| `SILICONFLOW_BASE_URL` | 硅基流动 API 地址 | `https://api.siliconflow.cn/v1` |
 | `OLLAMA_EMBED_MODEL` | Embedding 模型（需先添加供应商） | `bge-m3` |
 | `OBSIDIAN_VAULT_ROOT` | Obsidian Vault 根目录 | `~/Documents/Obsidian Vault` |
 | `PERSIST_DIR` | 向量存储目录（通用 KB） | `/Volumes/online/llamaindex` |

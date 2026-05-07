@@ -17,7 +17,7 @@
 A lone surrogate character (U+DC88 high surrogate) exists in the query string or in one of the retrieved document texts. Python's UTF-8 encoder cannot encode surrogate characters, which are only valid in UTF-16 encoding.
 
 **Likely Locations:**
-1. `kb_core/services.py` - `_query_across_kbs()` at line ~1320 - prompt construction with user query
+1. `kb_core/services/search.py` or `kb_core/services/query_router.py` — prompt construction with user query
 2. `rag/reranker.py` - `SiliconFlowReranker._postprocess_nodes()` - sends query/documents to API
 3. `rag/embedding_service.py` - `OllamaEmbeddingService._embed_single()` - sends text to Ollama
 

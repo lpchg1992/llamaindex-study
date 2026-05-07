@@ -110,9 +110,8 @@
 | 并行 Embedding | `kb_core/` | 自适应负载均衡 |
 | 写入队列 | `kb_core/` | LanceDB 写入队列 |
 | 文档管理 | `kb_core/` | 文档记录（documents 表） |
-| 文档处理 | `kb_processing/` | 统一文档解析 |
+| 文档处理 | `kb_processing/` | 统一文档解析 + 并行 Embedding |
 | Obsidian | `kb_obsidian/` | Obsidian 集成 |
-| 同步状态 | `kb_storage/` | 同步状态管理 |
 | Zotero | `kb_zotero/` | Zotero 集成 |
 | WebSocket | `kb_core/` | WebSocket 管理 |
 
@@ -213,9 +212,9 @@ curl -X POST "http://localhost:37241/query" \
 | `SILICONFLOW_MODEL` | `Pro/deepseek-ai/DeepSeek-V3.2` | LLM 模型 |
 | `OLLAMA_EMBED_MODEL` | `bge-m3` | Embedding 模型（需先添加供应商） |
 | `OBSIDIAN_VAULT_ROOT` | `~/Documents/Obsidian Vault` | Vault 目录 |
-| `PERSIST_DIR` | `/Volumes/online/llamaindex` | 向量存储目录 |
-| `ZOTERO_PERSIST_DIR` | `/Volumes/online/llamaindex/zotero` | Zotero 存储目录 |
-| `CHUNK_STRATEGY` | `hierarchical` | 分块策略：`hierarchical`/`sentence`/`semantic` |
+| `PERSIST_DIR` | `~/.llamaindex/storage` | 向量存储目录 |
+| `LLAMAINDEX_STORAGE_BASE` | `~/.llamaindex/storage` | 知识库存储根目录 |
+| `CHUNK_STRATEGY` | `hierarchical` | 分块策略：`hierarchical`/`sentence`/`semantic`/`markdown` |
 | `CHUNK_SIZE` | `1024` | 分块大小 |
 | `CHUNK_OVERLAP` | `100` | 分块重叠 |
 | `HIERARCHICAL_CHUNK_SIZES` | `2048,1024,512` | 层级分块各层大小 |
