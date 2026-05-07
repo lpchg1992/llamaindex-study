@@ -7,7 +7,7 @@ Embedding 工厂模块
 from __future__ import annotations
 
 import logging
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict, Any
 
 from llama_index.embeddings.ollama import OllamaEmbedding
 from llama_index.core import Settings as LlamaSettings
@@ -88,8 +88,11 @@ class OllamaEmbedder(OllamaEmbedding):
         max_retries: int = 5,
         initial_delay: float = 2.0,
         backoff_factor: float = 1.5,
+        client_kwargs: Optional[Dict[str, Any]] = None,
     ):
-        super().__init__(model_name=model_name, base_url=base_url)
+        if client_kwargs is None:
+            client_kwargs = {"proxy": None}
+        super().__init__(model_name=model_name, base_url=base_url, client_kwargs=client_kwargs)
         self._base_url = base_url
         self._model_id = model_id
         self._max_retries = max_retries
@@ -271,6 +274,7 @@ def configure_global_embed_model(
         max_retries=settings.max_retries,
         initial_delay=settings.retry_delay,
         backoff_factor=1.5,
+        client_kwargs={"proxy": None},
     )
     LlamaSettings.embed_model = embed_model
     LlamaSettings.chunk_size = chunk_size
@@ -304,11 +308,13 @@ def configure_embed_model_by_model_id(model_id: str) -> OllamaEmbedding:
             max_retries=settings.max_retries,
             initial_delay=settings.retry_delay,
             backoff_factor=1.5,
+            client_kwargs={"proxy": None},
         )
     else:
         embed_model = OllamaEmbedding(
             model_name=model_info["name"],
             base_url=base_url,
+            client_kwargs={"proxy": None},
         )
 
     LlamaSettings.embed_model = embed_model
