@@ -1049,9 +1049,9 @@ class TaskExecutor:
         )
 
         stats = {
-            "pending": len(pending_chunks),
-            "failed": len(failed_chunks),
-            "embedded": len(embedded_chunks),
+            "input_pending": len(pending_chunks),
+            "input_failed": len(failed_chunks),
+            "input_embedded": len(embedded_chunks),
             "success": 0,
             "skipped": 0,
         }
@@ -1170,14 +1170,12 @@ class TaskExecutor:
             result={
                 "kb_id": kb_id,
                 "processed": processed,
-                "pending": stats["pending"],
-                "failed": stats["failed"],
-                "embedded": stats["embedded"],
+                "input_pending": stats["input_pending"],
+                "input_failed": stats["input_failed"],
                 "success": stats["success"],
                 "skipped": skipped,
                 "remaining_pending": remaining_pending,
                 "remaining_failed": remaining_failed,
-                "remaining_embedded": remaining_embedded,
             },
             error=error_msg,
         )
