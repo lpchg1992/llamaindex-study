@@ -285,7 +285,7 @@ class DocumentProcessor:
             return (0, skipped, failed_ids)
 
         df = pa.Table.from_pylist(data)
-        written_count = len(data)  # fallback
+        written_count = 0
 
         table = None
         try:
@@ -297,6 +297,7 @@ class DocumentProcessor:
             lance_store._connection.create_table(
                 lance_store._table_name, df, mode="create"
             )
+            written_count = len(data)
             add_logger.debug(f"创建新表并插入 {len(data)} 节点")
         else:
             try:
@@ -315,12 +316,19 @@ class DocumentProcessor:
                         except Exception as delete_err:
                             add_logger.warning(f"删除旧节点失败: {delete_err}")
                 merge_result = table.merge_insert("id").when_not_matched_insert_all().execute(df)
-                written_count = getattr(merge_result, "num_inserted_rows", len(data))
+                written_count = getattr(merge_result, "num_inserted_rows", 0)
+                if written_count == 0 and len(data) > 0:
+                    add_logger.warning(f"merge_insert 返回 num_inserted_rows=0，回退到 len(data)")
+                    written_count = len(data)
                 add_logger.debug(f"UPSERT {len(data)} 节点, 实际写入 {written_count} (按 doc_id 去重)")
             except Exception as e:
                 add_logger.warning(f"UPSERT 失败，回退到追加写入: {e}")
-                table.add(data)
-                written_count = len(data)
+                try:
+                    table.add(data)
+                    written_count = len(data)
+                except Exception as add_e:
+                    add_logger.error(f"追加写入也失败: {add_e}")
+                    written_count = 0
 
         return (written_count, skipped, failed_ids)
 

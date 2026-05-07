@@ -736,13 +736,18 @@ class ZoteroImporter:
                                     if b_failed:
                                         doc_chunk_service.mark_chunks_failed(b_failed)
                                         all_failed_ids = list(set(all_failed_ids + b_failed))
-                                    b_success_ids = [n.node_id for n in batch_nodes if hasattr(n, "embedding") and n.embedding and not all(v == 0.0 for v in n.embedding)]
-                                    if b_success_ids:
-                                        doc_chunk_service.mark_chunks_success(b_success_ids)
-                                    total_nodes += len(batch_nodes)
-                                    all_nodes.extend([n for n in batch_nodes if hasattr(n, "embedding") and n.embedding and not all(v == 0.0 for v in n.embedding)])
-                                    if not processed_sources or processed_sources[-1] != str(file_path):
-                                        processed_sources.append(str(file_path))
+                                    if b_success < len(batch_nodes):
+                                        logger.warning(
+                                            f"LanceDB 批次部分写入: 预期 {len(batch_nodes)}, 实际 {b_success}"
+                                        )
+                                    if b_success > 0:
+                                        b_success_ids = [n.node_id for n in batch_nodes[:b_success] if hasattr(n, "embedding") and n.embedding and not all(v == 0.0 for v in n.embedding)]
+                                        if b_success_ids:
+                                            doc_chunk_service.mark_chunks_success(b_success_ids)
+                                        total_nodes += b_success
+                                        all_nodes.extend([n for n in batch_nodes[:b_success] if hasattr(n, "embedding") and n.embedding and not all(v == 0.0 for v in n.embedding)])
+                                        if not processed_sources or processed_sources[-1] != str(file_path):
+                                            processed_sources.append(str(file_path))
                                 except Exception as e:
                                     logger.warning(f"LanceDB 批次写入失败: {file_path}, 错误: {e}")
                                     failed_node_ids = list(set(failed_ids + [n.node_id for n in batch_nodes]))
