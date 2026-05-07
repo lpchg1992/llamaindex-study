@@ -583,9 +583,11 @@ class ConsistencyService:
 
     @staticmethod
     def check_and_mark_failed(kb_id: str) -> Dict[str, Any]:
-        """检查并标记向量生成失败的 chunks
+        """检查并修复 chunk 向量状态
         
-        检查所有 chunk 是否存在于 LanceDB，将不存在的标记为失败。
+        双向检查：
+        1. LanceDB 缺失 → 标记为 failed
+        2. LanceDB 存在但标记为 failed → 恢复为 success
         
         Args:
             kb_id: 知识库 ID
@@ -600,6 +602,11 @@ class ConsistencyService:
         return {
             "kb_id": kb_id,
             "marked_failed": result["marked_failed"],
+            "recovered_success": result["recovered_success"],
             "total_checked": result["total_checked"],
-            "message": f"已标记 {result['marked_failed']} 个 chunk 为失败（检查了 {result['total_checked']} 个）",
+            "message": (
+                f"已标记 {result['marked_failed']} 个为失败，"
+                f"恢复 {result['recovered_success']} 个为成功"
+                f"（检查了 {result['total_checked']} 个）"
+            ),
         }

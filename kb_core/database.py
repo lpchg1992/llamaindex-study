@@ -1549,7 +1549,9 @@ class ChunkDB:
     ) -> Dict[str, int]:
         """Check all chunks against LanceDB and mark those missing as failed.
 
-        Returns dict with marked count
+        Also recovers chunks marked as failed that actually have vectors in LanceDB.
+
+        Returns dict with marked_failed and recovered counts
         """
         from kb_storage.lance_crud import LanceCRUDService
         from .services import VectorStoreService
@@ -1569,15 +1571,24 @@ class ChunkDB:
             lance_ids = set()
 
         to_mark_failed = []
+        to_mark_success = []
         for chunk in chunks:
-            if chunk["embedding_generated"] != 2:
-                if chunk["id"] not in lance_ids:
-                    to_mark_failed.append(chunk["id"])
+            in_lance = chunk["id"] in lance_ids
+            if chunk["embedding_generated"] == 2 and in_lance:
+                to_mark_success.append(chunk["id"])
+            elif chunk["embedding_generated"] != 2 and not in_lance:
+                to_mark_failed.append(chunk["id"])
 
         if to_mark_failed:
             self.mark_failed_bulk(to_mark_failed, error="missing from LanceDB (consistency check)")
+        if to_mark_success:
+            self.mark_success_bulk(to_mark_success)
 
-        return {"marked_failed": len(to_mark_failed), "total_checked": len(chunks)}
+        return {
+            "marked_failed": len(to_mark_failed),
+            "recovered_success": len(to_mark_success),
+            "total_checked": len(chunks),
+        }
 
 
 def init_progress_db() -> ProgressDB:
