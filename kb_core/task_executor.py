@@ -978,7 +978,7 @@ class TaskExecutor:
         include_failed = params.get("include_failed", True)
         include_embedded = params.get("include_embedded", False)
         batch_size = params.get("batch_size", 100)
-        chunk_batch_size = params.get("chunk_batch_size", 500)
+        chunk_batch_size = params.get("chunk_batch_size", 50)
         limit = params.get("limit", 50000)
 
         logger.info(

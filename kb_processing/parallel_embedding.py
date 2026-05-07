@@ -134,7 +134,7 @@ class ParallelEmbeddingProcessor:
         # 健康检查任务
         self._health_check_task: Optional[asyncio.Task] = None
         self._health_check_interval: float = 30.0  # 每30秒检查一次
-        self._failure_threshold: int = 3  # 连续3次失败才标记为不健康
+        self._failure_threshold: int = 8  # 连续8次失败才标记为不健康
 
     def start_health_checks(self) -> None:
         """启动持续健康检查循环（在有事件循环的环境中调用）"""
