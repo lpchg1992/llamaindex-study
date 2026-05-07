@@ -1368,7 +1368,7 @@ class ChunkDB:
             result = session.execute(
                 update(ChunkModel)
                 .where(ChunkModel.id == chunk_id)
-                .values(embedding_generated=1, embedding_error=None, updated_at=time.time())
+                .values(embedding_generated=1, updated_at=time.time())
             )
             return (result.rowcount or 0) > 0
 
@@ -1379,7 +1379,7 @@ class ChunkDB:
             result = session.execute(
                 update(ChunkModel)
                 .where(ChunkModel.id.in_(chunk_ids))
-                .values(embedding_generated=1, embedding_error=None, updated_at=time.time())
+                .values(embedding_generated=1, updated_at=time.time())
             )
             return result.rowcount or 0
 
