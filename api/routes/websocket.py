@@ -2,27 +2,45 @@
 WebSocket and chat endpoints.
 """
 
-from fastapi import APIRouter
+from fastapi import APIRouter, WebSocket
 
 from api.schemas import ChatRequest, ChatResponse
+from rag.logger import get_logger
 
+logger = get_logger(__name__)
 router = APIRouter(tags=["websocket"])
+
+# Lazy-init ws_manager — deferred to avoid import-order issues
+_ws_manager = None
+
+
+def _get_ws_manager():
+    global _ws_manager
+    if _ws_manager is None:
+        from kb_core.websocket_manager import ws_manager
+        _ws_manager = ws_manager
+    return _ws_manager
 
 
 @router.websocket("/ws/tasks")
-async def ws_tasks(websocket):
-    from kb_core.websocket_manager import ws_manager
-    from rag.logger import get_logger
-
-    logger = get_logger(__name__)
-    await ws_manager.connect(websocket)
+async def ws_tasks(websocket: WebSocket):
+    try:
+        ws = _get_ws_manager()
+        await ws.connect(websocket)
+    except Exception as e:
+        logger.error(f"WebSocket 连接建立失败: {type(e).__name__}: {e}", exc_info=True)
+        try:
+            await websocket.close(code=1011)
+        except Exception:
+            pass
+        return
     try:
         while True:
             await websocket.receive_text()
     except Exception as e:
         logger.debug(f"WebSocket 连接关闭: {e}")
     finally:
-        await ws_manager.disconnect(websocket)
+        await ws.disconnect(websocket)
 
 
 @router.post("/chat/{kb_id}", response_model=ChatResponse)
