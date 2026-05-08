@@ -270,16 +270,16 @@ def configure_global_embed_model(
     """配置 LlamaIndex 全局 Embedding 模型"""
     settings = get_settings()
     model, base_url, model_id = _resolve_embedding_base_url(model, model_id, base_url)
-        import httpx
-        embed_model = OllamaEmbedder(
-            model_name=model,
-            base_url=base_url,
-            model_id=model_id,
-            max_retries=settings.max_retries,
-            initial_delay=settings.retry_delay,
-            backoff_factor=1.5,
-            client_kwargs={"proxy": None, "transport": httpx.HTTPTransport()},
-        )
+    import httpx
+    embed_model = OllamaEmbedder(
+        model_name=model,
+        base_url=base_url,
+        model_id=model_id,
+        max_retries=settings.max_retries,
+        initial_delay=settings.retry_delay,
+        backoff_factor=1.5,
+        client_kwargs={"proxy": None, "transport": httpx.HTTPTransport()},
+    )
     LlamaSettings.embed_model = embed_model
     LlamaSettings.chunk_size = chunk_size
     LlamaSettings.embed_batch_size = embed_batch_size
