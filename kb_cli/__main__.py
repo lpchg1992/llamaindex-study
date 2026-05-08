@@ -1803,23 +1803,6 @@ def _is_process_running(pid: int) -> bool:
         return False
 
 
-def _stop_scheduler() -> bool:
-    """停止调度器"""
-    from kb_core.task_scheduler import get_scheduler_pid_file
-
-    pid_file = get_scheduler_pid_file()
-    pid = _get_pid_from_file(pid_file)
-
-    if pid and _kill_pid(pid, signal.SIGTERM, "scheduler"):
-        print(f"停止调度器 (PID: {pid})...")
-        time.sleep(1)
-        _kill_pid(pid, signal.SIGKILL, "scheduler")
-        pid_file.unlink(missing_ok=True)
-        return True
-    pid_file.unlink(missing_ok=True)
-    return False
-
-
 def _start_scheduler() -> None:
     """调度器已内嵌于 API 进程，随 API 一同启停"""
     pass
@@ -2064,7 +2047,6 @@ def handle_service_stop(args: argparse.Namespace) -> int:
 
     _stop_frontend()
     _stop_api()
-    _stop_scheduler()
 
     print("\n所有服务已停止")
     return 0
@@ -2076,11 +2058,9 @@ def handle_service_restart(args: argparse.Namespace) -> int:
 
     _stop_frontend()
     _stop_api()
-    _stop_scheduler()
 
     time.sleep(2)
 
-    _start_scheduler()
     _start_api()
     _start_frontend()
 
