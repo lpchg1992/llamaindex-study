@@ -454,7 +454,7 @@ class ParallelEmbeddingProcessor:
         - Unhealthy Ollama 端点：直接路由到 SiliconFlow
         - Healthy Ollama 端点：调用 OllamaEmbedder（含 503 重试），
           失败后标记为 unhealthy 并路由到 SiliconFlow
-        - 快速重试全部耗尽后：进入持久重试模式（指数退避 2s→60s，最多 100 轮），
+        - 快速重试全部耗尽后：进入持久重试模式（固定间隔 4s，最多 100 轮），
           确保最终成功而非放弃
         """
         sf_ep = next((e for e in self.endpoints if e.url == "siliconflow://"), None)
@@ -522,14 +522,13 @@ class ParallelEmbeddingProcessor:
                     logger.debug(f"[{ollama_ep.name}] 兜底尝试失败: {ollama_err}")
 
             max_persistent_rounds = 100
-            base_delay = 2.0
+            persistent_delay = 4.0
             logger.warning(
                 f"快速重试全部耗尽 (text_len={text_len})，进入持久重试模式 "
-                f"(最多 {max_persistent_rounds} 轮，指数退避 {base_delay}s→60s)"
+                f"(最多 {max_persistent_rounds} 轮，固定间隔 {persistent_delay:.0f}s)"
             )
             for round_num in range(1, max_persistent_rounds + 1):
-                delay = min(base_delay * (2 ** (round_num - 1)), 60.0)
-                time.sleep(delay)
+                time.sleep(persistent_delay)
 
                 model = self._get_model(sf_ep)
                 for _retry in range(3):
@@ -563,10 +562,9 @@ class ParallelEmbeddingProcessor:
                         continue
 
                 if round_num % 10 == 0:
-                    next_delay = min(base_delay * (2 ** round_num), 60.0)
                     logger.warning(
                         f"持久重试中 (第 {round_num}/{max_persistent_rounds} 轮, "
-                        f"下一轮等待 {next_delay:.0f}s, text_len={text_len})"
+                        f"间隔 {persistent_delay:.0f}s, text_len={text_len})"
                     )
 
             self._record_embedding(sf_ep, 0, True)
