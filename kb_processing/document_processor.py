@@ -715,8 +715,7 @@ class DocumentProcessor:
 
             print(f"   🔄 MinerU 正在解析 PDF (batch_id={batch_id[:8]}...)")
 
-            poll_interval = 5
-            max_wait = timeout or 600
+            max_wait = timeout or 1200
             start_time = time.time()
             interval = 5
             max_interval = 30
@@ -896,9 +895,15 @@ class DocumentProcessor:
             proc.stdin.write(json.dumps(submit_msg) + "\n")
             proc.stdin.flush()
 
+            import select
             submit_done = False
             submit_start = time.time()
             while time.time() - submit_start < 60:
+                if proc.poll() is not None:
+                    break
+                ready, _, _ = select.select([proc.stdout], [], [], 0.5)
+                if not ready:
+                    continue
                 line = proc.stdout.readline()
                 if not line:
                     time.sleep(0.2)
@@ -934,7 +939,15 @@ class DocumentProcessor:
             interval = 2
             max_wait = min(timeout, 600)
 
+            import select
             while time.time() - start_time < max_wait:
+                if proc.poll() is not None:
+                    break
+                ready, _, _ = select.select([proc.stdout], [], [], 1.0)
+                if not ready:
+                    time.sleep(interval)
+                    interval = min(interval * 1.5, 20)
+                    continue
                 line = proc.stdout.readline()
                 if not line:
                     time.sleep(interval)
@@ -1029,11 +1042,16 @@ class DocumentProcessor:
         proc = None
 
         def read_mcp_response(proc, timeout_sec=30):
-            start = time.time()
-            while time.time() - start < timeout_sec:
+            import select
+            deadline = time.time() + timeout_sec
+            while time.time() < deadline:
+                if proc.poll() is not None:
+                    return None
+                ready, _, _ = select.select([proc.stdout], [], [], 1.0)
+                if not ready:
+                    continue
                 line = proc.stdout.readline()
                 if not line:
-                    time.sleep(0.1)
                     continue
                 try:
                     return json.loads(line.strip())
