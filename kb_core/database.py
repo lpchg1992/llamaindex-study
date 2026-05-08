@@ -1578,6 +1578,8 @@ class ChunkDB:
                 to_mark_success.append(chunk["id"])
             elif chunk["embedding_generated"] != 2 and not in_lance:
                 to_mark_failed.append(chunk["id"])
+            elif chunk["embedding_generated"] == 0 and in_lance:
+                to_mark_success.append(chunk["id"])
 
         if to_mark_failed:
             self.mark_failed_bulk(to_mark_failed, error="missing from LanceDB (consistency check)")

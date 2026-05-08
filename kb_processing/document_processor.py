@@ -334,7 +334,11 @@ class DocumentProcessor:
                 merge_result = table.merge_insert("id").when_not_matched_insert_all().execute(df)
                 written_count = getattr(merge_result, "num_inserted_rows", 0)
                 if written_count == 0 and len(data) > 0:
-                    add_logger.warning(f"merge_insert 返回 num_inserted_rows=0，回退到 len(data)")
+                    add_logger.warning(
+                        f"merge_insert 返回 num_inserted_rows=0 for {len(data)} rows, "
+                        "falling back to table.add()"
+                    )
+                    table.add(data)
                     written_count = len(data)
                 add_logger.debug(f"UPSERT {len(data)} 节点, 实际写入 {written_count} (按 doc_id 去重)")
             except Exception as e:

@@ -591,6 +591,7 @@ class ZoteroImporter:
         )
 
         error_reason = None
+        failed_ids = []
         if not item.file_path:
             error_reason = "附件路径未找到（Zotero 数据库中无附件记录）"
             logger.warning(
@@ -753,6 +754,15 @@ class ZoteroImporter:
                                     total_nodes += len(batch_nodes)
             else:
                 logger.warning(f"文档处理返回空结果: {file_path}")
+
+        if failed_ids:
+            doc_chunk_service.mark_chunks_failed(
+                failed_ids, error="embedding failed or returned zero vector"
+            )
+            all_failed_ids = list(set(all_failed_ids + failed_ids))
+            logger.warning(
+                f"[{item.title}] {len(failed_ids)} chunks embedding failed, marked as failed in SQLite"
+            )
 
         return total_nodes, all_nodes, processed_sources, error_reason, all_failed_ids
 

@@ -447,13 +447,15 @@ class ParallelEmbeddingProcessor:
     def _get_embedding_with_retry(
         self, text: str, ep: EmbeddingEndpoint
     ) -> EmbeddingResult:
-        """获取 embedding
+        """获取 embedding（含持久重试）
 
         策略：
         - SiliconFlow 端点：直接调用，无重试（云服务稳定）
         - Unhealthy Ollama 端点：直接路由到 SiliconFlow
         - Healthy Ollama 端点：调用 OllamaEmbedder（含 503 重试），
           失败后标记为 unhealthy 并路由到 SiliconFlow
+        - 快速重试全部耗尽后：进入持久重试模式（指数退避 2s→60s，最多 100 轮），
+          确保最终成功而非放弃
         """
         sf_ep = next((e for e in self.endpoints if e.url == "siliconflow://"), None)
 
@@ -501,7 +503,7 @@ class ParallelEmbeddingProcessor:
                         f" (text_len={text_len}): {type(sf_err).__name__}: {sf_err}"
                     )
 
-            # SF 重试全部耗尽，逐个尝试 Ollama 端点（即使标记为 unhealthy）
+            # 快速尝试所有 Ollama 端点（即使标记为 unhealthy）
             ollama_eps = [e for e in self.endpoints if e.url != "siliconflow://"]
             for ollama_ep in ollama_eps:
                 try:
@@ -519,8 +521,63 @@ class ParallelEmbeddingProcessor:
                 except Exception as ollama_err:
                     logger.debug(f"[{ollama_ep.name}] 兜底尝试失败: {ollama_err}")
 
+            max_persistent_rounds = 100
+            base_delay = 2.0
+            logger.warning(
+                f"快速重试全部耗尽 (text_len={text_len})，进入持久重试模式 "
+                f"(最多 {max_persistent_rounds} 轮，指数退避 {base_delay}s→60s)"
+            )
+            for round_num in range(1, max_persistent_rounds + 1):
+                delay = min(base_delay * (2 ** (round_num - 1)), 60.0)
+                time.sleep(delay)
+
+                model = self._get_model(sf_ep)
+                for _retry in range(3):
+                    try:
+                        emb = model.get_text_embedding(text[:8192])
+                        if emb and not all(v == 0.0 for v in emb):
+                            self._record_embedding(sf_ep, text_len, False)
+                            logger.info(
+                                f"[{sf_ep.name}] 持久重试成功 "
+                                f"(第 {round_num} 轮, text_len={text_len})"
+                            )
+                            return (sf_ep.name, emb, None)
+                    except Exception:
+                        time.sleep(1.0)
+
+                for ollama_ep in ollama_eps:
+                    try:
+                        emb = self._call_ollama_embed(ollama_ep, text)
+                        if emb and not all(v == 0.0 for v in emb):
+                            with self._lock:
+                                ollama_ep.is_healthy = True
+                                ollama_ep.last_error = None
+                                self._consecutive_failures[ollama_ep.name] = 0
+                            self._record_embedding(ollama_ep, text_len, False)
+                            logger.info(
+                                f"[{ollama_ep.name}] 持久重试成功 "
+                                f"(第 {round_num} 轮, text_len={text_len})"
+                            )
+                            return (ollama_ep.name, emb, None)
+                    except Exception:
+                        continue
+
+                if round_num % 10 == 0:
+                    next_delay = min(base_delay * (2 ** round_num), 60.0)
+                    logger.warning(
+                        f"持久重试中 (第 {round_num}/{max_persistent_rounds} 轮, "
+                        f"下一轮等待 {next_delay:.0f}s, text_len={text_len})"
+                    )
+
             self._record_embedding(sf_ep, 0, True)
-            return (sf_ep.name, [0.0] * sf_ep.dimensions, f"所有端点重试 {max_retries} 次均失败")
+            logger.error(
+                f"持久重试 {max_persistent_rounds} 轮后仍然失败，放弃 (text_len={text_len})"
+            )
+            return (
+                sf_ep.name,
+                [0.0] * sf_ep.dimensions,
+                f"所有端点持久重试 {max_persistent_rounds} 轮均失败",
+            )
 
         if ep.url == "siliconflow://":
             return call_sf()
@@ -779,7 +836,7 @@ class ParallelEmbeddingProcessor:
                 threads.append(t)
 
         for t in threads:
-            t.join(timeout=300)
+            t.join()
 
         return [
             r
