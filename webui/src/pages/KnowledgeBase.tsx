@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useKBs, useCreateKB, useDeleteKB, useKBTopics, useRefreshTopics, useConsistencyCheck, useConsistencyRepair, useInitializeKB, useRepairAll, useCheckAndMarkFailed, useRevectorTask, useEmbeddingStats } from '@/api/hooks'
+import { useKBs, useCreateKB, useDeleteKB, useKBTopics, useRefreshTopics, useConsistencyCheck, useConsistencyRepair, useInitializeKB, useRepairAll, useCheckAndMarkFailed, useRevectorTask } from '@/api/hooks'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -32,7 +32,6 @@ function KBDetailsPanel({ kb }: { kb: KBInfo }) {
   const initializeKB = useInitializeKB()
   const checkAndMarkFailed = useCheckAndMarkFailed()
   const revectorTask = useRevectorTask()
-  const { data: embeddingStats } = useEmbeddingStats(kb.id)
   const [isRefreshingTopics, setIsRefreshingTopics] = useState(false)
   const [isInitializeOpen, setIsInitializeOpen] = useState(false)
 
@@ -152,32 +151,6 @@ function KBDetailsPanel({ kb }: { kb: KBInfo }) {
               )}
             </div>
 
-            {embeddingStats && (
-              <div className="p-4 border rounded-lg bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-900 dark:to-slate-800">
-                <div className="flex items-center gap-2 mb-3">
-                  <Sparkles className="h-4 w-4 text-primary" />
-                  <span className="text-sm font-medium">向量状态</span>
-                </div>
-                <div className="grid grid-cols-4 gap-3">
-                  <div className="text-center p-2 bg-white dark:bg-slate-800 rounded-lg shadow-sm">
-                    <p className="text-xs text-muted-foreground">总数</p>
-                    <p className="text-lg font-semibold">{embeddingStats.total?.toLocaleString() || 0}</p>
-                  </div>
-                  <div className="text-center p-2 bg-green-50 dark:bg-green-900/20 rounded-lg shadow-sm">
-                    <p className="text-xs text-green-600 dark:text-green-400">成功</p>
-                    <p className="text-lg font-semibold text-green-600 dark:text-green-400">{embeddingStats.success?.toLocaleString() || 0}</p>
-                  </div>
-                  <div className="text-center p-2 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg shadow-sm">
-                    <p className="text-xs text-yellow-600 dark:text-yellow-400">待处理</p>
-                    <p className="text-lg font-semibold text-yellow-600 dark:text-yellow-400">{embeddingStats.pending?.toLocaleString() || 0}</p>
-                  </div>
-                  <div className="text-center p-2 bg-red-50 dark:bg-red-900/20 rounded-lg shadow-sm">
-                    <p className="text-xs text-red-600 dark:text-red-400">失败</p>
-                    <p className="text-lg font-semibold text-red-600 dark:text-red-400">{embeddingStats.failed?.toLocaleString() || 0}</p>
-                  </div>
-                </div>
-              </div>
-            )}
           </TabsContent>
 
           <TabsContent value="topics" className="space-y-4">
