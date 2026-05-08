@@ -222,7 +222,10 @@ class ParallelEmbeddingProcessor:
             vendor_info = vendor_db.get("siliconflow")
             if vendor_info and vendor_info.get("api_base"):
                 model_id = sf_model_info["id"]
-                api_model = sf_model_info.get("config", {}).get("api_model") or f"Pro/BAAI/{sf_model_info['name']}"
+                sf_name = sf_model_info.get("name", "bge-m3")
+                api_model = sf_model_info.get("config", {}).get("api_model") or (
+                    sf_name if "/" in sf_name else f"Pro/BAAI/{sf_name}"
+                )
                 sf_dim = sf_model_info.get("config", {}).get("dimensions", 1024)
                 sf_ep = EmbeddingEndpoint(
                     name=f"SiliconFlow({model_id})",
