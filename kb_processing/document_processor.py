@@ -303,35 +303,7 @@ class DocumentProcessor:
             add_logger.debug(f"创建新表并插入 {len(data)} 节点")
         else:
             try:
-                if doc_ids:
-                    doc_ids_str = " OR ".join(
-                        [f"doc_id = '{did}'" for did in doc_ids if did]
-                    )
-                    if doc_ids_str:
-                        try:
-                            delete_result = table.delete(f"{doc_ids_str}")
-                            deleted_count = getattr(delete_result, "num_deleted", 0)
-                            if deleted_count > 0:
-                                add_logger.debug(
-                                    f"删除 {deleted_count} 个已存在的节点 (doc_id 去重)"
-                                )
-                        except Exception as delete_err:
-                            add_logger.error(
-                                f"删除旧节点失败: {delete_err}，回退到追加写入"
-                            )
-                            try:
-                                table.add(data)
-                                written_count = len(data)
-                            except Exception as add_e:
-                                add_logger.error(f"追加写入也失败: {add_e}")
-                                written_count = 0
-                            # Skip merge_insert since delete failed and we already handled it
-                            if written_count > 0:
-                                if written_count == len(data):
-                                    return (written_count, writable_ids, skipped, failed_ids)
-                                return (written_count, [], skipped, failed_ids)
-                            return (0, [], skipped, failed_ids)
-                merge_result = table.merge_insert("id").when_not_matched_insert_all().execute(df)
+                merge_result = table.merge_insert("id").when_not_matched_insert_all().when_matched_update_all().execute(df)
                 written_count = getattr(merge_result, "num_inserted_rows", 0)
                 if written_count == 0 and len(data) > 0:
                     add_logger.warning(

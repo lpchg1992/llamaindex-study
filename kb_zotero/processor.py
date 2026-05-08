@@ -563,7 +563,8 @@ class ZoteroImporter:
                         error_reason = f"LanceDB write failed for zotero_meta: {e}"
                         doc_chunk_service.mark_chunks_failed(meta_node_ids, error=error_reason)
                         all_failed_ids = list(set(all_failed_ids + meta_node_ids))
-                    total_nodes += len(nodes)
+                    if success_count > 0:
+                        total_nodes += len(nodes)
                     if success_count > 0:
                         all_nodes.extend(
                             [
@@ -748,7 +749,6 @@ class ZoteroImporter:
                                     failed_node_ids = list(set(failed_ids + [n.node_id for n in batch_nodes]))
                                     doc_chunk_service.mark_chunks_failed(failed_node_ids, error=f"LanceDB batch write failed: {e}")
                                     all_failed_ids = list(set(all_failed_ids + failed_node_ids))
-                                    total_nodes += len(batch_nodes)
             else:
                 logger.warning(f"文档处理返回空结果: {file_path}")
 
