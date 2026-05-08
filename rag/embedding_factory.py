@@ -91,7 +91,7 @@ class OllamaEmbedder(OllamaEmbedding):
         client_kwargs: Optional[Dict[str, Any]] = None,
     ):
         if client_kwargs is None:
-            client_kwargs = {"proxy": None}
+            client_kwargs = {"proxy": None, "http2": False}
         super().__init__(model_name=model_name, base_url=base_url, client_kwargs=client_kwargs)
         self._base_url = base_url
         self._model_id = model_id
