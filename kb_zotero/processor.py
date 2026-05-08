@@ -435,6 +435,7 @@ class ZoteroImporter:
 
         effective_kb_id = kb_id or self.kb_id or "default"
         doc_chunk_service = get_document_chunk_service(effective_kb_id)
+        lance_store = vector_store._get_lance_vector_store()
 
         total_nodes = 0
         all_nodes = []
@@ -547,9 +548,7 @@ class ZoteroImporter:
                     meta_node_ids = [n.node_id for n in nodes]
                     try:
                         success_count, written_ids, _, emb_failed_ids = (
-                            self.processor._upsert_nodes(
-                                vector_store._get_lance_vector_store(), nodes
-                            )
+                            self.processor._upsert_nodes(lance_store, nodes)
                         )
                         if written_ids:
                             doc_chunk_service.mark_chunks_success(written_ids)
@@ -729,9 +728,7 @@ class ZoteroImporter:
                             if batch_nodes:
                                 try:
                                     b_success, b_written_ids, _, b_failed = (
-                                        self.processor._upsert_nodes(
-                                            vector_store._get_lance_vector_store(), batch_nodes
-                                        )
+                                        self.processor._upsert_nodes(lance_store, batch_nodes)
                                     )
                                     if b_failed:
                                         doc_chunk_service.mark_chunks_failed(b_failed, error="embedding unavailable (missing or zero vector)")
