@@ -251,9 +251,14 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
       )
       .map((item) => {
         const preview = selectedPreviewItems.find((p) => p.item_id === item.item_id)
+        const disabledSet = new Set(disabledScannedIds)
+        const manualSet = new Set(manualScannedIds)
+        const isScanned = disabledSet.has(item.item_id!)
+          ? false
+          : manualSet.has(item.item_id!) ? true : (preview?.is_scanned_pdf ?? false)
         return {
           ...item,
-          is_scanned_pdf: preview?.is_scanned_pdf ?? false,
+          is_scanned_pdf: isScanned,
           has_md_cache: preview?.has_md_cache ?? false,
           force_ocr: forceOcrIds.includes(item.item_id!),
         }
