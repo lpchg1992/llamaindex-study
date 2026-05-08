@@ -167,6 +167,8 @@ class OllamaEmbedder(OllamaEmbedding):
         raise last_error
 
     def _get_vendor_id(self) -> str:
+        if self._model_id and "/" in self._model_id:
+            return self._model_id.split("/")[0]
         return "ollama"
 
     def _estimate_tokens(self, text: str) -> int:
