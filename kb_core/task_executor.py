@@ -835,6 +835,8 @@ class TaskExecutor:
                     stats["nodes"] += result.get("nodes", 0)
                     nodes_count = result.get("nodes", 0)
                     if nodes_count == 0:
+                        if result.get("skipped"):
+                            continue
                         stats["failed"] += 1
                     db_written = nodes_count > 0
                     stats["processed_sources"].extend(

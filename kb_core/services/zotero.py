@@ -219,6 +219,8 @@ class ZoteroService:
                 "nodes": nodes,
                 "processed_sources": processed_sources,
             }
+            if nodes == 0 and not error_reason:
+                result["skipped"] = True
             if error_reason:
                 result["error"] = error_reason
             return result
