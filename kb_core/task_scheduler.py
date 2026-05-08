@@ -1,15 +1,13 @@
-#!/usr/bin/env python3
 import asyncio
 import logging
-import os
-import subprocess
-import sys
 from pathlib import Path
 from typing import Optional
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys_path = str(Path(__file__).parent.parent)
+import sys
+sys.path.insert(0, sys_path)
 
-from rag.logger import configure_all_loggers, get_log_dir, get_logger
+from rag.logger import get_logger
 from rag.config import get_settings
 
 logger = get_logger(__name__)
@@ -19,61 +17,13 @@ DEFAULT_MAX_CONCURRENT = settings.max_concurrent_tasks
 STALE_TASK_TIMEOUT = settings.stale_task_timeout
 
 
-def get_scheduler_pid_file() -> Path:
-    """获取调度器 PID 文件路径"""
-    import tempfile
-    return Path(tempfile.gettempdir()) / "llamaindex_scheduler.pid"
-
-_scheduler_lock_fd = None
-
-def acquire_scheduler_lock() -> bool:
-    """获取排他文件锁，确保只有一个调度器实例运行"""
-    global _scheduler_lock_fd
-    import fcntl
-    pid_file = get_scheduler_pid_file()
-    try:
-        _scheduler_lock_fd = open(pid_file, "w")
-        fcntl.flock(_scheduler_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        _scheduler_lock_fd.write(str(os.getpid()))
-        _scheduler_lock_fd.flush()
-        return True
-    except OSError:
-        if _scheduler_lock_fd:
-            _scheduler_lock_fd.close()
-            _scheduler_lock_fd = None
-        return False
-
-def release_scheduler_lock() -> None:
-    """释放文件锁"""
-    global _scheduler_lock_fd
-    import fcntl
-    if _scheduler_lock_fd:
-        try:
-            fcntl.flock(_scheduler_lock_fd, fcntl.LOCK_UN)
-            _scheduler_lock_fd.close()
-        except Exception:
-            pass
-        _scheduler_lock_fd = None
-    pid_file = get_scheduler_pid_file()
-    if pid_file.exists():
-        try:
-            pid_file.unlink()
-        except OSError:
-            pass
-
 def is_scheduler_running() -> bool:
     """调度器已内嵌于 API 进程，随 API 一同启停"""
     return True
 
 
-def cleanup_scheduler_pid() -> None:
-    """释放锁并清理 PID 文件"""
-    release_scheduler_lock()
-    SchedulerStarter.reset_verified()
-
-
 class TaskScheduler:
-    """任务调度器"""
+    """任务调度器 — 作为 asyncio 后台任务内嵌于 API 进程"""
 
     def __init__(self, max_concurrent: int = DEFAULT_MAX_CONCURRENT) -> None:
         from .task_queue import TaskQueue
@@ -177,50 +127,9 @@ class TaskScheduler:
 
 
 class SchedulerStarter:
-    """调度器单例启动器 - 确保只有一个调度器运行"""
-
-    _process: Optional[subprocess.Popen] = None
-    _startup_verified: bool = False
+    """向后兼容 — 调度器由 API 生命周期管理，无需单独启动"""
 
     @classmethod
     def ensure_scheduler_running(cls, wait_seconds: float = 3.0) -> bool:
         """调度器已由 API 生命周期内嵌管理，此方法保留向后兼容"""
-        if is_scheduler_running():
-            return True
-        logger.info("调度器随 API 内嵌运行，无需单独启动子进程")
         return True
-
-    @classmethod
-    def is_verified(cls) -> bool:
-        """检查上次启动是否已验证成功"""
-        return cls._startup_verified
-
-    @classmethod
-    def reset_verified(cls):
-        """重置验证状态（调度器停止后调用）"""
-        cls._startup_verified = False
-
-
-def main():
-    print(f"调度器启动 (PID: {os.getpid()})")
-
-    if not acquire_scheduler_lock():
-        print("错误: 已有另一个调度器正在运行")
-        sys.exit(1)
-
-    configure_all_loggers(get_log_dir(), level=logging.INFO)
-
-    try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        scheduler = TaskScheduler()
-        loop.run_until_complete(scheduler.run())
-    except KeyboardInterrupt:
-        print("调度器收到停止信号")
-    finally:
-        cleanup_scheduler_pid()
-        print("调度器已停止")
-
-
-if __name__ == "__main__":
-    main()

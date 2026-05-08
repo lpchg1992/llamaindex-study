@@ -195,7 +195,7 @@ llamaindex-study/
 │   │   ├── consistency.py    # 一致性校验
 │   │   └── ...               # 其他服务
 │   ├── database.py           # SQLite 数据库层
-│   ├── scheduler.py          # 调度器入口（独立进程）
+│   ├── task_scheduler.py     # 调度器（内嵌于 API）
 │   ├── task_executor.py      # 任务执行器
 │   ├── task_queue.py         # 任务队列
 │   └── import_service.py     # 导入服务（统一入口）
