@@ -758,11 +758,15 @@ class TaskExecutor:
 
             try:
                 if item_type == "collection":
-                    result = ZoteroService.import_collection(
-                        kb_id=kb_id,
-                        collection_id=item.get("id"),
-                        collection_name=item.get("name", "Unknown"),
-                        refresh_topics=False,
+                    loop = asyncio.get_running_loop()
+                    result = await loop.run_in_executor(
+                        None,
+                        lambda: ZoteroService.import_collection(
+                            kb_id=kb_id,
+                            collection_id=item.get("id"),
+                            collection_name=item.get("name", "Unknown"),
+                            refresh_topics=False,
+                        )
                     )
                     stats["files"] += result.get("items", 0)
                     stats["nodes"] += result.get("nodes", 0)
@@ -805,17 +809,22 @@ class TaskExecutor:
                                 )
                         return cb
 
-                    result = ZoteroService.import_item(
-                        kb_id=kb_id,
-                        item_id=item.get("id"),
-                        options=item_options,
-                        refresh_topics=False,
-                        prefix=prefix,
-                        chunk_strategy=chunk_strategy,
-                        chunk_size=chunk_size,
-                        hierarchical_chunk_sizes=hierarchical_chunk_sizes,
-                        cancel_event=cancel_event,
-                        chunk_progress_callback=make_progress_callback(file_id) if file_id else None,
+                    loop = asyncio.get_running_loop()
+
+                    result = await loop.run_in_executor(
+                        None,
+                        lambda: ZoteroService.import_item(
+                            kb_id=kb_id,
+                            item_id=item.get("id"),
+                            options=item_options,
+                            refresh_topics=False,
+                            prefix=prefix,
+                            chunk_strategy=chunk_strategy,
+                            chunk_size=chunk_size,
+                            hierarchical_chunk_sizes=hierarchical_chunk_sizes,
+                            cancel_event=cancel_event,
+                            chunk_progress_callback=make_progress_callback(file_id) if file_id else None,
+                        )
                     )
                     logger.info(
                         f"[{task_id}] Zotero 文献导入结果: nodes={result.get('nodes', 0)}, items={result.get('items', 0)}"
@@ -849,14 +858,18 @@ class TaskExecutor:
                     vault_path = item.get("vault_path")
                     folder_path = item.get("path")
                     if vault_path and folder_path:
-                        result = ObsidianService.import_vault(
-                            kb_id=kb_id,
-                            vault_path=vault_path,
-                            folder_path=folder_path,
-                            refresh_topics=False,
-                            chunk_strategy=chunk_strategy,
-                            chunk_size=chunk_size,
-                            hierarchical_chunk_sizes=hierarchical_chunk_sizes,
+                        loop = asyncio.get_running_loop()
+                        result = await loop.run_in_executor(
+                            None,
+                            lambda: ObsidianService.import_vault(
+                                kb_id=kb_id,
+                                vault_path=vault_path,
+                                folder_path=folder_path,
+                                refresh_topics=False,
+                                chunk_strategy=chunk_strategy,
+                                chunk_size=chunk_size,
+                                hierarchical_chunk_sizes=hierarchical_chunk_sizes,
+                            )
                         )
                         stats["files"] += (
                             result.get("files", 0) if result.get("nodes", 0) > 0 else 0
@@ -884,13 +897,17 @@ class TaskExecutor:
                 elif item_type == "file":
                     path = item.get("path")
                     if path:
-                        result = GenericService.import_file(
-                            kb_id=kb_id,
-                            path=path,
-                            refresh_topics=False,
-                            chunk_strategy=chunk_strategy,
-                            chunk_size=chunk_size,
-                            hierarchical_chunk_sizes=hierarchical_chunk_sizes,
+                        loop = asyncio.get_running_loop()
+                        result = await loop.run_in_executor(
+                            None,
+                            lambda: GenericService.import_file(
+                                kb_id=kb_id,
+                                path=path,
+                                refresh_topics=False,
+                                chunk_strategy=chunk_strategy,
+                                chunk_size=chunk_size,
+                                hierarchical_chunk_sizes=hierarchical_chunk_sizes,
+                            )
                         )
                         stats["files"] += (
                             result.get("files", 0) if result.get("nodes", 0) > 0 else 0
