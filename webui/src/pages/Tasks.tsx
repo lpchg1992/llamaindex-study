@@ -168,13 +168,13 @@ function TaskDetailDialog({ taskId, open, onOpenChange }: TaskDetailDialogProps)
                         </div>
                         <div className="flex items-center gap-2">
                           <div className="flex-1 h-1.5 bg-secondary rounded-full overflow-hidden">
-                            {file.total_chunks > 0 ? (
+                            {file.total_chunks > 0 && file.status !== 'processing' ? (
                               <div
                                 className={`h-full transition-all ${file.status === 'embedding' ? 'bg-purple-500' : file.status === 'writing' ? 'bg-cyan-500' : 'bg-primary'}`}
                                 style={{ width: `${(file.processed_chunks / file.total_chunks) * 100}%` }}
                               />
                             ) : file.status === 'processing' || file.status === 'embedding' || file.status === 'writing' ? (
-                              <div className="h-full bg-primary animate-pulse rounded-full" style={{ width: '60%' }} />
+                              <div className="h-full bg-primary animate-pulse rounded-full" style={{ width: '50%' }} />
                             ) : (
                               <div
                                 className={`h-full transition-all ${file.status === 'completed' ? 'bg-green-500' : 'bg-primary'}`}
@@ -183,7 +183,7 @@ function TaskDetailDialog({ taskId, open, onOpenChange }: TaskDetailDialogProps)
                             )}
                           </div>
                           <span className="text-xs text-muted-foreground shrink-0 w-20 text-right">
-                            {file.total_chunks > 0 ? `${file.processed_chunks} / ${file.total_chunks} chunks` : file.status === 'processing' ? '处理中...' : file.status === 'completed' ? '完成' : file.status === 'pending' ? '等待中' : ''}
+                            {file.total_chunks > 0 && file.status !== 'processing' ? `${file.processed_chunks} / ${file.total_chunks} chunks` : file.status === 'processing' ? '解析中...' : file.status === 'completed' ? '完成' : file.status === 'pending' ? '等待中' : ''}
                           </span>
                         </div>
                         {file.error && (
