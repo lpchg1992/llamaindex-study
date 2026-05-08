@@ -198,54 +198,11 @@ class SchedulerStarter:
 
     @classmethod
     def ensure_scheduler_running(cls, wait_seconds: float = 3.0) -> bool:
-        """确保调度器正在运行，如果不是则启动它"""
+        """调度器已由 API 生命周期内嵌管理，此方法保留向后兼容"""
         if is_scheduler_running():
-            cls._startup_verified = True
-            logger.info("调度器已在运行")
             return True
-
-        logger.info("启动调度器进程...")
-        cmd = [
-            sys.executable,
-            "-m",
-            "kb_core.task_scheduler",
-        ]
-        try:
-            cls._process = subprocess.Popen(
-                cmd,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                start_new_session=True,
-                env=os.environ.copy(),
-            )
-            logger.info(f"调度器进程已启动 (PID: {cls._process.pid})")
-
-            import time
-            start_time = time.time()
-            while time.time() - start_time < wait_seconds:
-                time.sleep(0.5)
-                if is_scheduler_running():
-                    cls._startup_verified = True
-                    logger.info(
-                        f"调度器已就绪 (等待 {(time.time() - start_time):.1f}s)"
-                    )
-                    return True
-                if cls._process.poll() is not None:
-                    stdout, stderr = cls._process.communicate()
-                    logger.error(f"调度器进程异常退出: {cls._process.returncode}")
-                    if stderr:
-                        logger.error(
-                            f"stderr: {stderr.decode('utf-8', errors='replace')}"
-                        )
-                    break
-
-            logger.warning(f"调度器启动验证超时 ({wait_seconds}s)，可能仍在初始化")
-            return True
-
-        except Exception as e:
-            logger.error(f"启动调度器失败: {e}")
-            return False
+        logger.info("调度器随 API 内嵌运行，无需单独启动子进程")
+        return True
 
     @classmethod
     def is_verified(cls) -> bool:

@@ -48,7 +48,7 @@ def _run_loop(loop):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """应用生命周期管理"""
+    """应用生命周期管理 — 调度器内嵌运行，随 API 一同启停"""
     from rag.logger import get_logger
 
     logger = get_logger(__name__)
@@ -61,9 +61,27 @@ async def lifespan(app: FastAPI):
     init_token_stats_db()
     logger.info("Token 监控已初始化")
 
+    from kb_core.task_scheduler import TaskScheduler
+    scheduler = TaskScheduler()
+    scheduler_task = asyncio.create_task(scheduler.run())
+    logger.info(f"任务调度器已内嵌启动 (max_concurrent={scheduler.max_concurrent})")
+
     logger.info("应用启动完成")
     yield
-    logger.info("应用关闭")
+
+    logger.info("应用关闭中...")
+    scheduler.stop()
+    scheduler_task.cancel()
+    try:
+        await scheduler_task
+    except asyncio.CancelledError:
+        pass
+    from kb_processing.parallel_embedding import get_parallel_processor
+    processor = get_parallel_processor()
+    if processor._health_check_task is not None:
+        processor._health_check_task.cancel()
+    logger.info("任务调度器已停止")
+    logger.info("应用关闭完成")
 
 
 # ============== CORS Configuration ==============
