@@ -67,6 +67,7 @@ class RetryableOllama(Ollama):
         max_retries: int = 5,
         initial_delay: float = 2.0,
         backoff_factor: float = 1.5,
+        vendor_id: str = "ollama",
         **kwargs,
     ):
         super().__init__(
@@ -78,6 +79,7 @@ class RetryableOllama(Ollama):
         self._max_retries = max_retries
         self._initial_delay = initial_delay
         self._backoff_factor = backoff_factor
+        self._vendor_id = vendor_id
         self._queue = get_ollama_request_queue()
 
     def _call_with_queue(self, method: Callable[..., Any], *args, **kwargs) -> Any:
@@ -149,9 +151,7 @@ class RetryableOllama(Ollama):
         raise last_error
 
     def _get_vendor_id(self) -> str:
-        if "localhost" in self.base_url or "127.0.0.1" in self.base_url:
-            return "ollama"
-        return "ollama"
+        return self._vendor_id
 
     def complete(self, prompt: str, **kwargs) -> Any:
         try:
@@ -421,12 +421,12 @@ def _get_fallback_model_from_registry() -> tuple[str, str, str, str]:
     )
 
 
-def _get_fallback_ollama_model_from_registry() -> tuple[str, str]:
+def _get_fallback_ollama_model_from_registry() -> tuple[str, str, str]:
     """
     从模型数据库获取 Ollama fallback LLM 配置。
 
     Returns:
-        tuple: (model_name, base_url)
+        tuple: (model_name, base_url, vendor_id)
 
     Raises:
         RuntimeError: 当没有可用的 Ollama LLM 时抛出
@@ -446,6 +446,7 @@ def _get_fallback_ollama_model_from_registry() -> tuple[str, str]:
                 return (
                     default_model["name"],
                     vendor_info["api_base"],
+                    vendor_id,
                 )
 
     ollama_models = [
@@ -455,12 +456,14 @@ def _get_fallback_ollama_model_from_registry() -> tuple[str, str]:
 
     if ollama_models:
         model = ollama_models[0]
+        vendor_id = model.get("vendor_id", "ollama")
         vendor_db = init_vendor_db()
-        vendor_info = vendor_db.get(model.get("vendor_id", ""))
+        vendor_info = vendor_db.get(vendor_id)
         if vendor_info and vendor_info.get("api_base"):
             return (
                 model["name"],
                 vendor_info["api_base"],
+                vendor_id,
             )
 
     raise RuntimeError(
@@ -667,10 +670,11 @@ class RetryableSiliconFlowLLM:
 
     def _get_fallback_llm(self) -> Any:
         if self._fallback_llm is None:
-            model_name, base_url = _get_fallback_ollama_model_from_registry()
+            model_name, base_url, vendor_id = _get_fallback_ollama_model_from_registry()
             self._fallback_llm = RetryableOllama(
                 model=model_name,
                 base_url=base_url,
+                vendor_id=vendor_id,
                 max_retries=5,
                 initial_delay=2.0,
                 backoff_factor=1.5,
@@ -926,6 +930,7 @@ def create_llm(
             primary_llm = RetryableOllama(
                 model=model_info["name"],
                 base_url=base_url,
+                vendor_id=vendor_id,
                 max_retries=5,
                 initial_delay=2.0,
                 backoff_factor=1.5,
