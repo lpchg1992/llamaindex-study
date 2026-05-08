@@ -859,13 +859,15 @@ class DocumentProcessor:
         proc = None
 
         try:
+            doc2x_env = os.environ.copy()
+            doc2x_env.setdefault("DOC2X_API_KEY", api_key)
             proc = subprocess.Popen(
-                ["node", "/tmp/doc2x_mcp/node_modules/.bin/doc2x-mcp"],
+                ["npx", "-y", "@noedgeai-org/doc2x-mcp@latest"],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                env=os.environ,
+                env=doc2x_env,
             )
 
             init_msg = {
@@ -937,7 +939,7 @@ class DocumentProcessor:
             export_url = None
             start_time = time.time()
             interval = 2
-            max_wait = min(timeout, 600)
+            max_wait = min(timeout, 1200)
 
             import select
             while time.time() - start_time < max_wait:
@@ -1088,13 +1090,15 @@ class DocumentProcessor:
             return False, "轮询超时"
 
         try:
+            doc2x_env = os.environ.copy()
+            doc2x_env.setdefault("DOC2X_API_KEY", api_key)
             proc = subprocess.Popen(
-                ["node", "/tmp/doc2x_mcp/node_modules/.bin/doc2x-mcp"],
+                ["npx", "-y", "@noedgeai-org/doc2x-mcp@latest"],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                env=os.environ,
+                env=doc2x_env,
             )
 
             init_msg = {
@@ -1223,7 +1227,7 @@ class DocumentProcessor:
             export_url = None
             start_time = time.time()
             interval = 2
-            max_wait = min(timeout, 600)
+            max_wait = min(timeout, 1200)
 
             while time.time() - start_time < max_wait:
                 resp = read_mcp_response(proc, timeout_sec=10)
