@@ -437,6 +437,13 @@ class ZoteroImporter:
         doc_chunk_service = get_document_chunk_service(effective_kb_id)
         lance_store = vector_store._get_lance_vector_store()
 
+        from kb_core.database import init_document_db
+        doc_db = init_document_db()
+        existing = doc_db.get_by_zotero_doc_id(effective_kb_id, str(item.item_id))
+        if existing:
+            logger.info(f"[{item.title}] 已导入过，跳过 (zotero_doc_id={item.item_id})")
+            return 0, [], [], None, []
+
         total_nodes = 0
         all_nodes = []
         processed_sources = []
