@@ -1747,8 +1747,6 @@ class TaskExecutor:
                                     db_written=True,
                                     error=error_reason,
                                 )
-                                stats["nodes"] += len(nodes)
-                                processed_sources.append(str(file_path))
                                 continue
 
                             stats["nodes"] += success_count

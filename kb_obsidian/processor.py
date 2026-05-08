@@ -473,7 +473,7 @@ class ObsidianImporter:
                 doc_chunk_service.mark_chunks_failed(node_ids, error=f"LanceDB write failed: {write_ex}")
                 continue
 
-            stats["nodes"] += len(nodes)
+            stats["nodes"] += success_count
             stats["files"] += 1
             stats["processed_sources"].append(str(file_path))
 
@@ -588,7 +588,7 @@ class ObsidianImporter:
                         doc_chunk_service.mark_chunks_failed(node_ids, error=f"LanceDB write failed: {e}")
                         continue
 
-                    stats["nodes"] += len(all_file_nodes)
+                    stats["nodes"] += success_count
                     stats["files"] += 1
                     stats["processed_sources"].append(str(pdf_path))
                     if progress:
