@@ -271,13 +271,6 @@ def submit_task_and_handle(
     wait: bool = False,
     timeout: float = 0,
 ) -> int:
-    from kb_core.task_scheduler import SchedulerStarter, is_scheduler_running
-
-    # 检查并自动启动 scheduler
-    if not is_scheduler_running():
-        print("⚙️  调度器未运行，正在启动...", file=sys.stderr)
-        SchedulerStarter.ensure_scheduler_running()
-
     result = TaskService.submit(
         task_type=task_type, kb_id=kb_id, params=params, source=source
     )
@@ -292,12 +285,6 @@ def submit_task_and_handle(
 
 def submit_import_and_handle(req: ImportRequest) -> int:
     from kb_core.import_service import ImportApplicationService
-    from kb_core.task_scheduler import SchedulerStarter, is_scheduler_running
-
-    if not is_scheduler_running():
-        print("⚙️  调度器未运行，正在启动...", file=sys.stderr)
-        SchedulerStarter.ensure_scheduler_running()
-
     result = ImportApplicationService.submit_task(req)
     print_json(result)
     return 0
@@ -1617,41 +1604,7 @@ def handle_task_watch(args: argparse.Namespace) -> int:
 
 
 def handle_scheduler_restart(args: argparse.Namespace) -> int:
-    import signal
-    import subprocess
-
-    from kb_core.task_scheduler import get_scheduler_pid_file
-
-    pid_file = get_scheduler_pid_file()
-
-    # 检查当前是否有 scheduler 在运行
-    if pid_file.exists():
-        with open(pid_file, "r") as f:
-            old_pid = int(f.read().strip())
-        try:
-            os.kill(old_pid, 0)  # 检查进程是否存在
-            print(f"停止现有调度器 (PID: {old_pid})...")
-            os.kill(old_pid, signal.SIGTERM)
-            time.sleep(1)
-            # 如果还没停止，强制杀死
-            try:
-                os.kill(old_pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-        except (ProcessLookupError, OSError):
-            print("现有调度器进程已不存在")
-
-    # 启动新的 scheduler
-    print("启动新的调度器...")
-    subprocess.Popen(
-        ["uv", "run", "python", "-m", "kb_core.task_scheduler"],
-        cwd=str(PROJECT_ROOT),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
-    time.sleep(1)
-    print("调度器已重启")
+    print("调度器已内嵌于 API 进程，请重启 API 服务: uv run llamaindex-study service restart")
     return 0
 
 
@@ -1733,37 +1686,7 @@ def handle_admin_delete(args: argparse.Namespace) -> int:
 
 
 def handle_admin_restart_scheduler(args: argparse.Namespace) -> int:
-    import signal
-    import subprocess
-
-    from kb_core.task_scheduler import get_scheduler_pid_file
-
-    pid_file = get_scheduler_pid_file()
-
-    if pid_file.exists():
-        with open(pid_file, "r") as f:
-            old_pid = int(f.read().strip())
-        try:
-            os.kill(old_pid, 0)
-            print(f"停止现有调度器 (PID: {old_pid})...")
-            os.kill(old_pid, signal.SIGTERM)
-            time.sleep(1)
-            try:
-                os.kill(old_pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-        except (ProcessLookupError, OSError):
-            print("现有调度器进程已不存在")
-
-    print("启动新的调度器...")
-    subprocess.Popen(
-        ["uv", "run", "python", "-m", "kb_core.task_scheduler"],
-        cwd=str(PROJECT_ROOT),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
-    print("调度器已重启")
+    print("调度器已内嵌于 API 进程，请重启 API: uv run llamaindex-study service restart")
     return 0
 
 
@@ -1898,24 +1821,13 @@ def _stop_scheduler() -> bool:
 
 
 def _start_scheduler() -> None:
-    """启动调度器"""
-    import subprocess
+    """调度器已内嵌于 API 进程，随 API 一同启停"""
+    pass
 
-    from kb_core.task_scheduler import is_scheduler_running
 
-    if is_scheduler_running():
-        print("调度器已在运行，跳过启动")
-        return
-
-    print("启动调度器...")
-    subprocess.Popen(
-        ["uv", "run", "python", "-m", "kb_core.task_scheduler"],
-        cwd=str(PROJECT_ROOT),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
-    time.sleep(2)
+def _stop_scheduler() -> bool:
+    """调度器已内嵌于 API 进程，随 API 一同启停"""
+    return True
 
 
 def _stop_api() -> bool:
@@ -2089,9 +2001,6 @@ def _is_port_in_use(port: int) -> bool:
 
 def _get_service_status() -> dict:
     """获取所有服务状态"""
-    from kb_core.task_scheduler import get_scheduler_pid_file
-
-    scheduler_pid_file = get_scheduler_pid_file()
     api_pid_file = PROJECT_ROOT / ".api.pid"
     frontend_pid_file = PROJECT_ROOT / ".frontend.pid"
 
@@ -2110,11 +2019,9 @@ def _get_service_status() -> dict:
         status["api"]["running"] = True
         status["api"]["pid"] = "unknown (port in use)"
 
-    # Scheduler
-    scheduler_pid = _get_pid_from_file(scheduler_pid_file)
-    if scheduler_pid and _is_process_running(scheduler_pid):
-        status["scheduler"]["running"] = True
-        status["scheduler"]["pid"] = scheduler_pid
+    # Scheduler - 内嵌于 API，随 API 一同启停
+    status["scheduler"]["running"] = status["api"]["running"]
+    status["scheduler"]["pid"] = status["api"].get("pid", "embedded")
 
     # Frontend - 检查 PID 文件 + 端口
     frontend_pid = _get_pid_from_file(frontend_pid_file)
@@ -2144,11 +2051,8 @@ def handle_service_start(args: argparse.Namespace) -> int:
     else:
         _start_api()
 
-    # Scheduler
-    if status["scheduler"]["running"]:
-        print(f"调度器已在运行 (PID: {status['scheduler']['pid']})")
-    else:
-        _start_scheduler()
+    # Scheduler 随 API 一同启停
+    print(f"调度器随 API 一同管理")
 
     print("\n所有服务启动完成")
     return 0
@@ -3045,15 +2949,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     service_start = service_sub.add_parser(
         "start",
-        help="启动所有服务（API、调度器、前端）",
-        description="启动 API 服务、任务调度器和前端开发服务器",
+        help="启动所有服务（API、前端）",
+        description="启动 API 服务和前端开发服务器（调度器随 API 一同启停）",
     )
     service_start.set_defaults(handler=handle_service_start)
 
     service_stop = service_sub.add_parser(
         "stop",
         help="停止所有服务",
-        description="停止 API 服务、任务调度器和前端开发服务器",
+        description="停止 API 服务和前端开发服务器（调度器随 API 一同停止）",
     )
     service_stop.set_defaults(handler=handle_service_stop)
 

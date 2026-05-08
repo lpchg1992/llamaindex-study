@@ -62,22 +62,8 @@ def release_scheduler_lock() -> None:
             pass
 
 def is_scheduler_running() -> bool:
-    """检查调度器是否正在运行（基于文件锁）"""
-    import fcntl
-    pid_file = get_scheduler_pid_file()
-    if not pid_file.exists():
-        return False
-    fd = None
-    try:
-        fd = open(pid_file, "r")
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        fcntl.flock(fd, fcntl.LOCK_UN)
-        return False
-    except OSError:
-        return True
-    finally:
-        if fd:
-            fd.close()
+    """调度器已内嵌于 API 进程，随 API 一同启停"""
+    return True
 
 
 def cleanup_scheduler_pid() -> None:
