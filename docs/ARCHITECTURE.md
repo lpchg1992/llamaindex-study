@@ -47,7 +47,7 @@
 
 **说明：**
 - **TaskQueue**：SQLite 持久化队列，API 将任务放入队列
-- **Scheduler**：独立进程（`kb_core/task_scheduler.py`），定时轮询 TaskQueue，分发任务给 TaskExecutor
+- **Scheduler**：内嵌于 API 进程（`kb_core/task_scheduler.py`），作为 asyncio 后台任务运行，定时轮询 TaskQueue，分发任务给 TaskExecutor
 - **TaskExecutor**：执行具体任务（文档解析、Embedding、写入 LanceDB）
 - **WebSocket**：任务状态实时推送
 

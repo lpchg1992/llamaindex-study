@@ -727,7 +727,7 @@ uv run llamaindex-study admin delete-table tech_tools --yes
 
 ## 服务管理 (service)
 
-服务管理命令用于管理 API 服务、任务调度器和前端开发服务器。
+服务管理命令用于管理 API 服务和前端开发服务器（调度器已内嵌于 API 进程，随 API 一同启停）。
 
 ### 启动所有服务
 
@@ -735,7 +735,7 @@ uv run llamaindex-study admin delete-table tech_tools --yes
 uv run llamaindex-study service start
 ```
 
-启动 API 服务、任务调度器和前端开发服务器。
+启动 API 服务和前端开发服务器。
 
 ### 停止所有服务
 
@@ -765,14 +765,14 @@ uv run llamaindex-study service status
 === 服务状态 ===
 
 ✅ API      运行中 (PID: 12345, Port: 37241)
-✅ Scheduler 运行中 (PID: 67890)
+✅ Scheduler 随 API 一同运行
 ✅ Frontend 运行中 (PID: 11111, Port: 5173)
 ```
 
 | 服务 | PID 文件 | 端口 | 说明 |
 |------|----------|------|------|
 | API | `.api.pid` | 37241 | FastAPI 服务 |
-| Scheduler | `llamaindex_scheduler.pid` | - | 任务调度器 |
+| Scheduler | 内嵌于 API | - | 任务调度器（随 API 启停） |
 | Frontend | `.frontend.pid` | 5173 | Vite 开发服务器 |
 
 ---

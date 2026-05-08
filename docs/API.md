@@ -1206,7 +1206,9 @@ curl -X POST http://localhost:37241/admin/restart-api
 
 ### 重启调度器
 
-#### POST /admin/restart-scheduler - 重启任务调度器
+调度器已内嵌于 API 进程，请使用 `/admin/restart-api` 重启。
+
+#### POST /admin/restart-scheduler - 已废弃
 
 ```bash
 curl -X POST http://localhost:37241/admin/restart-scheduler
@@ -1214,8 +1216,8 @@ curl -X POST http://localhost:37241/admin/restart-scheduler
 
 ```json
 {
-  "status": "restarting",
-  "message": "调度器正在重启..."
+  "status": "embedded",
+  "message": "调度器已内嵌于 API 进程，请使用 POST /restart-api 重启"
 }
 ```
 

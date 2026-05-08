@@ -833,7 +833,7 @@ export function SettingsPage() {
                       <Label className="text-base">Restart Scheduler</Label>
                     </div>
                     <p className="text-sm text-muted-foreground">
-                      Restart the task scheduler. This will cancel any running tasks.
+                      Scheduler runs embedded in the API process. Restart API to restart scheduler.
                     </p>
                   </div>
                   <Button
