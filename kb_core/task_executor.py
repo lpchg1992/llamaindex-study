@@ -1581,8 +1581,6 @@ class TaskExecutor:
         )
 
         if total_files > 0:
-            import hashlib
-
             file_list = []
             for file_path in all_files:
                 file_id = hashlib.md5(str(file_path).encode()).hexdigest()[:12]
@@ -1711,7 +1709,6 @@ class TaskExecutor:
                                     file_hash=current_hash,
                                     nodes=nodes,
                                     file_size=file_size,
-                                    metadata={"source": "generic"},
                                     failed_node_ids=failed_node_ids if failed_node_ids else None,
                                 )
                                 if not result:
