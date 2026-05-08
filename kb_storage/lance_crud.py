@@ -743,6 +743,46 @@ class LanceCRUDService:
         return True
 
     @staticmethod
+    def upsert_vectors_bulk(
+        kb_id: str,
+        entries: List[Dict[str, Any]],
+        table_name: Optional[str] = None,
+    ) -> int:
+        """Batch upsert multiple vector records in a single LanceDB operation.
+
+        Each entry must have: id, doc_id, vector.
+
+        Args:
+            kb_id: Knowledge base identifier
+            entries: List of dicts with keys id, doc_id, vector
+            table_name: Optional explicit table name
+
+        Returns:
+            Number of rows upserted
+        """
+        if not entries:
+            return 0
+
+        if table_name is None:
+            table_name = kb_id
+
+        db = LanceCRUDService.connect(kb_id)
+        table = db.open_table(table_name)
+
+        import pyarrow as pa
+
+        data = pa.table(
+            {
+                "id": [e["id"] for e in entries],
+                "doc_id": [e["doc_id"] for e in entries],
+                "vector": [e["vector"] for e in entries],
+            }
+        )
+
+        merge_result = table.merge_insert("id").when_not_matched_insert_all().when_matched_update_all().execute(data)
+        return getattr(merge_result, "num_inserted_rows", len(entries))
+
+    @staticmethod
     def get_schema(kb_id: str, table_name: Optional[str] = None) -> Dict[str, Any]:
         """获取表结构
 

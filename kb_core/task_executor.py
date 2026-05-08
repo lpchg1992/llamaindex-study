@@ -977,15 +977,14 @@ class TaskExecutor:
         include_pending = params.get("include_pending", True)
         include_failed = params.get("include_failed", True)
         include_embedded = params.get("include_embedded", False)
-        batch_size = params.get("batch_size", 100)
-        chunk_batch_size = params.get("chunk_batch_size", 50)
+        chunk_batch_size = params.get("batch_size", 50)
         limit = params.get("limit", 50000)
 
         logger.info(
             f"[{task_id}] 开始重新向量化任务: kb_id={kb_id}, "
             f"include_pending={include_pending}, include_failed={include_failed}, "
             f"include_embedded={include_embedded}, limit={limit}, "
-            f"batch_size={batch_size}, chunk_batch_size={chunk_batch_size}"
+            f"chunk_batch_size={chunk_batch_size}"
         )
 
         chunk_db = init_chunk_db()
@@ -1057,7 +1056,6 @@ class TaskExecutor:
         }
 
         processed = 0
-        failed_ids = []
 
         for batch_start in range(0, total_chunks, chunk_batch_size):
             if await self._check_cancelled(task_id):
@@ -1105,30 +1103,20 @@ class TaskExecutor:
 
             batch_failed_ids = []
             batch_failed_errors: Dict[str, List[str]] = {}
+            batch_success_entries = []
+
             for idx, (ep_name, embedding, error) in enumerate(embedding_results):
                 chunk_id = chunk_ids[idx]
-                text_len = len(texts[idx])
-
                 try:
                     if error:
                         raise Exception(error)
-
                     if embedding is None or all(v == 0.0 for v in embedding):
                         raise Exception(f"zero vector from {ep_name}")
-
-                    LanceCRUDService.upsert_vector(
-                        chunk_id, doc_ids[idx], embedding, kb_id=kb_id
-                    )
-                    try:
-                        chunk_db.mark_embedded(chunk_id)
-                    except Exception as mark_err:
-                        try:
-                            LanceCRUDService.delete_by_chunk_ids(kb_id, [chunk_id])
-                        except Exception:
-                            pass
-                        raise Exception(f"DB update failed after vector write: {mark_err}")
-                    stats["success"] += 1
-
+                    batch_success_entries.append({
+                        "id": chunk_id,
+                        "doc_id": doc_ids[idx],
+                        "vector": embedding,
+                    })
                 except Exception as e:
                     reason = str(e)[:500]
                     logger.warning(f"Re-embed chunk {chunk_id} failed: {reason}")
@@ -1136,11 +1124,49 @@ class TaskExecutor:
                     batch_failed_errors.setdefault(reason, []).append(chunk_id)
                     stats["skipped"] += 1
 
-            failed_ids.extend(batch_failed_ids)
-            processed += len(chunk_batch)
+            # Batch upsert successful vectors to LanceDB in groups of 100
+            LANCE_BATCH = 100
+            for i in range(0, len(batch_success_entries), LANCE_BATCH):
+                group = batch_success_entries[i:i + LANCE_BATCH]
+                group_ids = [e["id"] for e in group]
+                try:
+                    LanceCRUDService.upsert_vectors_bulk(kb_id, group)
+                except Exception as upsert_err:
+                    logger.error(
+                        f"Batch LanceDB upsert failed ({len(group)} entries): {upsert_err}"
+                    )
+                    for eid in group_ids:
+                        batch_failed_ids.append(eid)
+                        batch_failed_errors.setdefault(
+                            f"LanceDB batch upsert: {upsert_err}", []
+                        ).append(eid)
+                        stats["skipped"] += 1
+                    continue
+
+                try:
+                    chunk_db.mark_success_bulk(group_ids)
+                except Exception as mark_err:
+                    logger.warning(
+                        f"Batch mark_success failed, rolling back LanceDB: {mark_err}"
+                    )
+                    try:
+                        LanceCRUDService.delete_by_chunk_ids(kb_id, group_ids)
+                    except Exception:
+                        pass
+                    for eid in group_ids:
+                        batch_failed_ids.append(eid)
+                        batch_failed_errors.setdefault(
+                            f"DB mark failed: {mark_err}", []
+                        ).append(eid)
+                        stats["skipped"] += 1
+                    continue
+
+                stats["success"] += len(group)
 
             for reason, ids in batch_failed_errors.items():
                 chunk_db.mark_failed_bulk(ids, error=reason)
+
+            processed += len(chunk_batch)
 
             self.queue.update_file_progress(
                 task_id, file_id,

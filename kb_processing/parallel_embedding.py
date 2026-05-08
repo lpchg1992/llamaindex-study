@@ -760,6 +760,8 @@ class ParallelEmbeddingProcessor:
         2. 每个端点处理完一个后自动取下一个
         3. 快的端点自然处理更多 chunk
 
+        非阻塞：用 asyncio.sleep 轮询线程状态，避免 t.join() 冻结事件循环。
+
         Args:
             texts: 文本列表
 
@@ -768,6 +770,8 @@ class ParallelEmbeddingProcessor:
         """
         if not texts:
             return []
+
+        import asyncio as _asyncio
 
         results: List[Optional[EmbeddingResult]] = [None] * len(texts)
         completed = 0
@@ -803,8 +807,8 @@ class ParallelEmbeddingProcessor:
                 t.start()
                 threads.append(t)
 
-        for t in threads:
-            t.join()
+        while any(t.is_alive() for t in threads):
+            await _asyncio.sleep(0.1)
 
         return [
             r
