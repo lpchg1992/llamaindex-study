@@ -422,28 +422,6 @@ class ParallelEmbeddingProcessor:
                 )
         return self._models[cache_key]
 
-    def _record_embedding(self, ep: EmbeddingEndpoint, token_count: int, error: bool):
-        """记录 embedding 调用统计（用于计费和监控）
-
-        Args:
-            ep: Embedding 端点
-            token_count: 处理的 token 数量
-            error: 是否发生错误
-        """
-        try:
-            from rag.embedding_factory import _record_embedding_call
-
-            if ep.url == "siliconflow://":
-                vendor_id = "siliconflow"
-            elif ep.model_id and "/" in ep.model_id:
-                vendor_id = ep.model_id.split("/")[0]
-            else:
-                vendor_id = "ollama"
-            model_id_for_record = ep.model_id if ep.model_id else f"{vendor_id}/unknown"
-            _record_embedding_call(vendor_id, model_id_for_record, token_count, error)
-        except Exception as e:
-            logger.warning(f"Failed to record embedding call for {model_id_for_record}: {e}")
-
     def _get_embedding_with_retry(
         self, text: str, ep: EmbeddingEndpoint
     ) -> EmbeddingResult:
@@ -462,7 +440,6 @@ class ParallelEmbeddingProcessor:
         def call_sf() -> EmbeddingResult:
             text_len = len(text[:8192])
             if sf_ep is None:
-                self._record_embedding(ep, 0, True)
                 logger.error(
                     f"[Fallback] SiliconFlow 端点未配置，embedding 失败 (text_len={text_len})"
                 )
@@ -486,7 +463,6 @@ class ParallelEmbeddingProcessor:
                             f" (已重试 {max_retries} 次, text_len={text_len})，尝试 Ollama 兜底..."
                         )
                         break
-                    self._record_embedding(sf_ep, text_len, False)
                     return (sf_ep.name, emb, None)
                 except Exception as sf_err:
                     if retry < max_retries - 1:
@@ -516,7 +492,6 @@ class ParallelEmbeddingProcessor:
                         logger.info(
                             f"[{ollama_ep.name}] Ollama 兜底成功，已恢复为健康 (text_len={text_len})"
                         )
-                        self._record_embedding(ollama_ep, text_len, False)
                         return (ollama_ep.name, emb, None)
                 except Exception as ollama_err:
                     logger.debug(f"[{ollama_ep.name}] 兜底尝试失败: {ollama_err}")
@@ -535,7 +510,6 @@ class ParallelEmbeddingProcessor:
                     try:
                         emb = model.get_text_embedding(text[:8192])
                         if emb and not all(v == 0.0 for v in emb):
-                            self._record_embedding(sf_ep, text_len, False)
                             logger.info(
                                 f"[{sf_ep.name}] 持久重试成功 "
                                 f"(第 {round_num} 轮, text_len={text_len})"
@@ -552,7 +526,6 @@ class ParallelEmbeddingProcessor:
                                 ollama_ep.is_healthy = True
                                 ollama_ep.last_error = None
                                 self._consecutive_failures[ollama_ep.name] = 0
-                            self._record_embedding(ollama_ep, text_len, False)
                             logger.info(
                                 f"[{ollama_ep.name}] 持久重试成功 "
                                 f"(第 {round_num} 轮, text_len={text_len})"
@@ -567,7 +540,6 @@ class ParallelEmbeddingProcessor:
                         f"间隔 {persistent_delay:.0f}s, text_len={text_len})"
                     )
 
-            self._record_embedding(sf_ep, 0, True)
             logger.error(
                 f"持久重试 {max_persistent_rounds} 轮后仍然失败，放弃 (text_len={text_len})"
             )
@@ -591,7 +563,6 @@ class ParallelEmbeddingProcessor:
                     logger.info(
                         f"[{ep.name}] 恢复健康 (曾是 unhealthy，本次成功)"
                     )
-                    self._record_embedding(ep, len(text) // 4, False)
                     return (ep.name, embedding, None)
             except Exception:
                 pass
@@ -615,7 +586,6 @@ class ParallelEmbeddingProcessor:
                     if ep.avg_latency == 0
                     else (ep.avg_latency * 0.7 + latency * 0.3)
                 )
-            self._record_embedding(ep, len(text) // 4, False)
             return (ep.name, embedding, None)
         except Exception as e:
             text_len = len(text[:8192])
