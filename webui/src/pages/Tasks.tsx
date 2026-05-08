@@ -67,7 +67,7 @@ function TaskDetailDialog({ taskId, open, onOpenChange }: TaskDetailDialogProps)
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl max-h-[85vh]">
+      <DialogContent className="max-w-2xl max-h-[85vh] overflow-hidden flex flex-col">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Eye className="h-5 w-5" />
@@ -82,8 +82,8 @@ function TaskDetailDialog({ taskId, open, onOpenChange }: TaskDetailDialogProps)
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
           </div>
         ) : task ? (
-          <ScrollArea className="h-[70vh] w-full min-w-0">
-            <div className="space-y-4 p-1">
+          <ScrollArea className="flex-1 min-h-0 max-w-full">
+            <div className="space-y-4 p-1 max-w-full">
               {task.task_type === 'initialize' ? (
                 <div className="border rounded-lg p-4 bg-orange-50 dark:bg-orange-950/20">
                   <div className="flex items-center gap-2 mb-3">
@@ -145,10 +145,10 @@ function TaskDetailDialog({ taskId, open, onOpenChange }: TaskDetailDialogProps)
                       </span>
                     )}
                   </div>
-                   <div className="space-y-2 max-h-80 overflow-y-auto overflow-x-hidden">
+                   <div className="space-y-2 max-h-80 overflow-y-auto overflow-x-hidden max-w-full">
                     {fileProgress.map((file: any, idx: number) => (
-                      <div key={file.file_id || idx} className="border rounded-lg p-3 text-sm min-w-0 overflow-hidden">
-                        <div className="flex items-center justify-between mb-2">
+                      <div key={file.file_id || idx} className="border rounded-lg p-3 text-sm max-w-full overflow-hidden">
+                        <div className="flex items-center justify-between mb-2 gap-1 max-w-full">
                           <div className="flex items-center gap-2 min-w-0">
                             <Badge className={getStatusColor(file.status)} variant="outline">
                               {getStatusLabel(file.status)}
@@ -182,7 +182,7 @@ function TaskDetailDialog({ taskId, open, onOpenChange }: TaskDetailDialogProps)
                               />
                             )}
                           </div>
-                          <span className="text-xs text-muted-foreground w-24 text-right">
+                          <span className="text-xs text-muted-foreground shrink-0 w-20 text-right">
                             {file.total_chunks > 0 ? `${file.processed_chunks} / ${file.total_chunks} chunks` : file.status === 'processing' ? '处理中...' : file.status === 'completed' ? '完成' : file.status === 'pending' ? '等待中' : ''}
                           </span>
                         </div>
