@@ -10,7 +10,6 @@ import {
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Badge } from '@/components/ui/badge'
-import { Switch } from '@/components/ui/switch'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import {
   Table,
@@ -67,9 +66,9 @@ function StatusBadges({ item, isManualScanned, onToggleScanned }: {
       </Badge>
       {item.is_eligible && !item.is_duplicate && onToggleScanned && (
         <div className="flex items-center gap-1">
-          <Switch
+          <Checkbox
             checked={isManualScanned}
-            onCheckedChange={(checked) => onToggleScanned(item.item_id, checked)}
+            onCheckedChange={(checked) => onToggleScanned(item.item_id, !!checked)}
             aria-label={`扫描 ${item.title}`}
           />
           <span className="text-xs text-muted-foreground">扫描</span>
