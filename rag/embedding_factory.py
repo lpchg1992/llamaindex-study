@@ -91,7 +91,8 @@ class OllamaEmbedder(OllamaEmbedding):
         client_kwargs: Optional[Dict[str, Any]] = None,
     ):
         if client_kwargs is None:
-            client_kwargs = {"proxy": None, "http2": False}
+            import httpx
+            client_kwargs = {"proxy": None, "transport": httpx.HTTPTransport()}
         super().__init__(model_name=model_name, base_url=base_url, client_kwargs=client_kwargs)
         self._base_url = base_url
         self._model_id = model_id
@@ -269,15 +270,16 @@ def configure_global_embed_model(
     """配置 LlamaIndex 全局 Embedding 模型"""
     settings = get_settings()
     model, base_url, model_id = _resolve_embedding_base_url(model, model_id, base_url)
-    embed_model = OllamaEmbedder(
-        model_name=model,
-        base_url=base_url,
-        model_id=model_id,
-        max_retries=settings.max_retries,
-        initial_delay=settings.retry_delay,
-        backoff_factor=1.5,
-        client_kwargs={"proxy": None},
-    )
+        import httpx
+        embed_model = OllamaEmbedder(
+            model_name=model,
+            base_url=base_url,
+            model_id=model_id,
+            max_retries=settings.max_retries,
+            initial_delay=settings.retry_delay,
+            backoff_factor=1.5,
+            client_kwargs={"proxy": None, "transport": httpx.HTTPTransport()},
+        )
     LlamaSettings.embed_model = embed_model
     LlamaSettings.chunk_size = chunk_size
     LlamaSettings.embed_batch_size = embed_batch_size
@@ -303,6 +305,7 @@ def configure_embed_model_by_model_id(model_id: str) -> OllamaEmbedding:
     is_ollama = vendor_id.startswith("ollama") or model_id.startswith("ollama")
 
     if is_ollama:
+        import httpx
         embed_model = OllamaEmbedder(
             model_name=model_info["name"],
             base_url=base_url,
@@ -310,7 +313,7 @@ def configure_embed_model_by_model_id(model_id: str) -> OllamaEmbedding:
             max_retries=settings.max_retries,
             initial_delay=settings.retry_delay,
             backoff_factor=1.5,
-            client_kwargs={"proxy": None},
+            client_kwargs={"proxy": None, "transport": httpx.HTTPTransport()},
         )
     else:
         embed_model = OllamaEmbedding(
