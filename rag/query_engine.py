@@ -427,6 +427,10 @@ class QueryEngineWrapper:
                     logger.warning(f"Auto-Merging Retriever 初始化失败: {e}")
 
         if self.mode == "hybrid" or self.settings.use_hybrid_search:
+            if self.use_auto_merging:
+                logger.warning(
+                    "Auto-Merging + Hybrid 组合使用: 父子合并与 RRF 融合可能产生意外结果"
+                )
             return self._create_hybrid_retriever(base_retriever)
 
         return base_retriever
@@ -447,16 +451,6 @@ class QueryEngineWrapper:
 
         if hasattr(lance_store, "ensure_fts_index"):
             lance_store.ensure_fts_index()
-
-        if self.settings.hybrid_search_mode == "RRF":
-            reranker = lancedb.rerankers.RRFReranker()
-        else:
-            reranker = lancedb.rerankers.LinearCombinationReranker(
-                weight=self.settings.hybrid_search_alpha
-            )
-
-        if hasattr(lance_store, "_reranker"):
-            lance_store._reranker = reranker
 
         hybrid_retriever = VectorIndexRetriever(
             self.index,

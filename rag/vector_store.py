@@ -107,15 +107,10 @@ class LanceDBVectorStore:
             return
 
         table = db.open_table(self.table_name)
-        if hasattr(table, "_fts_index_ready"):
-            if not table._fts_index_ready:
-                table.create_fts_index("text", replace=True)
-                table._fts_index_ready = True
-        else:
-            try:
-                table.create_fts_index("text", replace=True)
-            except Exception:
-                pass
+        try:
+            table.create_fts_index("text", replace=True)
+        except Exception as e:
+            logger.warning(f"FTS 索引创建失败 (可能已存在): {e}")
 
     def _get_metadata_path(self) -> Optional[Path]:
         """获取元数据文件路径"""

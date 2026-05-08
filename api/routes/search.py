@@ -44,6 +44,19 @@ def search(req: SearchRequest):
         )
         return [SearchResult(**r) for r in result.get("results", [])]
 
+    if req.route_mode == "all":
+        result = QueryRouter.search(
+            req.query,
+            top_k=req.top_k,
+            use_auto_merging=req.use_auto_merging,
+            use_reranker=req.use_reranker,
+            mode="all",
+            model_id=req.model_id,
+            embed_model_id=req.embed_model_id,
+            retrieval_mode=req.retrieval_mode,
+        )
+        return [SearchResult(**r) for r in result.get("results", [])]
+
     kb_id_list = _parse_kb_ids_or_raise(req.kb_ids, req.route_mode)
 
     from kb_core.services import SearchService
@@ -90,6 +103,23 @@ def query(req: QueryRequest):
                 top_k=req.top_k,
                 exclude=req.exclude,
                 mode="auto",
+                use_hyde=req.use_hyde,
+                use_multi_query=req.use_multi_query,
+                num_multi_queries=req.num_multi_queries,
+                use_auto_merging=req.use_auto_merging,
+                use_reranker=req.use_reranker,
+                response_mode=req.response_mode,
+                retrieval_mode=req.retrieval_mode,
+                model_id=model_id,
+                embed_model_id=req.embed_model_id,
+            )
+            return QueryResponse(**result)
+
+        if req.route_mode == "all":
+            result = QueryRouter.query(
+                req.query,
+                top_k=req.top_k,
+                mode="all",
                 use_hyde=req.use_hyde,
                 use_multi_query=req.use_multi_query,
                 num_multi_queries=req.num_multi_queries,

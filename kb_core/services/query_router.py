@@ -183,8 +183,8 @@ class QueryRouter:
             return [kb_id for kb_id, _ in sorted_kbs]
 
         indexed_kbs = sorted(
-            [kb for kb in kbs if int(kb.get("row_count", 0) or 0) > 0],
-            key=lambda kb: int(kb.get("row_count", 0) or 0),
+            [kb for kb in kbs if int(kb.get("document_count", 0) or 0) > 0],
+            key=lambda kb: int(kb.get("document_count", 0) or 0),
             reverse=True,
         )
         if indexed_kbs:
@@ -311,7 +311,7 @@ class QueryRouter:
 
         return {
             "response": combined_response,
-            "sources": all_sources[: top_k * 3],
+            "sources": all_sources[:top_k],
             "kbs_queried": kb_ids,
         }
 

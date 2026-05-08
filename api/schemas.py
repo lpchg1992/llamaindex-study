@@ -15,9 +15,9 @@ from pydantic import BaseModel, Field
 class SearchRequest(BaseModel):
     query: str = Field(..., description="搜索查询")
     top_k: int = Field(5, ge=1, le=100)
-    route_mode: Literal["general", "auto"] = Field(
+    route_mode: Literal["general", "auto", "all"] = Field(
         "general",
-        description="路由模式: general(用户选择知识库), auto(自动路由)",
+        description="路由模式: general(用户选择知识库), auto(自动路由), all(所有知识库)",
     )
     model_id: Optional[str] = Field(
         None,
@@ -54,9 +54,9 @@ class SearchResult(BaseModel):
 class QueryRequest(BaseModel):
     query: str = Field(..., description="查询")
     top_k: int = Field(5, ge=1, le=100)
-    route_mode: Literal["general", "auto"] = Field(
+    route_mode: Literal["general", "auto", "all"] = Field(
         "general",
-        description="路由模式: general(用户选择知识库), auto(自动路由)",
+        description="路由模式: general(用户选择知识库), auto(自动路由), all(所有知识库)",
     )
     retrieval_mode: Literal["vector", "hybrid"] = Field(
         "vector", description="检索模式: vector(向量检索), hybrid(混合搜索)"

@@ -53,6 +53,7 @@ class SearchService:
         )
 
         if _use_auto_merging:
+            retriever = base_retriever
             try:
                 from rag.vector_store import LanceDBDocumentStore
 
@@ -178,16 +179,6 @@ class SearchService:
         if hasattr(lance_store, "ensure_fts_index"):
             lance_store.ensure_fts_index()
 
-        if settings.hybrid_search_mode == "RRF":
-            reranker = lancedb.rerankers.RRFReranker()
-        else:
-            reranker = lancedb.rerankers.LinearCombinationReranker(
-                weight=settings.hybrid_search_alpha
-            )
-
-        if hasattr(lance_store, "_reranker"):
-            lance_store._reranker = reranker
-
         hybrid_retriever = VectorIndexRetriever(
             index,
             similarity_top_k=top_k,
@@ -250,8 +241,8 @@ class SearchService:
                 for r in results:
                     r["kb_id"] = kb_id
                 all_results.extend(results)
-            except Exception:
-                continue
+            except Exception as e:
+                logger.warning(f"搜索知识库 {kb_id} 失败: {e}")
 
         all_results.sort(key=lambda x: x.get("score", 0), reverse=True)
         return all_results[:top_k]
