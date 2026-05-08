@@ -145,9 +145,9 @@ function TaskDetailDialog({ taskId, open, onOpenChange }: TaskDetailDialogProps)
                       </span>
                     )}
                   </div>
-                  <div className="space-y-2 max-h-80 overflow-y-auto">
+                   <div className="space-y-2 max-h-80 overflow-y-auto overflow-x-hidden">
                     {fileProgress.map((file: any, idx: number) => (
-                      <div key={file.file_id || idx} className="border rounded-lg p-3 text-sm">
+                      <div key={file.file_id || idx} className="border rounded-lg p-3 text-sm min-w-0 overflow-hidden">
                         <div className="flex items-center justify-between mb-2">
                           <div className="flex items-center gap-2 min-w-0">
                             <Badge className={getStatusColor(file.status)} variant="outline">

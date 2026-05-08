@@ -18,6 +18,9 @@ export interface FileTreeItem {
   selected?: boolean
   partial?: boolean
   size?: number
+  is_scanned_pdf?: boolean
+  has_md_cache?: boolean
+  force_ocr?: boolean
 }
 
 interface FileTreeProps {

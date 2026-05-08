@@ -1,4 +1,4 @@
-import { File, X, Book, FileText } from 'lucide-react'
+import { File, X, Book, FileText, Scan, Zap, Database } from 'lucide-react'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Button } from '@/components/ui/button'
 import type { FileTreeItem } from './FileTree'
@@ -67,7 +67,24 @@ export function SelectedFilesPanel({
               >
                 {getIcon(item)}
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm truncate">{item.name}</p>
+                  <div className="flex items-center gap-1.5">
+                    <p className="text-sm truncate">{item.name}</p>
+                    {item.is_scanned_pdf && (
+                      <span className="shrink-0 text-[10px] px-1 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" title="扫描件PDF">
+                        <Scan className="h-2.5 w-2.5 inline mr-0.5" />扫描件
+                      </span>
+                    )}
+                    {item.force_ocr && (
+                      <span className="shrink-0 text-[10px] px-1 py-0.5 rounded bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" title="强制OCR">
+                        <Zap className="h-2.5 w-2.5 inline mr-0.5" />OCR
+                      </span>
+                    )}
+                    {item.has_md_cache && (
+                      <span className="shrink-0 text-[10px] px-1 py-0.5 rounded bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400" title="已有MD缓存">
+                        <Database className="h-2.5 w-2.5 inline mr-0.5" />缓存
+                      </span>
+                    )}
+                  </div>
                   {item.path && (
                     <p className="text-xs text-muted-foreground truncate">
                       {item.path}

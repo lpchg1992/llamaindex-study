@@ -249,6 +249,15 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
           item.item_id !== undefined &&
           selectedItemIds.has(item.item_id)
       )
+      .map((item) => {
+        const preview = selectedPreviewItems.find((p) => p.item_id === item.item_id)
+        return {
+          ...item,
+          is_scanned_pdf: preview?.is_scanned_pdf ?? false,
+          has_md_cache: preview?.has_md_cache ?? false,
+          force_ocr: forceOcrIds.includes(item.item_id!),
+        }
+      })
     setZoteroConfirmedItems(confirmedItems)
     setZoteroPreviewConfirmed(true)
 
