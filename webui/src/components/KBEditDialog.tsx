@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useUpdateKB, useUpdateTopics } from '@/api/hooks'
+import { useUpdateKB, useUpdateTopics, useCanonicalNames } from '@/api/hooks'
 import {
   Dialog,
   DialogContent,
@@ -13,6 +13,13 @@ import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { X, Plus, Loader2, Pencil } from 'lucide-react'
 import { toast } from 'sonner'
 import type { KBInfo, TopicInfo } from '@/types/api'
@@ -27,9 +34,11 @@ interface KBEditDialogProps {
 export function KBEditDialog({ open, onOpenChange, kb, topics }: KBEditDialogProps) {
   const updateKB = useUpdateKB()
   const updateTopics = useUpdateTopics()
+  const { data: canonicalNames } = useCanonicalNames()
 
   const [name, setName] = useState(kb.name)
   const [description, setDescription] = useState(kb.description)
+  const [canonicalName, setCanonicalName] = useState<string | undefined>(kb.canonical_name)
   const [localTopics, setLocalTopics] = useState<string[]>(topics?.topics || [])
   const [newTopic, setNewTopic] = useState('')
   const [activeTab, setActiveTab] = useState('basic')
@@ -38,6 +47,7 @@ export function KBEditDialog({ open, onOpenChange, kb, topics }: KBEditDialogPro
     if (open) {
       setName(kb.name)
       setDescription(kb.description)
+      setCanonicalName(kb.canonical_name)
       setLocalTopics(topics?.topics || [])
       setNewTopic('')
     }
@@ -50,6 +60,7 @@ export function KBEditDialog({ open, onOpenChange, kb, topics }: KBEditDialogPro
         data: {
           name,
           description,
+          canonical_name: canonicalName,
         },
       })
       toast.success('Knowledge base updated')
@@ -135,6 +146,23 @@ export function KBEditDialog({ open, onOpenChange, kb, topics }: KBEditDialogPro
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder="Optional description"
               />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="edit-kb-canonical">Canonical Name</Label>
+              <Select value={canonicalName || '__none__'} onValueChange={(v) => setCanonicalName(v === '__none__' ? undefined : v)}>
+                <SelectTrigger>
+                  <SelectValue placeholder="None" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">None</SelectItem>
+                  {canonicalNames?.map((n) => (
+                    <SelectItem key={n.id} value={n.id}>
+                      {n.id}{n.description ? ` — ${n.description}` : ''}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
 
             <div className="grid grid-cols-2 gap-4 text-sm">
