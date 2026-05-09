@@ -150,11 +150,13 @@ class KBInfo(BaseModel):
     status: str = "unknown"
     row_count: Optional[int] = None
     chunk_strategy: Optional[str] = None
+    canonical_name: Optional[str] = None
 
 
 class KBUpdateRequest(BaseModel):
     name: Optional[str] = Field(None, description="知识库显示名称")
     description: Optional[str] = Field(None, description="知识库描述")
+    canonical_name: Optional[str] = Field(None, description="知识库 canonical name")
 
 
 class TaskCreateRequest(BaseModel):
@@ -199,6 +201,7 @@ class ModelInfo(BaseModel):
     vendor_id: str
     name: str
     type: str
+    canonical_name: Optional[str] = None
     is_active: bool = True
     is_default: bool = False
     config: dict = {}
@@ -212,9 +215,22 @@ class ModelCreateRequest(BaseModel):
     vendor_id: str = Field(..., description="供应商ID: siliconflow, ollama")
     name: Optional[str] = Field(None, description="显示名称，不填则从ID提取")
     type: str = Field(..., description="类型: llm, embedding, reranker")
+    canonical_name: Optional[str] = Field(None, description="模型通用名称 (canonical name)")
     is_active: bool = Field(True, description="是否激活")
     is_default: bool = Field(False, description="是否设为默认模型")
     config: dict = Field({}, description="其他配置")
+
+
+class CanonicalNameInfo(BaseModel):
+    id: str
+    model_type: str
+    description: Optional[str] = None
+
+
+class CanonicalNameCreate(BaseModel):
+    id: str = Field(..., description="通用名称 (如 bge-m3, deepseek-v3)")
+    model_type: str = Field(..., description="模型类型: embedding, llm, reranker")
+    description: Optional[str] = Field(None, description="描述")
 
 
 # ============== Zotero Request Models ==============

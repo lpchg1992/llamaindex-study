@@ -7,6 +7,7 @@ from typing import Any, Dict, Generator, List, Optional, Set
 
 from sqlalchemy import (
     Float,
+    ForeignKey,
     Index,
     Integer,
     String,
@@ -73,7 +74,7 @@ class KnowledgeBaseMetaModel(Base):
     source_paths: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
     source_tags: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
     config: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
-    is_active: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    canonical_name: Mapped[Optional[str]] = mapped_column(String, ForeignKey("canonical_names.id"), nullable=True)
     created_at: Mapped[float] = mapped_column(Float, nullable=False)
     updated_at: Mapped[float] = mapped_column(Float, nullable=False)
 
@@ -116,9 +117,19 @@ class ModelModel(Base):
     vendor_id: Mapped[str] = mapped_column(String, nullable=False)
     name: Mapped[str] = mapped_column(String, nullable=False)
     type: Mapped[str] = mapped_column(String, nullable=False)
+    canonical_name: Mapped[Optional[str]] = mapped_column(String, ForeignKey("canonical_names.id"), nullable=True)
     is_active: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     is_default: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     config: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    created_at: Mapped[float] = mapped_column(Float)
+    updated_at: Mapped[float] = mapped_column(Float)
+
+
+class CanonicalNameModel(Base):
+    __tablename__ = "canonical_names"
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    model_type: Mapped[str] = mapped_column(String, nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[float] = mapped_column(Float)
     updated_at: Mapped[float] = mapped_column(Float)
 
@@ -476,6 +487,7 @@ class ModelDB:
         type: str,
         is_active: bool = True,
         is_default: bool = False,
+        canonical_name: str = None,
         config: dict = None,
     ) -> bool:
         """插入或更新模型
@@ -498,6 +510,7 @@ class ModelDB:
             vendor_id=vendor_id,
             name=name,
             type=type,
+            canonical_name=canonical_name,
             is_active=1 if is_active else 0,
             is_default=1 if is_default else 0,
             config=_json_dump(config, {}),
@@ -510,6 +523,7 @@ class ModelDB:
                 "vendor_id": stmt.excluded.vendor_id,
                 "name": stmt.excluded.name,
                 "type": stmt.excluded.type,
+                "canonical_name": stmt.excluded.canonical_name,
                 "is_active": stmt.excluded.is_active,
                 "is_default": stmt.excluded.is_default,
                 "config": stmt.excluded.config,
@@ -538,6 +552,7 @@ class ModelDB:
                 "vendor_id": row.vendor_id,
                 "name": row.name,
                 "type": row.type,
+                "canonical_name": row.canonical_name,
                 "is_active": bool(row.is_active),
                 "is_default": bool(row.is_default),
                 "config": _json_load(row.config, {}),
@@ -571,6 +586,7 @@ class ModelDB:
                     "vendor_id": row.vendor_id,
                     "name": row.name,
                     "type": row.type,
+                    "canonical_name": row.canonical_name,
                     "is_active": bool(row.is_active),
                     "is_default": bool(row.is_default),
                     "config": _json_load(row.config, {}),
@@ -640,6 +656,73 @@ class ModelDB:
                 update(ModelModel).where(ModelModel.id == model_id).values(is_default=1)
             )
             return (result.rowcount or 0) > 0
+
+
+class CanonicalNameDB:
+    def __init__(self, db: DatabaseManager):
+        self.db = db
+
+    def upsert(self, name_id: str, model_type: str, description: str = None) -> bool:
+        now = time.time()
+        stmt = sqlite_insert(CanonicalNameModel).values(
+            id=name_id,
+            model_type=model_type,
+            description=description,
+            created_at=now,
+            updated_at=now,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[CanonicalNameModel.id],
+            set_={
+                "model_type": stmt.excluded.model_type,
+                "description": stmt.excluded.description,
+                "updated_at": now,
+            },
+        )
+        with self.db.session_scope() as session:
+            session.execute(stmt)
+            return True
+
+    def get(self, name_id: str) -> Optional[Dict[str, Any]]:
+        with self.db.session_scope() as session:
+            row = session.get(CanonicalNameModel, name_id)
+            if not row:
+                return None
+            return {
+                "id": row.id,
+                "model_type": row.model_type,
+                "description": row.description,
+                "created_at": row.created_at,
+                "updated_at": row.updated_at,
+            }
+
+    def get_all(self, model_type: str = None) -> List[Dict[str, Any]]:
+        with self.db.session_scope() as session:
+            stmt = select(CanonicalNameModel).order_by(CanonicalNameModel.model_type, CanonicalNameModel.id)
+            if model_type:
+                stmt = stmt.where(CanonicalNameModel.model_type == model_type)
+            rows = session.scalars(stmt).all()
+            return [
+                {
+                    "id": row.id,
+                    "model_type": row.model_type,
+                    "description": row.description,
+                    "created_at": row.created_at,
+                    "updated_at": row.updated_at,
+                }
+                for row in rows
+            ]
+
+    def delete(self, name_id: str) -> bool:
+        with self.db.session_scope() as session:
+            result = session.execute(
+                delete(CanonicalNameModel).where(CanonicalNameModel.id == name_id)
+            )
+            return (result.rowcount or 0) > 0
+
+
+def init_canonical_name_db() -> CanonicalNameDB:
+    return CanonicalNameDB(get_db())
 
 
 def init_vendor_db() -> VendorDB:
@@ -872,7 +955,7 @@ class KnowledgeBaseMetaDB:
             "source_paths": _json_load(row.source_paths, []),
             "source_tags": _json_load(row.source_tags, []),
             "config": _json_load(row.config, {}),
-            "is_active": row.is_active,
+            "canonical_name": row.canonical_name,
             "created_at": row.created_at,
             "updated_at": row.updated_at,
         }
@@ -889,6 +972,7 @@ class KnowledgeBaseMetaDB:
         source_paths: List[str] = None,
         source_tags: List[str] = None,
         config: Dict[str, Any] = None,
+        canonical_name: str = None,
     ) -> bool:
         now = time.time()
         stmt = sqlite_insert(KnowledgeBaseMetaModel).values(
@@ -902,6 +986,7 @@ class KnowledgeBaseMetaDB:
             source_paths=_json_dump(source_paths, []),
             source_tags=_json_dump(source_tags, []),
             config=_json_dump(config, {}),
+            canonical_name=canonical_name,
             created_at=now,
             updated_at=now,
         )
@@ -917,7 +1002,7 @@ class KnowledgeBaseMetaDB:
                 "source_paths": stmt.excluded.source_paths,
                 "source_tags": stmt.excluded.source_tags,
                 "config": stmt.excluded.config,
-                "is_active": 1,
+                "canonical_name": stmt.excluded.canonical_name,
                 "updated_at": now,
             },
         )
@@ -925,33 +1010,20 @@ class KnowledgeBaseMetaDB:
             session.execute(stmt)
         return True
 
-    def get(self, kb_id: str, active_only: bool = True) -> Optional[Dict[str, Any]]:
+    def get(self, kb_id: str) -> Optional[Dict[str, Any]]:
         with self.db.session_scope() as session:
             stmt = select(KnowledgeBaseMetaModel).where(
                 KnowledgeBaseMetaModel.kb_id == kb_id
             )
-            if active_only:
-                stmt = stmt.where(KnowledgeBaseMetaModel.is_active == 1)
             row = session.scalars(stmt).first()
             return self._to_dict(row) if row else None
 
-    def get_all(self, active_only: bool = True) -> List[Dict[str, Any]]:
+    def get_all(self) -> List[Dict[str, Any]]:
         with self.db.session_scope() as session:
             stmt = select(KnowledgeBaseMetaModel)
-            if active_only:
-                stmt = stmt.where(KnowledgeBaseMetaModel.is_active == 1)
             stmt = stmt.order_by(KnowledgeBaseMetaModel.updated_at.desc())
             rows = session.scalars(stmt).all()
             return [self._to_dict(row) for row in rows]
-
-    def set_active(self, kb_id: str, is_active: bool) -> bool:
-        with self.db.session_scope() as session:
-            result = session.execute(
-                update(KnowledgeBaseMetaModel)
-                .where(KnowledgeBaseMetaModel.kb_id == kb_id)
-                .values(is_active=1 if is_active else 0, updated_at=time.time())
-            )
-            return (result.rowcount or 0) > 0
 
     def delete(self, kb_id: str) -> bool:
         with self.db.session_scope() as session:
@@ -967,12 +1039,15 @@ class KnowledgeBaseMetaDB:
         kb_id: str,
         name: Optional[str] = None,
         description: Optional[str] = None,
+        canonical_name: Optional[str] = None,
     ) -> bool:
         updates: Dict[str, Any] = {"updated_at": time.time()}
         if name is not None:
             updates["name"] = name
         if description is not None:
             updates["description"] = description
+        if canonical_name is not None:
+            updates["canonical_name"] = canonical_name
 
         if len(updates) == 1:
             return False
