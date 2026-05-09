@@ -11,6 +11,49 @@ logger = get_logger(__name__)
 
 from .vector_store import VectorStoreService
 
+
+def _resolve_kb_embed_model(kb_id: str, mode: str = "vector") -> Optional[str]:
+    """Auto-select embedding model based on KB's canonical name.
+    
+    Priority:
+    1. KB's recorded embedding model (if still active)
+    2. User's default model (if same canonical name)  
+    3. Any active model with same canonical name
+    """
+    try:
+        vs = VectorStoreService.get_vector_store(kb_id)
+        model_id = vs.get_embedding_model_id()
+        if not model_id:
+            return None
+
+        from rag.config import get_model_registry
+        registry = get_model_registry()
+        model = registry.get_model(model_id)
+        canonical = model.get("canonical_name") if model else None
+        if not canonical:
+            return model_id if (model and model.get("is_active")) else None
+
+        if model and model.get("is_active"):
+            return model_id
+
+        active_models = [m for m in registry.get_by_type("embedding")
+                        if m.get("canonical_name") == canonical and m.get("is_active")]
+        if not active_models:
+            return None
+
+        default_model = registry.get_default("embedding")
+        if default_model and default_model.get("is_active") and default_model.get("canonical_name") == canonical:
+            logger.info(f"[{kb_id}] using default embed model: {default_model['id']}")
+            return default_model["id"]
+
+        chosen = active_models[0]
+        logger.info(f"[{kb_id}] auto-selected embed model: {chosen['id']} (canonical: {canonical})")
+        return chosen["id"]
+    except Exception:
+        pass
+    return None
+
+
 class SearchService:
     """搜索服务"""
 
@@ -26,6 +69,9 @@ class SearchService:
         embed_model_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         from rag.config import get_settings
+
+        if not embed_model_id:
+            embed_model_id = _resolve_kb_embed_model(kb_id, mode)
 
         if embed_model_id:
             from rag.ollama_utils import configure_embed_model_by_model_id
@@ -263,6 +309,9 @@ class SearchService:
         embed_model_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         from rag.query_engine import create_query_engine
+
+        if not embed_model_id:
+            embed_model_id = _resolve_kb_embed_model(kb_id, mode)
 
         if embed_model_id:
             from rag.ollama_utils import configure_embed_model_by_model_id

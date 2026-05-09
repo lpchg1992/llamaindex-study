@@ -33,6 +33,7 @@ class KnowledgeBaseService:
             row_count = 0
             doc_count = 0
             chunk_strategy = None
+            embedding_model_id = None
             if exists:
                 try:
                     vs = VectorStoreService.get_vector_store(kb.id)
@@ -41,6 +42,7 @@ class KnowledgeBaseService:
                     doc_stats = document_db.get_stats(kb.id)
                     doc_count = doc_stats.get("document_count", 0)
                     chunk_strategy = vs.get_chunk_strategy()
+                    embedding_model_id = vs.get_embedding_model_id()
                 except Exception:
                     pass
 
@@ -59,6 +61,8 @@ class KnowledgeBaseService:
                     "row_count": doc_count,
                     "chunk_count": row_count,
                     "chunk_strategy": chunk_strategy,
+                    "embedding_model_id": embedding_model_id,
+                    "canonical_name": db_row.get("canonical_name"),
                     "topics": all_topics,
                 }
             )
@@ -82,6 +86,7 @@ class KnowledgeBaseService:
                 "row_count": doc_count,
                 "chunk_count": 0,
                 "chunk_strategy": None,
+                "canonical_name": kb_meta.get("canonical_name"),
                 "topics": kb_meta.get("topics", []),
             }
             if persist_dir.exists():
@@ -92,6 +97,7 @@ class KnowledgeBaseService:
                     info["status"] = "indexed" if doc_count > 0 else "empty"
                     info["chunk_count"] = row_count
                     info["chunk_strategy"] = vs.get_chunk_strategy()
+                    info["embedding_model_id"] = vs.get_embedding_model_id()
                 except Exception:
                     info["status"] = "error"
             result.append(info)
@@ -105,6 +111,7 @@ class KnowledgeBaseService:
         from ..database import init_kb_meta_db
 
         kb = registry.get(kb_id)
+        kb_meta = init_kb_meta_db().get(kb_id)
         if kb:
             persist_dir = kb.persist_dir
             info = {
@@ -112,9 +119,9 @@ class KnowledgeBaseService:
                 "name": kb.name,
                 "description": kb.description,
                 "persist_dir": str(persist_dir),
+                "canonical_name": kb_meta.get("canonical_name") if kb_meta else None,
             }
         else:
-            kb_meta = init_kb_meta_db().get(kb_id)
             if not kb_meta:
                 return None
             persist_dir = Path(
@@ -125,6 +132,7 @@ class KnowledgeBaseService:
                 "name": kb_meta.get("name", kb_id),
                 "description": kb_meta.get("description", ""),
                 "persist_dir": str(persist_dir),
+                "canonical_name": kb_meta.get("canonical_name"),
             }
 
         if persist_dir.exists():
@@ -134,12 +142,12 @@ class KnowledgeBaseService:
                 info["status"] = "indexed" if stats.get("row_count", 0) > 0 else "empty"
                 info["row_count"] = stats.get("row_count", 0)
                 info["chunk_strategy"] = vs.get_chunk_strategy()
+                info["embedding_model_id"] = vs.get_embedding_model_id()
             except Exception:
                 info["status"] = "error"
         else:
             info["status"] = "not_found"
 
-        kb_meta = init_kb_meta_db().get(kb_id)
         info["topics"] = kb_meta.get("topics", []) if kb_meta else []
         info["tags"] = kb_meta.get("tags", []) if kb_meta else []
 
@@ -170,17 +178,19 @@ class KnowledgeBaseService:
         kb_id: str,
         name: Optional[str] = None,
         description: Optional[str] = None,
+        canonical_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         """更新知识库的基本信息
-        
+
         Args:
             kb_id: 知识库 ID
             name: 新的显示名称（可选）
             description: 新的描述（可选）
-            
+            canonical_name: 新的 canonical name（可选）
+
         Returns:
             更新后的知识库信息
-            
+
         Raises:
             ValueError: 知识库不存在或更新失败
         """
@@ -188,7 +198,7 @@ class KnowledgeBaseService:
         from ..database import init_kb_meta_db
 
         kb_meta_db = init_kb_meta_db()
-        success = kb_meta_db.update_info(kb_id, name, description)
+        success = kb_meta_db.update_info(kb_id, name, description, canonical_name)
         if not success:
             raise ValueError(f"知识库 {kb_id} 不存在或更新失败")
 
@@ -381,7 +391,7 @@ class KnowledgeBaseService:
 
         init_progress_db().reset(kb_id)
 
-        init_kb_meta_db().set_active(kb_id, is_active=False)
+        init_kb_meta_db().delete(kb_id)
 
         registry._loaded = False
         registry._bases.clear()
