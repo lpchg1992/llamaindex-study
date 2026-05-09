@@ -148,8 +148,9 @@ class LanceDBVectorStore:
 
     def get_chunk_strategy(self) -> str:
         """获取知识库的分块策略"""
+        from rag.config import get_settings
         metadata = self._load_metadata()
-        return metadata.get("chunk_strategy", "sentence")
+        return metadata.get("chunk_strategy") or get_settings().chunk_strategy
 
     def set_chunk_strategy(self, strategy: str) -> None:
         """设置知识库的分块策略"""
@@ -162,6 +163,17 @@ class LanceDBVectorStore:
             settings = get_settings()
             if settings.hierarchical_chunk_sizes:
                 metadata["hierarchical_chunk_sizes"] = settings.hierarchical_chunk_sizes
+        self._save_metadata(metadata)
+
+    def get_embedding_model_id(self) -> Optional[str]:
+        """获取知识库使用的 embedding 模型 ID"""
+        metadata = self._load_metadata()
+        return metadata.get("embedding_model_id")
+
+    def set_embedding_model_id(self, model_id: str) -> None:
+        """记录知识库使用的 embedding 模型"""
+        metadata = self._load_metadata()
+        metadata["embedding_model_id"] = model_id
         self._save_metadata(metadata)
 
     def exists(self) -> bool:

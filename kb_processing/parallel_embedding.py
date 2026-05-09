@@ -483,6 +483,8 @@ class ParallelEmbeddingProcessor:
                     f"[Fallback] SiliconFlow 端点未配置，embedding 失败 (text_len={text_len})"
                 )
                 return (ep.name, [0.0] * ep.dimensions, "SiliconFlow 端点不可用")
+
+            # Phase 1: Quick retry on SF (5 attempts with backoff)
             model = self._get_model(sf_ep)
             max_retries = 5
             for retry in range(max_retries):
@@ -518,7 +520,7 @@ class ParallelEmbeddingProcessor:
                         f" (text_len={text_len}): {type(sf_err).__name__}: {sf_err}"
                     )
 
-            # 快速尝试所有 Ollama 端点（即使标记为 unhealthy）
+            # Phase 2: Quick attempt on each Ollama endpoint (one shot each)
             ollama_eps = [e for e in self.endpoints if e.url != "siliconflow://"]
             for ollama_ep in ollama_eps:
                 try:
@@ -535,45 +537,56 @@ class ParallelEmbeddingProcessor:
                 except Exception as ollama_err:
                     logger.debug(f"[{ollama_ep.name}] 兜底尝试失败: {ollama_err}")
 
-            max_persistent_rounds = 100
+            # Phase 3: Persistent round-robin retry across ALL endpoints
+            # Interleave SF with Ollama for fair rotation so SF doesn't dominate
+            all_eps = [sf_ep] + ollama_eps
+            max_persistent_rounds = 20  # Reduced from 100
             persistent_delay = 4.0
+            # Track per-endpoint consecutive failures to detect unembeddable text
+            persistent_failures: Dict[str, int] = {ep2.name: 0 for ep2 in all_eps}
+
             logger.warning(
-                f"快速重试全部耗尽 (text_len={text_len})，进入持久重试模式 "
-                f"(最多 {max_persistent_rounds} 轮，固定间隔 {persistent_delay:.0f}s)"
+                f"快速重试全部耗尽 (text_len={text_len})，进入持久轮询模式 "
+                f"(最多 {max_persistent_rounds} 轮，{len(all_eps)} 个端点轮转，间隔 {persistent_delay:.0f}s)"
             )
             for round_num in range(1, max_persistent_rounds + 1):
                 time.sleep(persistent_delay)
 
-                model = self._get_model(sf_ep)
-                for _retry in range(3):
-                    try:
+                # Round-robin: pick one endpoint per round
+                target_ep = all_eps[(round_num - 1) % len(all_eps)]
+
+                try:
+                    if target_ep.url == "siliconflow://":
+                        model = self._get_model(target_ep)
                         emb = model.get_text_embedding(text[:8192])
-                        if emb and not all(v == 0.0 for v in emb):
-                            logger.info(
-                                f"[{sf_ep.name}] 持久重试成功 "
-                                f"(第 {round_num} 轮, text_len={text_len})"
-                            )
-                            return (ep.name, emb, None)
-                    except Exception:
-                        time.sleep(1.0)
+                    else:
+                        emb = self._call_ollama_embed(target_ep, text)
 
-                for ollama_ep in ollama_eps:
-                    try:
-                        emb = self._call_ollama_embed(ollama_ep, text)
-                        if emb and not all(v == 0.0 for v in emb):
+                    if emb and not all(v == 0.0 for v in emb):
+                        if target_ep.url != "siliconflow://":
                             with self._lock:
-                                ollama_ep.is_healthy = True
-                                ollama_ep.last_error = None
-                                self._consecutive_failures[ollama_ep.name] = 0
-                            logger.info(
-                                f"[{ollama_ep.name}] 持久重试成功 "
-                                f"(第 {round_num} 轮, text_len={text_len})"
-                            )
-                            return (ollama_ep.name, emb, None)
-                    except Exception:
-                        continue
+                                target_ep.is_healthy = True
+                                target_ep.last_error = None
+                                self._consecutive_failures[target_ep.name] = 0
+                        logger.info(
+                            f"[{target_ep.name}] 持久重试成功 "
+                            f"(第 {round_num} 轮, text_len={text_len})"
+                        )
+                        return (ep.name, emb, None)
+                except Exception:
+                    pass
 
-                if round_num % 10 == 0:
+                persistent_failures[target_ep.name] += 1
+
+                # Early exit: all endpoints failed 3+ times → text likely unembeddable
+                if all(f >= 3 for f in persistent_failures.values()):
+                    logger.warning(
+                        f"文本可能无法向量化，提前放弃 "
+                        f"(第 {round_num} 轮, {len(all_eps)} 个端点均失败 ≥3 次, text_len={text_len})"
+                    )
+                    break
+
+                if round_num % 5 == 0:
                     logger.warning(
                         f"持久重试中 (第 {round_num}/{max_persistent_rounds} 轮, "
                         f"间隔 {persistent_delay:.0f}s, text_len={text_len})"
@@ -845,13 +858,29 @@ class ParallelEmbeddingProcessor:
                 chunk_queue.task_done()
 
         threads = []
+        ollama_workers = 0
         for ep in self.endpoints:
-            if not ep.is_healthy or ep.url == "siliconflow://":
+            if ep.url == "siliconflow://":
+                continue
+            if not ep.is_healthy:
                 continue
             for _ in range(ep.max_concurrent):
                 t = threading.Thread(target=worker, args=(ep,), daemon=True)
                 t.start()
                 threads.append(t)
+                ollama_workers += 1
+
+        # Fallback: if no healthy Ollama endpoints, use SF directly
+        # This prevents every chunk from going through the
+        # Ollama→SF fallback chain individually when Ollama is down
+        if ollama_workers == 0:
+            sf_ep = next((ep for ep in self.endpoints if ep.url == "siliconflow://"), None)
+            if sf_ep:
+                logger.warning("所有 Ollama 端点不健康，使用 SiliconFlow 直接处理")
+                for _ in range(sf_ep.max_concurrent):
+                    t = threading.Thread(target=worker, args=(sf_ep,), daemon=True)
+                    t.start()
+                    threads.append(t)
 
         while any(t.is_alive() for t in threads):
             await _asyncio.sleep(0.1)

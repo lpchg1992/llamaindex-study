@@ -117,12 +117,16 @@ class SiliconFlowEmbedding:
                 f"{self.base_url}/embeddings", json=payload, headers=headers
             )
             if response.status_code != 200:
-                logger.error(
-                    f"SiliconFlow embedding 失败: {response.status_code} {response.text}"
-                )
+                error_msg = f"SiliconFlow embedding API error: HTTP {response.status_code}"
+                try:
+                    error_body = response.json()
+                    error_msg += f" - {str(error_body)[:200]}"
+                except Exception:
+                    error_msg += f" - {response.text[:200]}"
+                logger.error(error_msg)
                 total_tokens = sum(self._estimate_tokens(t) for t in texts)
                 self._record_embedding_call(total_tokens, True)
-                return [[0.0] * self.dimensions for _ in texts]
+                raise RuntimeError(error_msg)
 
             data = response.json()
             embeddings = data.get("data", [])
