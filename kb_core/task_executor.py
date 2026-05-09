@@ -96,6 +96,8 @@
 
 import asyncio
 import queue
+import threading
+from enum import Enum as StdEnum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
@@ -103,6 +105,13 @@ from rag.logger import get_logger
 from rag.config import get_settings
 
 logger = get_logger(__name__)
+
+
+class Command(str, StdEnum):
+    """Task control commands pushed via command queue."""
+    PAUSE = "pause"
+    RESUME = "resume"
+    CANCEL = "cancel"
 
 # 配置常量（从 Settings 统一读取）
 settings = get_settings()
@@ -157,9 +166,8 @@ class TaskExecutor:
 
         self.queue: TaskQueue = TaskQueue()
         self._running_tasks: Dict[str, asyncio.Task] = {}
-        self._cancel_events: Dict[str, asyncio.Event] = {}
-        self._pause_events: Dict[str, asyncio.Event] = {}
-        self._paused_flags: Dict[str, bool] = {}
+        self._command_queues: Dict[str, asyncio.Queue] = {}
+        self._thread_cancel_events: Dict[str, threading.Event] = {}
 
     async def execute_task(self, task_id: str) -> None:
         """执行任务"""
@@ -173,24 +181,12 @@ class TaskExecutor:
             logger.debug(f"任务状态不是 pending: {task_id} ({task.status})")
             return
 
-        self._cancel_events[task_id] = asyncio.Event()
-        self._pause_events[task_id] = asyncio.Event()
-        self._paused_flags[task_id] = False
+        self._command_queues[task_id] = asyncio.Queue()
+        self._thread_cancel_events[task_id] = threading.Event()
 
         try:
             self.queue.start_task(task_id)
             await asyncio.sleep(0)
-            if (
-                self._cancel_events.get(task_id)
-                and self._cancel_events[task_id].is_set()
-            ):
-                raise asyncio.CancelledError("取消已请求")
-            if self._pause_events.get(task_id) and self._pause_events[task_id].is_set():
-                while (
-                    self._pause_events.get(task_id)
-                    and self._pause_events[task_id].is_set()
-                ):
-                    await asyncio.sleep(0.5)
             await self._update_heartbeat(task_id)
             await self._notify_progress(task_id)
 
@@ -206,9 +202,8 @@ class TaskExecutor:
             self.queue.complete_task(task_id, error=error_msg)
         finally:
             self._running_tasks.pop(task_id, None)
-            self._cancel_events.pop(task_id, None)
-            self._pause_events.pop(task_id, None)
-            self._paused_flags.pop(task_id, None)
+            self._command_queues.pop(task_id, None)
+            self._thread_cancel_events.pop(task_id, None)
 
     async def _notify_progress(self, task_id: str) -> None:
         """通知进度更新"""
@@ -233,56 +228,75 @@ class TaskExecutor:
             logger.debug(f"心跳更新失败: {e}")
 
     async def _check_cancelled(self, task_id: str) -> bool:
-        """检查是否取消"""
-        if task_id in self._cancel_events:
-            if self._cancel_events[task_id].is_set():
-                return True
+        """Check whether task has been cancelled via command queue or DB."""
+        try:
+            queue = self._command_queues.get(task_id)
+            if queue:
+                try:
+                    cmd = queue.get_nowait()
+                    if cmd == Command.CANCEL:
+                        return True
+                    if cmd == Command.PAUSE:
+                        queue.put_nowait(Command.PAUSE)
+                except asyncio.QueueEmpty:
+                    pass
+        except KeyError:
+            pass
 
         task = self.queue.get_task(task_id)
-        if task and task.status == "cancelled":
+        if task and task.status == TaskStatus.CANCELLED.value:
             return True
 
         return False
 
     async def _check_paused(self, task_id: str) -> bool:
-        """检查是否暂停，如果暂停则等待恢复或取消"""
-        task = self.queue.get_task(task_id)
-        if task and task.status == "cancelled":
-            if task_id in self._paused_flags:
-                self._paused_flags[task_id] = False
-            return True
+        """Check whether task should pause; if so, block until resume or cancel.
 
-        if task and task.status == "paused":
-            if task_id not in self._pause_events:
-                self._pause_events[task_id] = asyncio.Event()
-                self._pause_events[task_id].set()
-            if task_id not in self._paused_flags:
-                self._paused_flags[task_id] = False
-
-        if task_id not in self._pause_events:
+        Returns True if cancel was detected while paused.
+        """
+        queue = self._command_queues.get(task_id)
+        if not queue:
             return False
 
-        if not self._pause_events[task_id].is_set():
-            return False
+        has_pause = False
+        while True:
+            try:
+                cmd = queue.get_nowait()
+                if cmd == Command.CANCEL:
+                    return True
+                if cmd == Command.PAUSE:
+                    has_pause = True
+            except asyncio.QueueEmpty:
+                break
 
-        self._paused_flags[task_id] = True
-
-        while self._pause_events[task_id].is_set():
+        if not has_pause:
             task = self.queue.get_task(task_id)
-            if task and task.status == "cancelled":
-                self._paused_flags[task_id] = False
-                return True
-            if (
-                self._cancel_events.get(task_id)
-                and self._cancel_events[task_id].is_set()
-            ):
-                self._paused_flags[task_id] = False
-                return True
-            await asyncio.sleep(0.5)
+            if task and task.status == TaskStatus.PAUSED.value:
+                has_pause = True
 
-        self._paused_flags[task_id] = False
-        self.queue.update_status(task_id, "running", "继续执行")
-        return False
+        if not has_pause:
+            return False
+
+        self.queue.update_status(task_id, TaskStatus.PAUSED.value, "已暂停")
+        await self._notify_progress(task_id)
+
+        while True:
+            try:
+                cmd = await asyncio.wait_for(queue.get(), timeout=0.2)
+                if cmd == Command.RESUME:
+                    self.queue.update_status(
+                        task_id, TaskStatus.RUNNING.value, "继续执行"
+                    )
+                    await self._notify_progress(task_id)
+                    return False
+                if cmd == Command.CANCEL:
+                    return True
+            except asyncio.TimeoutError:
+                task = self.queue.get_task(task_id)
+                if task and task.status == TaskStatus.CANCELLED.value:
+                    return True
+                if task and task.status == TaskStatus.RUNNING.value:
+                    return False
 
     def _save_partial_progress(
         self,
@@ -351,8 +365,10 @@ class TaskExecutor:
         - Embedding：并行处理（本地+远程同时工作）
         - LanceDB 写入：串行（通过 WriteQueue）
         """
+        import hashlib
         from kb_core.registry import KnowledgeBaseRegistry
         from .database import init_document_db
+        from .task_queue import FileStatus
         from llama_index.core.schema import Document as LlamaDocument
         from kb_processing.parallel_embedding import get_parallel_processor
         from rag.config import get_settings
@@ -447,6 +463,20 @@ class TaskExecutor:
             task.task_id, message=f"待处理 {len(files_to_process)} 个文件"
         )
 
+        obsidian_file_list = []
+        for obs_rel, obs_abs in files_to_process:
+            obs_fid = hashlib.md5(str(obs_abs).encode()).hexdigest()[:12]
+            obsidian_file_list.append({
+                "file_id": obs_fid,
+                "file_name": obs_rel,
+                "status": FileStatus.PENDING.value,
+                "total_chunks": 0,
+                "processed_chunks": 0,
+                "db_written": False,
+                "error": None,
+            })
+        self.queue.set_file_progress(task.task_id, obsidian_file_list)
+
         lance_store = vs._get_lance_vector_store()
         from kb_processing.document_processor import get_node_parser
         settings = get_settings()
@@ -470,6 +500,8 @@ class TaskExecutor:
         )
 
         for rel_path, abs_path in files_to_process:
+            obsidian_file_id = hashlib.md5(str(abs_path).encode()).hexdigest()[:12]
+
             if await self._check_cancelled(task.task_id):
                 self._save_partial_progress(
                     task.task_id,
@@ -491,7 +523,23 @@ class TaskExecutor:
                 )
                 return
 
+            file_status = self.queue.get_file_status(task.task_id, obsidian_file_id)
+            if file_status == FileStatus.CANCELLED.value:
+                try:
+                    existing = doc_db.get_by_source_path(kb_id, str(abs_path))
+                    if existing:
+                        from .document_chunk_service import DocumentChunkService
+                        doc_chunk_svc = DocumentChunkService(kb_id)
+                        doc_chunk_svc.delete_document_cascade(existing["id"], delete_lance=True)
+                except Exception as e:
+                    logger.warning(f"清理已取消文件数据失败: {rel_path}, {e}")
+                continue
+
             try:
+                self.queue.update_file_progress(
+                    task.task_id, obsidian_file_id,
+                    status=FileStatus.PROCESSING.value,
+                )
                 content = abs_path.read_text(encoding="utf-8", errors="ignore")
 
                 doc = LlamaDocument(
@@ -507,6 +555,11 @@ class TaskExecutor:
                 nodes = node_parser.get_nodes_from_documents([doc])
 
                 if nodes:
+                    self.queue.update_file_progress(
+                        task.task_id, obsidian_file_id,
+                        status=FileStatus.EMBEDDING.value,
+                        total_chunks=len(nodes),
+                    )
                     current_hash = ""
                     if hash_tool:
                         try:
@@ -517,10 +570,16 @@ class TaskExecutor:
                     texts = [node.get_content() for node in nodes]
 
                     results: List[Optional[EmbeddingResult]] = [None] * len(texts)
+                    embedded_count = 0
                     async for idx, result in embed_processor.process_batch_streaming(
                         texts
                     ):
                         results[idx] = result
+                        embedded_count += 1
+                        self.queue.update_file_progress(
+                            task.task_id, obsidian_file_id,
+                            processed_chunks=embedded_count,
+                        )
 
                     failed_ids = []
                     failed_errors: Dict[str, List[str]] = {}
@@ -542,6 +601,17 @@ class TaskExecutor:
                     try:
                         from .document_chunk_service import DocumentChunkService
                         doc_chunk_svc = DocumentChunkService(kb_id)
+
+                        existing_doc = doc_db.get_by_source_path(kb_id, str(abs_path))
+                        if existing_doc:
+                            try:
+                                doc_chunk_svc.delete_document_cascade(
+                                    existing_doc["id"], delete_lance=True
+                                )
+                                logger.debug(f"已清理旧文档数据: {rel_path}")
+                            except Exception as e:
+                                logger.warning(f"清理旧文档失败: {rel_path}, {e}")
+
                         doc_record = doc_chunk_svc.create_document(
                             source_file=rel_path,
                             source_path=str(abs_path),
@@ -574,13 +644,33 @@ class TaskExecutor:
                         continue
 
                     processed_chunks += success_count
+                    self.queue.update_file_progress(
+                        task.task_id, obsidian_file_id,
+                        status=FileStatus.COMPLETED.value,
+                        total_chunks=len(nodes),
+                        processed_chunks=success_count,
+                        db_written=True,
+                    )
+                else:
+                    self.queue.update_file_progress(
+                        task.task_id, obsidian_file_id,
+                        status=FileStatus.COMPLETED.value,
+                        total_chunks=0,
+                        processed_chunks=0,
+                        db_written=False,
+                    )
 
                 processed_sources.append(str(abs_path))
                 processed_files += 1
 
                 if processed_files % PROGRESS_UPDATE_INTERVAL == 0:
+                    obs_processed, obs_total = self.queue.compute_chunk_progress(task.task_id)
+                    obs_progress = int(obs_processed / obs_total * 100) if obs_total > 0 else 0
                     await self._update_and_notify(
                         task.task_id,
+                        progress=obs_progress,
+                        current=processed_files,
+                        total=len(files_to_process),
                         message=f"处理 {processed_files}/{len(files_to_process)} ({processed_chunks} chunks)",
                     )
 
@@ -592,6 +682,11 @@ class TaskExecutor:
                     last_heartbeat_file_count = processed_files
 
             except Exception as e:
+                self.queue.update_file_progress(
+                    task.task_id, obsidian_file_id,
+                    status=FileStatus.FAILED.value,
+                    error=str(e),
+                )
                 logger.warning(f"处理失败 {rel_path}: {e}")
 
         stats = embed_processor.get_stats()
@@ -602,15 +697,20 @@ class TaskExecutor:
 
         vs.set_chunk_strategy(settings.chunk_strategy)
 
+        obsidian_processed, obsidian_total = self.queue.compute_chunk_progress(task.task_id)
+        obsidian_file_progress = self.queue.get_file_progress(task.task_id)
         self.queue.complete_task(
             task.task_id,
             result={
                 "kb_id": kb_id,
                 "files": processed_files,
                 "nodes": processed_chunks,
+                "processed_chunks": obsidian_processed,
+                "total_chunks": obsidian_total,
                 "sources": processed_sources,
                 "endpoint_stats": stats,
                 "chunk_strategy": settings.chunk_strategy,
+                "file_progress": obsidian_file_progress,
             },
         )
 
@@ -715,6 +815,10 @@ class TaskExecutor:
         stats = {"files": 0, "nodes": 0, "failed": 0, "processed_sources": []}
 
         for i, item in enumerate(items):
+            item_type = item.get("type", "")
+            item_id = item.get("id") or item.get("path", "") or f"item_{i}"
+            file_id = file_list[i]["file_id"]
+
             if await self._check_cancelled(task_id):
                 self.queue.complete_task(
                     task_id,
@@ -738,9 +842,10 @@ class TaskExecutor:
                 )
                 return
 
-            item_type = item.get("type", "")
-            item_id = item.get("id") or item.get("path", "") or f"item_{i}"
-            file_id = file_list[i]["file_id"]
+            file_status = self.queue.get_file_status(task_id, file_id)
+            if file_status == FileStatus.CANCELLED.value:
+                logger.info(f"[{task_id}] 跳过已取消文件: {item_type}/{item_id}")
+                continue
 
             self.queue.update_file_progress(
                 task_id, file_id, status=FileStatus.PROCESSING.value
@@ -789,11 +894,11 @@ class TaskExecutor:
                         f"[{task_id}] 处理 Zotero 文献: item_id={item_id}, prefix={prefix}, options={item.get('options', {})}"
                     )
                     item_options = item.get("options", {})
-                    cancel_event = self._cancel_events.get(task_id)
+                    cancel_event = self._thread_cancel_events.get(task_id)
                     loop = asyncio.get_running_loop()
 
                     def make_progress_callback(fid: str):
-                        last_notified = [-1]  # -1 ensures first call always notifies
+                        last_notified = [-1]
                         def cb(processed: int, total: int):
                             self.queue.update_file_progress(
                                 task_id, fid,
@@ -802,6 +907,12 @@ class TaskExecutor:
                             )
                             if processed - last_notified[0] >= 10 or processed == total or processed == 0:
                                 last_notified[0] = processed
+                                all_processed, all_total = self.queue.compute_chunk_progress(task_id)
+                                if all_total > 0:
+                                    self.queue.update_progress(
+                                        task_id,
+                                        progress=int(all_processed / all_total * 100),
+                                    )
                                 loop.call_soon_threadsafe(
                                     lambda: asyncio.ensure_future(
                                         self._notify_progress(task_id)
@@ -1663,6 +1774,18 @@ class TaskExecutor:
                 )
                 return
 
+            file_status = self.queue.get_file_status(task.task_id, file_id)
+            if file_status == FileStatus.CANCELLED.value:
+                try:
+                    existing = doc_db.get_by_source_path(kb_id, str(file_path))
+                    if existing:
+                        from .document_chunk_service import DocumentChunkService
+                        doc_chunk_svc = DocumentChunkService(kb_id)
+                        doc_chunk_svc.delete_document_cascade(existing["id"], delete_lance=True)
+                except Exception as e:
+                    logger.warning(f"清理已取消文件数据失败: {file_path.name}, {e}")
+                continue
+
             try:
                 from kb_processing.document_processor import (
                     DocumentProcessor,
@@ -1722,6 +1845,17 @@ class TaskExecutor:
                                     file_path.stat().st_size if file_path.exists() else 0
                                 )
                                 doc_chunk_svc = DocumentChunkService(kb_id)
+
+                                existing_doc = doc_db.get_by_source_path(kb_id, str(file_path))
+                                if existing_doc:
+                                    try:
+                                        doc_chunk_svc.delete_document_cascade(
+                                            existing_doc["id"], delete_lance=True
+                                        )
+                                        logger.debug(f"已清理旧文档数据: {file_path.name}")
+                                    except Exception as e:
+                                        logger.warning(f"清理旧文档失败: {file_path.name}, {e}")
+
                                 result = doc_chunk_svc.create_document(
                                     source_file=str(file_path.name),
                                     source_path=str(file_path),
@@ -1777,9 +1911,14 @@ class TaskExecutor:
                                 db_written=True,
                             )
 
-                progress = int((i + 1) / total_files * 100) if total_files > 0 else 0
+                gen_processed, gen_total = self.queue.compute_chunk_progress(task.task_id)
+                progress = int(gen_processed / gen_total * 100) if gen_total > 0 else 0
                 await self._update_and_notify(
-                    task.task_id, progress=progress, message=f"处理: {file_path.name}"
+                    task.task_id,
+                    progress=progress,
+                    current=stats["files"],
+                    total=total_files,
+                    message=f"处理: {file_path.name} ({gen_processed}/{gen_total} chunks)",
                 )
 
                 # 定期更新心跳
@@ -1840,33 +1979,24 @@ class TaskExecutor:
         await self._notify_progress(task.task_id)
 
     def cancel_task(self, task_id: str) -> bool:
-        """取消任务"""
-        if task_id in self._cancel_events:
-            self._cancel_events[task_id].set()
-            if task_id in self._pause_events:
-                self._pause_events[task_id].clear()
-            if task_id in self._running_tasks:
-                task = self._running_tasks[task_id]
-                if isinstance(task, asyncio.Task):
-                    task.cancel()
-            return True
+        """Signal cancel to a running task via command queue."""
+        if task_id in self._thread_cancel_events:
+            self._thread_cancel_events[task_id].set()
+
+        if task_id in self._command_queues:
+            try:
+                self._command_queues[task_id].put_nowait(Command.CANCEL)
+            except asyncio.QueueFull:
+                pass
 
         if task_id in self._running_tasks:
-            task = self._running_tasks[task_id]
-            if isinstance(task, asyncio.Task):
-                task.cancel()
-            if task_id in self._cancel_events:
-                self._cancel_events[task_id].set()
-            if task_id in self._pause_events:
-                self._pause_events[task_id].clear()
-            return True
+            t = self._running_tasks[task_id]
+            if isinstance(t, asyncio.Task) and not t.done():
+                t.cancel()
 
-        return False
+        return task_id in self._command_queues or task_id in self._running_tasks
 
     def cancel_and_wait(self, task_id: str, timeout: float = 5.0) -> bool:
-        import concurrent.futures
-        import threading
-
         if task_id not in self._running_tasks:
             return True
         asyncio_task = self._running_tasks.get(task_id)
@@ -1874,34 +2004,43 @@ class TaskExecutor:
             return True
         if asyncio_task.done():
             return True
+
         self.cancel_task(task_id)
 
-        def _wait():
+        def _wait() -> None:
             try:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 loop.run_until_complete(
                     asyncio.wait_for(asyncio.shield(asyncio_task), timeout=timeout)
                 )
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                pass
             finally:
                 loop.close()
 
-        thread = threading.Thread(target=_wait)
-        thread.start()
-        thread.join(timeout=timeout)
+        t = threading.Thread(target=_wait)
+        t.start()
+        t.join(timeout=timeout + 1)
         return asyncio_task.done()
 
     def pause_task(self, task_id: str) -> bool:
-        """暂停任务"""
-        if task_id in self._pause_events:
-            self._pause_events[task_id].clear()
+        """Signal a running task to pause via command queue."""
+        if task_id in self._command_queues:
+            try:
+                self._command_queues[task_id].put_nowait(Command.PAUSE)
+            except asyncio.QueueFull:
+                pass
             return True
         return False
 
     def resume_task(self, task_id: str) -> bool:
-        """恢复任务"""
-        if task_id in self._pause_events:
-            self._pause_events[task_id].set()
+        """Signal a paused task to resume via command queue."""
+        if task_id in self._command_queues:
+            try:
+                self._command_queues[task_id].put_nowait(Command.RESUME)
+            except asyncio.QueueFull:
+                pass
             return True
         return False
 

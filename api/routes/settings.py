@@ -37,6 +37,8 @@ def get_settings():
         response_mode=s.response_mode,
         progress_update_interval=s.progress_update_interval,
         max_concurrent_tasks=s.max_concurrent_tasks,
+        embed_concurrent_pool_size=s.embed_concurrent_pool_size,
+        embed_endpoint_max_concurrent=s.embed_endpoint_max_concurrent,
         max_retries=s.max_retries,
         retry_delay=s.retry_delay,
     )
@@ -71,6 +73,8 @@ def update_settings(req: SettingsUpdateRequest):
             response_mode=s.response_mode,
             progress_update_interval=s.progress_update_interval,
             max_concurrent_tasks=s.max_concurrent_tasks,
+            embed_concurrent_pool_size=s.embed_concurrent_pool_size,
+            embed_endpoint_max_concurrent=s.embed_endpoint_max_concurrent,
             max_retries=s.max_retries,
             retry_delay=s.retry_delay,
         )
@@ -99,6 +103,8 @@ def update_settings(req: SettingsUpdateRequest):
             "response_mode",
             "progress_update_interval",
             "max_concurrent_tasks",
+            "embed_concurrent_pool_size",
+            "embed_endpoint_max_concurrent",
             "max_retries",
             "retry_delay",
         ):
@@ -152,4 +158,8 @@ def update_settings(req: SettingsUpdateRequest):
         response_mode=s.response_mode,
         progress_update_interval=s.progress_update_interval,
         max_concurrent_tasks=s.max_concurrent_tasks,
+        embed_concurrent_pool_size=s.embed_concurrent_pool_size,
+        embed_endpoint_max_concurrent=s.embed_endpoint_max_concurrent,
+        max_retries=s.max_retries,
+        retry_delay=s.retry_delay,
     )

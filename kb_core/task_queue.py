@@ -445,10 +445,16 @@ class TaskQueue:
             self._task_events[task_id].set()
 
     def cancel_task(self, task_id: str) -> bool:
-        """取消任务"""
+        """取消任务（支持 PENDING 和 RUNNING 状态）"""
         with self._session_scope() as session:
             row = session.get(TaskRecord, task_id)
-            if not row or row.status != TaskStatus.PENDING.value:
+            if not row:
+                return False
+            if row.status in (
+                TaskStatus.COMPLETED.value,
+                TaskStatus.FAILED.value,
+                TaskStatus.CANCELLED.value,
+            ):
                 return False
             row.status = TaskStatus.CANCELLED.value
             row.completed_at = time.time()

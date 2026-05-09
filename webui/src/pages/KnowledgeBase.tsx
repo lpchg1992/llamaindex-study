@@ -186,13 +186,19 @@ function KBDetailsPanel({ kb }: { kb: KBInfo }) {
           </TabsContent>
 
           <TabsContent value="consistency" className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h4 className="text-sm font-medium">一致性检查</h4>
-              <Button variant="outline" size="sm" onClick={() => refetchConsistency()} disabled={consistencyLoading}>
-                {consistencyLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-1" />}
-                检查
-              </Button>
-            </div>
+              <div className="flex items-center justify-between">
+                <h4 className="text-sm font-medium">一致性检查</h4>
+                <div className="relative group">
+                  <Button variant="outline" size="sm" onClick={() => refetchConsistency()} disabled={consistencyLoading}>
+                    {consistencyLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-1" />}
+                    检查
+                  </Button>
+                  <div className="absolute top-full right-0 translate-x-0 mt-1 px-3 py-2 bg-popover border rounded-lg text-xs whitespace-normal max-w-[260px] opacity-0 group-hover:opacity-100 pointer-events-none z-50 shadow-md">
+                    比对 SQLite chunks 与 LanceDB 向量，检查文档统计准确性和向量完整性，发现不一致时给出修复建议。
+                    <div className="absolute bottom-full right-2 border-4 border-transparent border-b-popover"></div>
+                  </div>
+                </div>
+              </div>
 
             {consistency ? (
               <div className="space-y-4">
@@ -294,24 +300,45 @@ function KBDetailsPanel({ kb }: { kb: KBInfo }) {
                     )}
 
                     {/* Fix Button */}
-                    <Button size="sm" variant="default" onClick={handleRepair} disabled={repairConsistency.isPending}>
-                      {repairConsistency.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wrench className="h-4 w-4 mr-1" />}
-                      修正文档统计
-                    </Button>
+                    <div className="relative group">
+                      <Button size="sm" variant="default" onClick={handleRepair} disabled={repairConsistency.isPending}>
+                        {repairConsistency.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wrench className="h-4 w-4 mr-1" />}
+                        修正文档统计
+                      </Button>
+                      <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1 px-3 py-2 bg-popover border rounded-lg text-xs whitespace-normal max-w-[260px] text-center opacity-0 group-hover:opacity-100 pointer-events-none z-50 shadow-md">
+                        对比每个文档的 chunk_count 记录与实际 chunks 表数量，修正偏差。仅更新统计字段，不增删数据。
+                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 border-4 border-transparent border-b-popover"></div>
+                      </div>
+                    </div>
 
                     {/* Check and Mark Failed Button */}
-                    <Button size="sm" variant="outline" onClick={handleCheckAndMarkFailed} disabled={checkAndMarkFailed.isPending}>
-                      {checkAndMarkFailed.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4 mr-1" />}
-                      检查并标记失败
-                    </Button>
+                    <div className="relative group">
+                      <Button size="sm" variant="outline" onClick={handleCheckAndMarkFailed} disabled={checkAndMarkFailed.isPending}>
+                        {checkAndMarkFailed.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4 mr-1" />}
+                        检查并标记失败
+                      </Button>
+                      <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1 px-3 py-2 bg-popover border rounded-lg text-xs whitespace-normal max-w-[260px] text-center opacity-0 group-hover:opacity-100 pointer-events-none z-50 shadow-md">
+                        逐 chunk 比对 LanceDB 向量：缺失向量的标记为"失败"，实际存在但标记错误的恢复为"成功"。仅改状态标记，不删数据。
+                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 border-4 border-transparent border-b-popover"></div>
+                      </div>
+                    </div>
 
                     {/* Sync All Missing Button */}
-                    {(consistency.vector_integrity?.missing_count ?? 0) > 0 && (
-                      <Button size="sm" variant="default" onClick={() => handleSyncAllMissing()} disabled={revectorTask.isPending}>
+                    <div className="relative group">
+                      <Button
+                        size="sm"
+                        variant="default"
+                        onClick={() => handleSyncAllMissing()}
+                        disabled={revectorTask.isPending || (consistency?.vector_integrity?.missing_count ?? 0) === 0}
+                      >
                         {revectorTask.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-1" />}
-                        同步所有缺失向量 ({consistency.vector_integrity?.missing_count?.toLocaleString()})
+                        同步所有缺失向量 ({consistency?.vector_integrity?.missing_count?.toLocaleString() ?? 0})
                       </Button>
-                    )}
+                      <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1 px-3 py-2 bg-popover border rounded-lg text-xs whitespace-normal max-w-[260px] text-center opacity-0 group-hover:opacity-100 pointer-events-none z-50 shadow-md">
+                        对标记为"失败"或"待处理"的 chunk 重新 embedding 并写入 LanceDB，补齐缺失向量。
+                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 border-4 border-transparent border-b-popover"></div>
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>

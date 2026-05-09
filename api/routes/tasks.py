@@ -115,14 +115,11 @@ def cancel_file_in_task(task_id: str, file_id: str):
     return {"message": "文件已取消", "task_id": task_id, "file_id": file_id}
 
 
-@router.delete("/{task_id}")
-def delete_task(task_id: str, cleanup: bool = False):
+@router.delete("/delete-all")
+def delete_all_tasks(status: str = "completed", cleanup: bool = False):
     from kb_core.services import TaskService
 
-    try:
-        return TaskService.delete(task_id, cleanup=cleanup)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    return TaskService.delete_all(status, cleanup)
 
 
 @router.post("/pause-all")
@@ -139,11 +136,14 @@ def resume_all_tasks():
     return TaskService.resume_all()
 
 
-@router.delete("/delete-all")
-def delete_all_tasks(status: str = "completed", cleanup: bool = False):
+@router.delete("/{task_id}")
+def delete_task(task_id: str, cleanup: bool = False):
     from kb_core.services import TaskService
 
-    return TaskService.delete_all(status, cleanup)
+    try:
+        return TaskService.delete(task_id, cleanup=cleanup)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post("/cleanup")

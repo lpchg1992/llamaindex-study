@@ -600,9 +600,16 @@ export interface RevectorResult {
 
 // Task batch operations
 export interface TaskBatchResult {
-  affected: number
+  status: string
   message: string
+  deleted?: string[]
+  paused?: string[]
+  failed?: string[]
+  resumed?: string[]
+  cleaned?: string[]
+  cleaned_data?: { task_id: string; cleanup: Record<string, any> }[]
 }
+
 
 // Vendor & Model requests
 export interface VendorCreateRequest {
@@ -661,6 +668,8 @@ export interface SystemSettings {
   response_mode: string
   progress_update_interval: number
   max_concurrent_tasks: number
+  embed_concurrent_pool_size: number
+  embed_endpoint_max_concurrent: number
   max_retries: number
   retry_delay: number
 }
@@ -684,6 +693,8 @@ export interface SettingsUpdateRequest {
   response_mode?: string
   progress_update_interval?: number
   max_concurrent_tasks?: number
+  embed_concurrent_pool_size?: number
+  embed_endpoint_max_concurrent?: number
   max_retries?: number
   retry_delay?: number
 }

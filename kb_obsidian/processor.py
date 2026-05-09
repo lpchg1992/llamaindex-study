@@ -447,6 +447,17 @@ class ObsidianImporter:
 
             doc_chunk_service = get_document_chunk_service(self.kb_id)
             file_hash = self.processor.compute_file_hash(str(file_path))
+
+            existing_doc = doc_db.get_by_source_path(self.kb_id, str(file_path))
+            if existing_doc:
+                try:
+                    doc_chunk_service.delete_document_cascade(
+                        existing_doc["id"], delete_lance=True
+                    )
+                    logger.debug(f"已清理旧文档数据: {rel_path}")
+                except Exception as e:
+                    logger.warning(f"清理旧文档失败: {rel_path}, {e}")
+
             result = doc_chunk_service.create_document(
                 source_file=file_path.name,
                 source_path=str(file_path),

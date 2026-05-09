@@ -60,6 +60,7 @@ class EmbeddingEndpoint:
         model_id: Optional[str] = None,
         model_name: Optional[str] = None,
         dimensions: int = 1024,
+        max_concurrent: int = 8,
     ) -> None:
         self.name = name
         self.url = url
@@ -69,6 +70,7 @@ class EmbeddingEndpoint:
         self.is_healthy = True
         self.avg_latency = 0.0
         self.inflight = 0
+        self.max_concurrent = max_concurrent
         self.chunks_completed = 0
         self.total_time = 0.0
         self.last_error: Optional[str] = None
@@ -97,7 +99,10 @@ class ParallelEmbeddingProcessor:
             return
         self._initialized = True
 
-        self._executor = ThreadPoolExecutor(max_workers=4)
+        pool_size = settings.embed_concurrent_pool_size
+        self._executor = ThreadPoolExecutor(max_workers=pool_size)
+        self._endpoint_max_concurrent = settings.embed_endpoint_max_concurrent
+        self._endpoint_concurrent_map = settings.embed_endpoint_concurrent_map
         self._models: Dict[str, Any] = {}
         self._lock = threading.Lock()
         self._model_name: str = _get_default_embedding_model_name()
@@ -110,7 +115,7 @@ class ParallelEmbeddingProcessor:
         if not self.endpoints:
             endpoint_configs = settings.get_ollama_endpoints()
             for name, url in endpoint_configs:
-                ep = EmbeddingEndpoint(name, url)
+                ep = EmbeddingEndpoint(name, url, max_concurrent=self._resolve_endpoint_concurrent(url))
                 is_healthy = self._health_check(url, self._model_name)
                 ep.is_healthy = is_healthy
                 if not is_healthy:
@@ -125,11 +130,16 @@ class ParallelEmbeddingProcessor:
 
         if len(self.endpoints) == 1:
             logger.info(
-                f"单端点模式: {self.endpoints[0].name} ({self.endpoints[0].url})"
+                f"单端点模式: {self.endpoints[0].name} ({self.endpoints[0].url}) "
+                f"max_concurrent={self.endpoints[0].max_concurrent}"
             )
         else:
-            endpoint_info = ", ".join(f"{ep.name}:{ep.url}" for ep in self.endpoints)
-            logger.info(f"多端点并行模式: {endpoint_info}")
+            endpoint_info = ", ".join(
+                f"{ep.name}:{ep.url}(max={ep.max_concurrent})" for ep in self.endpoints
+            )
+            logger.info(
+                f"多端点并行模式 (pool={pool_size}): {endpoint_info}"
+            )
 
         # 健康检查任务
         self._health_check_task: Optional[asyncio.Task] = None
@@ -159,6 +169,19 @@ class ParallelEmbeddingProcessor:
             self._consecutive_failures[ep.name] = 0
         self._models.clear()
         logger.info(f"端点已刷新，共 {len(self.endpoints)} 个端点")
+
+    def _resolve_endpoint_concurrent(self, url: str) -> int:
+        """Resolve per-endpoint max_concurrent from EMBED_ENDPOINT_CONCURRENT_MAP.
+
+        Matches URL against configured substrings. First match wins.
+        Falls back to self._endpoint_max_concurrent if no match.
+        """
+        if not self._endpoint_concurrent_map:
+            return self._endpoint_max_concurrent
+        for substring, concurrency in self._endpoint_concurrent_map.items():
+            if substring in url:
+                return concurrency
+        return self._endpoint_max_concurrent
 
     def _load_embedding_endpoints(self) -> List["EmbeddingEndpoint"]:
         """从数据库加载 embedding 端点（带健康检查）"""
@@ -194,6 +217,7 @@ class ParallelEmbeddingProcessor:
                 model_id=model_info["id"],
                 model_name=model_name,
                 dimensions=model_dim,
+                max_concurrent=self._resolve_endpoint_concurrent(base_url),
             )
 
             is_healthy = self._health_check(base_url, model_name)
@@ -227,12 +251,16 @@ class ParallelEmbeddingProcessor:
                     sf_name if "/" in sf_name else f"Pro/BAAI/{sf_name}"
                 )
                 sf_dim = sf_model_info.get("config", {}).get("dimensions", 1024)
+                sf_concurrent = self._resolve_endpoint_concurrent("siliconflow://")
+                if sf_concurrent == self._endpoint_max_concurrent:
+                    sf_concurrent = max(2, self._endpoint_max_concurrent // 2)
                 sf_ep = EmbeddingEndpoint(
                     name=f"SiliconFlow({model_id})",
                     url="siliconflow://",
                     model_id=model_id,
                     model_name=api_model,
                     dimensions=sf_dim,
+                    max_concurrent=sf_concurrent,
                 )
                 sf_ep.is_healthy = True
                 endpoints.append(sf_ep)
@@ -390,9 +418,17 @@ class ParallelEmbeddingProcessor:
 
         if needs_update:
             self.endpoints = [
-                EmbeddingEndpoint(f"{ep.name}({model_id})", base_url, model_id=model_id, model_name=model_name)
+                EmbeddingEndpoint(
+                    f"{vendor_info['name']}({model_id})",
+                    base_url,
+                    model_id=model_id,
+                    model_name=model_name,
+                    max_concurrent=ep.max_concurrent,
+                )
                 for ep in self.endpoints
             ]
+            self._stats = {ep.name: 0 for ep in self.endpoints}
+            self._failures = {ep.name: 0 for ep in self.endpoints}
             logger.info(f"端点已更新为: {base_url}")
 
         self._models.clear()
@@ -466,7 +502,7 @@ class ParallelEmbeddingProcessor:
                             f" (已重试 {max_retries} 次, text_len={text_len})，尝试 Ollama 兜底..."
                         )
                         break
-                    return (sf_ep.name, emb, None)
+                    return (ep.name, emb, None)
                 except Exception as sf_err:
                     if retry < max_retries - 1:
                         wait = (retry + 1) * 1.5
@@ -517,7 +553,7 @@ class ParallelEmbeddingProcessor:
                                 f"[{sf_ep.name}] 持久重试成功 "
                                 f"(第 {round_num} 轮, text_len={text_len})"
                             )
-                            return (sf_ep.name, emb, None)
+                            return (ep.name, emb, None)
                     except Exception:
                         time.sleep(1.0)
 
@@ -547,8 +583,8 @@ class ParallelEmbeddingProcessor:
                 f"持久重试 {max_persistent_rounds} 轮后仍然失败，放弃 (text_len={text_len})"
             )
             return (
-                sf_ep.name,
-                [0.0] * sf_ep.dimensions,
+                ep.name,
+                [0.0] * ep.dimensions,
                 f"所有端点持久重试 {max_persistent_rounds} 轮均失败",
             )
 
@@ -617,10 +653,11 @@ class ParallelEmbeddingProcessor:
         return model.get_text_embedding(text[:8192])
 
     def _get_best_endpoint(self) -> EmbeddingEndpoint:
-        """选择当前最优的端点（基于健康状态、速度和负载）
+        """选择当前最优的端点（基于健康状态、并发容量和负载）
 
         规则：
         - 只从 is_healthy=True 的端点中选择
+        - 跳过已满负荷（inflight >= max_concurrent）的端点
         - SiliconFlow 端点始终视为健康（跳过健康检查）
         - 如果所有 Ollama 端点都不健康但 SiliconFlow 可用，尝试重新检查 Ollama 后再决定
         - 绝不会强制使用 unhealthy 的 Ollama 端点
@@ -629,7 +666,9 @@ class ParallelEmbeddingProcessor:
             healthy_eps = [
                 ep
                 for ep in self.endpoints
-                if ep.is_healthy and ep.url != "siliconflow://"
+                if ep.is_healthy
+                and ep.url != "siliconflow://"
+                and ep.inflight < ep.max_concurrent
             ]
 
             if healthy_eps:
@@ -642,6 +681,13 @@ class ParallelEmbeddingProcessor:
                         best_ep = ep
 
                 return best_ep
+
+            # 所有 Ollama 端点都已满或不健康，检查 SiliconFlow
+            sf_ep = next(
+                (ep for ep in self.endpoints if ep.url == "siliconflow://"), None
+            )
+            if sf_ep and sf_ep.inflight < sf_ep.max_concurrent:
+                return sf_ep
 
             unhealthy_eps = [
                 ep
@@ -659,11 +705,8 @@ class ParallelEmbeddingProcessor:
                         logger.info(f"[{ep.name}] 重新检查成功，标记为健康")
                         return ep
 
-            sf_ep = next(
-                (ep for ep in self.endpoints if ep.url == "siliconflow://"), None
-            )
             if sf_ep:
-                logger.warning("所有 Ollama 端点不健康，回退到 SiliconFlow")
+                logger.warning("所有 Ollama 端点不健康或已满，回退到 SiliconFlow")
                 return sf_ep
 
             logger.error("无可用端点（包含 SiliconFlow）")
@@ -805,7 +848,7 @@ class ParallelEmbeddingProcessor:
         for ep in self.endpoints:
             if not ep.is_healthy or ep.url == "siliconflow://":
                 continue
-            for _ in range(4):
+            for _ in range(ep.max_concurrent):
                 t = threading.Thread(target=worker, args=(ep,), daemon=True)
                 t.start()
                 threads.append(t)

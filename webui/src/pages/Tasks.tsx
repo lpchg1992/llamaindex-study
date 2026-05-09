@@ -514,9 +514,9 @@ export function Tasks() {
               {pauseAllTasks.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PauseCircle className="mr-2 h-4 w-4" />}
               Pause All
             </Button>
-            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-2 bg-popover border rounded-lg text-xs whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none z-50 shadow-md">
+            <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-3 py-2 bg-popover border rounded-lg text-xs whitespace-normal max-w-[220px] text-center opacity-0 group-hover:opacity-100 pointer-events-none z-50 shadow-md">
               Pause all running tasks. Tasks can be resumed later.
-              <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-popover"></div>
+              <div className="absolute bottom-full left-1/2 -translate-x-1/2 border-4 border-transparent border-b-popover"></div>
             </div>
           </div>
 
@@ -525,9 +525,9 @@ export function Tasks() {
               {resumeAllTasks.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PlayCircle className="mr-2 h-4 w-4" />}
               Resume All
             </Button>
-            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-2 bg-popover border rounded-lg text-xs whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none z-50 shadow-md">
+            <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-3 py-2 bg-popover border rounded-lg text-xs whitespace-normal max-w-[220px] text-center opacity-0 group-hover:opacity-100 pointer-events-none z-50 shadow-md">
               Resume all paused tasks.
-              <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-popover"></div>
+              <div className="absolute bottom-full left-1/2 -translate-x-1/2 border-4 border-transparent border-b-popover"></div>
             </div>
           </div>
 
@@ -536,9 +536,9 @@ export function Tasks() {
               <Trash2 className="mr-2 h-4 w-4" />
               Delete
             </Button>
-            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-2 bg-popover border rounded-lg text-xs whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none z-50 shadow-md">
+            <div className="absolute top-full right-0 translate-x-0 mt-2 px-3 py-2 bg-popover border rounded-lg text-xs whitespace-normal max-w-[240px] text-center opacity-0 group-hover:opacity-100 pointer-events-none z-50 shadow-md">
               Delete selected tasks. Requires typing "delete" to confirm.
-              <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-popover"></div>
+              <div className="absolute bottom-full right-2 -translate-x-0 border-4 border-transparent border-b-popover"></div>
             </div>
           </div>
 
@@ -547,9 +547,9 @@ export function Tasks() {
               {cleanupTasks.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Wrench className="mr-2 h-4 w-4" />}
               Cleanup
             </Button>
-            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-2 bg-popover border rounded-lg text-xs whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none z-50 shadow-md">
+            <div className="absolute top-full right-0 translate-x-0 mt-2 px-3 py-2 bg-popover border rounded-lg text-xs whitespace-normal max-w-[240px] text-center opacity-0 group-hover:opacity-100 pointer-events-none z-50 shadow-md">
               Remove orphan tasks (tasks whose processes have crashed).
-              <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-popover"></div>
+              <div className="absolute bottom-full right-2 -translate-x-0 border-4 border-transparent border-b-popover"></div>
             </div>
           </div>
         </div>

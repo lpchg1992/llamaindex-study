@@ -48,6 +48,8 @@ class Settings:
     _DEFAULT_MAX_CONCURRENT_TASKS: ClassVar[int] = 10
     _DEFAULT_HEARTBEAT_INTERVAL: ClassVar[int] = 30
     _DEFAULT_STALE_TASK_TIMEOUT: ClassVar[int] = 300
+    _DEFAULT_EMBED_CONCURRENT_POOL: ClassVar[int] = 16
+    _DEFAULT_EMBED_ENDPOINT_MAX_CONCURRENT: ClassVar[int] = 8
 
     def __init__(self) -> None:
         env_path = PROJECT_ROOT / ".env"
@@ -94,6 +96,15 @@ class Settings:
         self.chunk_size: int = int(os.getenv("CHUNK_SIZE", "1024"))
         self.chunk_overlap: int = int(os.getenv("CHUNK_OVERLAP", "100"))
         self.embed_batch_size: int = int(os.getenv("EMBED_BATCH_SIZE", "32"))
+        self.embed_concurrent_pool_size: int = int(
+            os.getenv("EMBED_CONCURRENT_POOL_SIZE", "16")
+        )
+        self.embed_endpoint_max_concurrent: int = int(
+            os.getenv("EMBED_ENDPOINT_MAX_CONCURRENT", "8")
+        )
+        self.embed_endpoint_concurrent_map: dict = self._parse_concurrent_map(
+            os.getenv("EMBED_ENDPOINT_CONCURRENT_MAP", "")
+        )
 
         # ========== 分块策略配置 ==========
         self.chunk_strategy: str = os.getenv("CHUNK_STRATEGY", "hierarchical")
@@ -199,6 +210,28 @@ class Settings:
                 f"目录不可写，回退到本地目录: {candidate} -> {fallback} ({exc})"
             )
             return str(fallback)
+
+    @staticmethod
+    def _parse_concurrent_map(raw: str) -> dict:
+        """Parse EMBED_ENDPOINT_CONCURRENT_MAP into {url_substring: concurrency}.
+
+        Format: "substring1:concurrency1,substring2:concurrency2,..."
+        Example: "192.168:12,localhost:6"
+        """
+        result = {}
+        if not raw.strip():
+            return result
+        for pair in raw.split(","):
+            pair = pair.strip()
+            if not pair:
+                continue
+            parts = pair.rsplit(":", 1)
+            if len(parts) == 2:
+                try:
+                    result[parts[0].strip()] = int(parts[1].strip())
+                except ValueError:
+                    continue
+        return result
 
     def load_runtime_settings(self) -> None:
         """从 JSON 文件加载运行时设置（启动时调用）"""

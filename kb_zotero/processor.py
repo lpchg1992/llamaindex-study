@@ -444,6 +444,13 @@ class ZoteroImporter:
             logger.info(f"[{item.title}] 已导入过，跳过 (zotero_doc_id={item.item_id})")
             return 0, [], [], None, []
 
+        from kb_storage.lance_crud import LanceCRUDService
+        for doc_id in (f"zotero_meta_{item.item_id}", f"zotero_{item.item_id}"):
+            try:
+                LanceCRUDService.delete_by_doc_ids(effective_kb_id, [doc_id])
+            except Exception:
+                pass
+
         total_nodes = 0
         all_nodes = []
         processed_sources = []

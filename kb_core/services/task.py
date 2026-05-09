@@ -260,6 +260,7 @@ class TaskService:
             操作结果统计
         """
         from ..task_queue import TaskQueue, TaskStatus
+        from ..task_executor import task_executor
 
         queue = TaskQueue()
         tasks = queue.list_tasks(status=status)
@@ -269,6 +270,7 @@ class TaskService:
         for task in tasks:
             if task.status == TaskStatus.RUNNING.value:
                 queue.update_status(task.task_id, TaskStatus.PAUSED.value, "已暂停")
+                task_executor.pause_task(task.task_id)
                 paused.append(task.task_id)
             else:
                 failed.append(task.task_id)
@@ -288,6 +290,7 @@ class TaskService:
             操作结果统计
         """
         from ..task_queue import TaskQueue, TaskStatus
+        from ..task_executor import task_executor
 
         queue = TaskQueue()
         tasks = queue.list_tasks(status="paused")
@@ -295,6 +298,7 @@ class TaskService:
 
         for task in tasks:
             queue.update_status(task.task_id, TaskStatus.RUNNING.value, "继续执行")
+            task_executor.resume_task(task.task_id)
             resumed.append(task.task_id)
 
         return {
@@ -323,6 +327,7 @@ class TaskService:
             tasks = queue.list_tasks(status=status)
         deleted = []
         cleaned_results = []
+        failed = []
 
         for task in tasks:
             try:
@@ -340,14 +345,17 @@ class TaskService:
 
                 queue.delete_task(task.task_id)
                 deleted.append(task.task_id)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"删除任务失败 {task.task_id}: {e}")
+                failed.append(task.task_id)
 
         result = {
             "status": "completed",
             "deleted": deleted,
             "message": f"已删除 {len(deleted)} 个任务",
         }
+        if failed:
+            result["failed"] = failed
 
         if cleaned_results:
             result["cleaned"] = cleaned_results
@@ -445,7 +453,7 @@ class TaskService:
         result = {"status": "deleted", "task_id": task_id, "message": "任务已删除"}
 
         should_cleanup = cleanup if cleanup is not None else False
-        if task.status in ("failed", "cancelled"):
+        if cleanup is None and task.status in ("failed", "cancelled"):
             should_cleanup = True
 
         if should_cleanup:
