@@ -8,6 +8,7 @@
 迁移列表：
 - 001_vendor_to_vendor_id: vendor 列重命名为 vendor_id
 - 002_add_zotero_doc_id: 添加 zotero_doc_id 字段和索引
+- 003_add_kb_canonical_name: 添加 knowledge_bases.canonical_name 字段并设置为 'bge-m3'
 """
 
 import re
@@ -117,6 +118,33 @@ def _migrate_002_add_zotero_doc_id() -> None:
     print("002_add_zotero_doc_id 迁移完成")
 
 
+def _migrate_003_add_kb_canonical_name() -> None:
+    if _is_migration_applied("003_add_kb_canonical_name"):
+        return
+    engine = _get_engine()
+    from sqlalchemy import inspect
+    insp = inspect(engine)
+    if "knowledge_bases" not in insp.get_table_names():
+        _record_migration("003_add_kb_canonical_name")
+        return
+    columns = {c["name"] for c in insp.get_columns("knowledge_bases")}
+    if "canonical_name" not in columns:
+        print("迁移 knowledge_bases 表：添加 canonical_name 列")
+        with engine.begin() as conn:
+            conn.exec_driver_sql(
+                "ALTER TABLE knowledge_bases ADD COLUMN canonical_name TEXT REFERENCES canonical_names(id)"
+            )
+    updated = 0
+    with engine.begin() as conn:
+        result = conn.exec_driver_sql(
+            "UPDATE knowledge_bases SET canonical_name = 'bge-m3' WHERE canonical_name IS NULL"
+        )
+        updated = result.rowcount if hasattr(result, 'rowcount') else 0
+    print(f"设置所有知识库的 canonical_name 为 bge-m3，完成 {updated} 条记录")
+    _record_migration("003_add_kb_canonical_name")
+    print("003_add_kb_canonical_name 迁移完成")
+
+
 def _backfill_zotero_doc_id() -> None:
     engine = _get_engine()
     with engine.begin() as conn:
@@ -146,6 +174,7 @@ def run_all_migrations() -> None:
     _ensure_migrations_table()
     _migrate_001_vendor_to_vendor_id()
     _migrate_002_add_zotero_doc_id()
+    _migrate_003_add_kb_canonical_name()
 
 
 if __name__ == "__main__":
