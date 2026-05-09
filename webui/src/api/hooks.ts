@@ -1136,3 +1136,42 @@ export function useChunkChildren(kbId: string, chunkId: string) {
     enabled: !!kbId && !!chunkId,
   })
 }
+
+export interface CanonicalNameInfo {
+  id: string
+  model_type: string
+  description?: string
+}
+
+export function useCanonicalNames(modelType?: string) {
+  return useQuery<CanonicalNameInfo[]>({
+    queryKey: ['canonical-names', modelType],
+    queryFn: async () => {
+      const params = modelType ? `?model_type=${modelType}` : ''
+      const { data } = await apiClient.get(`${API_BASE}/canonical-names${params}`)
+      return data
+    },
+  })
+}
+
+export function useCreateCanonicalName() {
+  const qc = useQueryClient()
+  return useMutation<CanonicalNameInfo, Error, { id: string; model_type: string; description?: string }>({
+    mutationFn: async (req) => {
+      const { data } = await apiClient.post(`${API_BASE}/canonical-names`, req)
+      return data
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['canonical-names'] }),
+  })
+}
+
+export function useDeleteCanonicalName() {
+  const qc = useQueryClient()
+  return useMutation<{ status: string }, Error, string>({
+    mutationFn: async (id) => {
+      const { data } = await apiClient.delete(`${API_BASE}/canonical-names/${id}`)
+      return data
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['canonical-names'] }),
+  })
+}

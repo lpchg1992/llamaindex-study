@@ -7,11 +7,14 @@ export interface KBInfo {
   chunk_count?: number
   persist_dir?: string
   chunk_strategy?: string
+  embedding_model_id?: string
+  canonical_name?: string
 }
 
 export interface KBUpdateRequest {
   name?: string
   description?: string
+  canonical_name?: string
 }
 
 export interface TopicUpdateRequest {
@@ -53,6 +56,9 @@ export interface TaskResponse {
     failed?: number
     processed_chunks?: number
     total_chunks?: number
+    emb_success?: number
+    emb_failed?: number
+    emb_pending?: number
     file_progress?: FileProgressItem[]
   }
   error?: string
@@ -179,6 +185,7 @@ export interface ModelInfo {
   vendor_id: string
   name: string
   type: 'llm' | 'embedding' | 'reranker'
+  canonical_name?: string
   is_active: boolean
   is_default: boolean
   config: Record<string, unknown>
@@ -625,6 +632,7 @@ export interface ModelCreateRequest {
   vendor_id: string
   name?: string
   type: 'llm' | 'embedding' | 'reranker'
+  canonical_name?: string
   is_active?: boolean
   is_default?: boolean
   config?: Record<string, unknown>
