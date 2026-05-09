@@ -62,6 +62,7 @@ def update_kb_info(kb_id: str, req: KBUpdateRequest):
             kb_id,
             name=req.name,
             description=req.description,
+            canonical_name=req.canonical_name,
         )
         return result
     except ValueError as e:

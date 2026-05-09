@@ -11,6 +11,8 @@ from api.schemas import (
     VendorCreateRequest,
     ModelInfo,
     ModelCreateRequest,
+    CanonicalNameInfo,
+    CanonicalNameCreate,
 )
 
 router = APIRouter(tags=["models"])
@@ -139,6 +141,7 @@ def create_model(req: ModelCreateRequest):
         vendor_id=req.vendor_id,
         name=name,
         type=req.type,
+        canonical_name=req.canonical_name,
         is_active=req.is_active,
         is_default=req.is_default,
         config=req.config,
@@ -155,6 +158,45 @@ def create_model(req: ModelCreateRequest):
             f"refresh_endpoints() failed after model create: {e}", exc_info=True
         )
     return ModelInfo(**model_db.get(req.id))
+
+
+# ============== Canonical Names (must be before /{model_id:path}) ==============
+
+@router.get("/canonical-names", response_model=List[CanonicalNameInfo])
+def list_canonical_names(model_type: Optional[str] = None):
+    from kb_core.database import init_canonical_name_db
+    db = init_canonical_name_db()
+    return [CanonicalNameInfo(**item) for item in db.get_all(model_type=model_type)]
+
+
+@router.post("/canonical-names", response_model=CanonicalNameInfo)
+def create_canonical_name(req: CanonicalNameCreate):
+    from kb_core.database import init_canonical_name_db
+    db = init_canonical_name_db()
+    db.upsert(name_id=req.id, model_type=req.model_type, description=req.description)
+    return CanonicalNameInfo(**db.get(req.id))
+
+
+@router.delete("/canonical-names/{name_id}")
+def delete_canonical_name(name_id: str):
+    from kb_core.database import init_canonical_name_db, init_model_db
+
+    cn_db = init_canonical_name_db()
+    if not cn_db.get(name_id):
+        raise HTTPException(status_code=404, detail=f"Canonical name {name_id} 不存在")
+
+    model_db = init_model_db()
+    models_using = [m for m in model_db.get_all(active_only=False)
+                    if m.get("canonical_name") == name_id]
+    if models_using:
+        ids = ", ".join(m["id"] for m in models_using[:5])
+        raise HTTPException(
+            status_code=400,
+            detail=f"以下模型正在使用此 canonical name，请先修改它们: {ids}",
+        )
+
+    cn_db.delete(name_id)
+    return {"status": "deleted", "id": name_id}
 
 
 @router.get("/models/{model_id:path}", response_model=ModelInfo)
@@ -221,7 +263,8 @@ def update_model(model_id: str, req: ModelCreateRequest):
 
     logger = get_logger(__name__)
     db = init_model_db()
-    if not db.get(model_id):
+    existing = db.get(model_id)
+    if not existing:
         raise HTTPException(status_code=404, detail=f"模型 {model_id} 不存在")
     db.upsert(
         model_id=model_id,
@@ -230,6 +273,7 @@ def update_model(model_id: str, req: ModelCreateRequest):
         type=req.type,
         is_active=req.is_active,
         is_default=req.is_default,
+        canonical_name=req.canonical_name if req.canonical_name is not None else existing.get("canonical_name"),
         config=req.config,
     )
     if req.is_default:
