@@ -12,6 +12,7 @@ import {
 } from '@/components/ui/select'
 import { MessageSquare, Loader2, Send, Trash2, Plus, Clock, User, Bot } from 'lucide-react'
 import { toast } from 'sonner'
+import { MarkdownRenderer } from '@/components/MarkdownRenderer'
 import type { ChatMessage } from '@/types/api'
 
 export function Chat() {
@@ -207,7 +208,7 @@ export function Chat() {
                             : 'bg-muted rounded-tl-sm'
                         }`}
                       >
-                        <p className="whitespace-pre-wrap break-all leading-relaxed">{msg.content}</p>
+                        <MarkdownRenderer content={msg.content} />
                       </div>
                     </div>
                   ))

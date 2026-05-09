@@ -128,6 +128,32 @@ function TaskDetailDialog({ taskId, open, onOpenChange }: TaskDetailDialogProps)
                 </div>
               )}
 
+              {(task.result?.emb_success !== undefined || task.result?.emb_failed !== undefined || task.result?.emb_pending !== undefined) && (
+                <div className="p-3 border rounded-lg bg-muted/30">
+                  <Label className="text-muted-foreground text-xs mb-2 block">Chunk Embedding</Label>
+                  <div className="flex items-center gap-1 h-2 rounded-full overflow-hidden bg-secondary">
+                    {(() => {
+                      const s = task.result?.emb_success || 0
+                      const f = task.result?.emb_failed || 0
+                      const p = task.result?.emb_pending || 0
+                      const total = Math.max(1, s + f + p)
+                      return (
+                        <>
+                          {s > 0 && <div className="h-full bg-green-500 transition-all" style={{ width: Math.max(0, s / total * 100) + '%' }} />}
+                          {f > 0 && <div className="h-full bg-red-500 transition-all" style={{ width: Math.max(0, f / total * 100) + '%' }} />}
+                          {p > 0 && <div className="h-full bg-gray-300 transition-all" style={{ width: Math.max(0, p / total * 100) + '%' }} />}
+                        </>
+                      )
+                    })()}
+                  </div>
+                  <div className="flex justify-between text-xs mt-1">
+                    <span className="text-green-600">✓ {task.result?.emb_success ?? 0} success</span>
+                    <span className="text-red-500">✗ {task.result?.emb_failed ?? 0} failed</span>
+                    <span className="text-muted-foreground">○ {task.result?.emb_pending ?? 0} pending</span>
+                  </div>
+                </div>
+              )}
+
               {task.message && task.task_type !== 'initialize' && (
                 <div>
                   <Label className="text-muted-foreground text-xs">Current Status</Label>
@@ -384,19 +410,30 @@ function TaskCard({ task, onShowDetails }: { task: TaskResponse; onShowDetails: 
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">Progress:</span>
-              <span>{task.progress}%</span>
+              <span>{task.progress}%{task.result?.emb_failed ? <span className="text-red-500 ml-1">({task.result.emb_failed} failed)</span> : ''}</span>
             </div>
             <p className="text-xs text-muted-foreground line-clamp-2">{task.message}</p>
             {task.error && (
               <p className="text-xs text-red-500 line-clamp-2">Error: {task.error}</p>
             )}
           </div>
-          {task.status === 'running' && (
-            <div className="mt-3 h-2 w-full rounded-full bg-secondary">
-              <div
-                className="h-2 rounded-full bg-primary transition-all"
-                style={{ width: `${task.progress}%` }}
-              />
+          {(task.status === 'running' || task.status === 'completed' || task.status === 'failed') && task.progress > 0 && (
+            <div className="mt-3 h-2 w-full rounded-full bg-secondary overflow-hidden flex">
+              {(() => {
+                const s = task.result?.emb_success || 0
+                const f = task.result?.emb_failed || 0
+                const p = task.result?.emb_pending || 0
+                const total = Math.max(1, s + f + p)
+                if (f > 0) {
+                  return (
+                    <>
+                      <div className="h-full bg-red-500" style={{ width: (Math.max(0, f / total * 100)) + '%' }} />
+                      <div className="h-full bg-green-500" style={{ width: (Math.max(0, s / total * 100)) + '%' }} />
+                    </>
+                  )
+                }
+                return <div className={`h-full rounded-full transition-all ${task.status === 'failed' ? 'bg-red-500' : 'bg-primary'}`} style={{ width: task.progress + '%' }} />
+              })()}
             </div>
           )}
         </CardContent>

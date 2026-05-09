@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { useModels, useVendors, useCreateVendor, useDeleteVendor, useUpdateVendor, useCreateModel, useDeleteModel, useUpdateModel, useSetDefaultModel } from '@/api/hooks'
+import { useState, useEffect, useLayoutEffect } from 'react'
+import { useModels, useVendors, useCreateVendor, useDeleteVendor, useUpdateVendor, useCreateModel, useDeleteModel, useUpdateModel, useSetDefaultModel, useCanonicalNames } from '@/api/hooks'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -24,6 +24,7 @@ import {
 } from '@/components/ui/select'
 import { Cpu, User, Plus, Trash2, Star, Pencil, Settings2 } from 'lucide-react'
 import { toast } from 'sonner'
+import { CanonicalNamesPanel } from '@/components/CanonicalNamesPanel'
 import type { VendorInfo, ModelInfo, VendorCreateRequest, ModelCreateRequest } from '@/types/api'
 
 type VendorType = 'cloud' | 'local'
@@ -208,13 +209,22 @@ function ModelDialog({
           id: model.id, 
           vendor_id: model.vendor_id, 
           name: model.name, 
-          type: model.type, 
+          type: model.type,
+          canonical_name: model.canonical_name || undefined,
           is_active: model.is_active, 
           is_default: model.is_default,
           config: model.config || getDefaultModelConfig(model.type)
         }
-      : { id: '', vendor_id: '', name: '', type: 'llm', is_active: true, is_default: false, config: getDefaultModelConfig('llm') }
+      : { id: '', vendor_id: '', name: '', type: 'llm', canonical_name: undefined, is_active: true, is_default: false, config: getDefaultModelConfig('llm') }
   )
+
+  const { data: canonicalNames, isLoading: cnLoading } = useCanonicalNames(formData.type)
+
+  useLayoutEffect(() => {
+    if (open && model) {
+      setFormData(prev => ({ ...prev, canonical_name: model.canonical_name || undefined }))
+    }
+  }, [open, model?.canonical_name])
 
   const autoGenerateModelId = (vendorId: string, name: string): string => {
     if (!vendorId || !name) return ''
@@ -245,12 +255,13 @@ function ModelDialog({
         vendor_id: model.vendor_id,
         name: model.name,
         type: model.type,
+        canonical_name: model.canonical_name || undefined,
         is_active: model.is_active,
         is_default: model.is_default,
         config: model.config || getDefaultModelConfig(model.type),
       })
     } else {
-      setFormData({ id: '', vendor_id: '', name: '', type: 'llm', is_active: true, is_default: false, config: getDefaultModelConfig('llm') })
+      setFormData({ id: '', vendor_id: '', name: '', type: 'llm', canonical_name: undefined, is_active: true, is_default: false, config: getDefaultModelConfig('llm') })
     }
   }, [model])
 
@@ -482,6 +493,26 @@ function ModelDialog({
               </SelectContent>
             </Select>
           </div>
+          <div className="space-y-2">
+            <Label htmlFor="model-canonical">Canonical Name</Label>
+            <Select
+              value={formData.canonical_name || '__none__'}
+              onValueChange={(v) => setFormData(prev => ({ ...prev, canonical_name: v === '__none__' ? undefined : v }))}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="None" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">None</SelectItem>
+                {formData.canonical_name && (
+                  <SelectItem value={formData.canonical_name}>{formData.canonical_name}</SelectItem>
+                )}
+                {!cnLoading && canonicalNames?.filter(n => n.id !== formData.canonical_name).map((n) => (
+                  <SelectItem key={n.id} value={n.id}>{n.id}{n.description ? ` — ${n.description}` : ''}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
           <div className="flex items-center space-x-2">
             <Switch
               id="model-default"
@@ -537,15 +568,11 @@ export function ModelsPage() {
   const setDefaultModel = useSetDefaultModel()
 
   const [vendorDialog, setVendorDialog] = useState<{ open: boolean; mode: 'create' | 'edit'; vendor?: VendorInfo }>({ open: false, mode: 'create' })
+  const [modelDialogKey, setModelDialogKey] = useState(0)
   const [modelDialog, setModelDialog] = useState<{ open: boolean; mode: 'create' | 'edit'; model?: ModelInfo }>({ open: false, mode: 'create' })
 
-  const handleCreateVendor = async (data: VendorCreateRequest) => {
-    try {
-      await createVendor.mutateAsync(data)
-      toast.success('Vendor created')
-    } catch (error) {
-      toast.error('Failed to create vendor')
-    }
+  const openEditModel = (model: ModelInfo) => {
+    setModelDialog({ open: true, mode: 'edit', model })
   }
 
   const handleUpdateVendor = async (data: VendorCreateRequest) => {
@@ -604,12 +631,17 @@ export function ModelsPage() {
     }
   }
 
-  const openEditVendor = (vendor: VendorInfo) => {
-    setVendorDialog({ open: true, mode: 'edit', vendor })
+  const handleCreateVendor = async (data: VendorCreateRequest) => {
+    try {
+      await createVendor.mutateAsync(data)
+      toast.success('Vendor created')
+    } catch (error) {
+      toast.error('Failed to create vendor')
+    }
   }
 
-  const openEditModel = (model: ModelInfo) => {
-    setModelDialog({ open: true, mode: 'edit', model })
+  const openEditVendor = (vendor: VendorInfo) => {
+    setVendorDialog({ open: true, mode: 'edit', vendor })
   }
 
   return (
@@ -621,7 +653,7 @@ export function ModelsPage() {
             <Plus className="mr-2 h-4 w-4" />
             Add Vendor
           </Button>
-          <Button onClick={() => setModelDialog({ open: true, mode: 'create' })}>
+          <Button onClick={() => { setModelDialogKey(k => k + 1); setModelDialog({ open: true, mode: 'create' }) }}>
             <Plus className="mr-2 h-4 w-4" />
             Add Model
           </Button>
@@ -637,6 +669,7 @@ export function ModelsPage() {
       />
 
       <ModelDialog
+        key={`${modelDialog.mode}-${modelDialog.model?.id || modelDialogKey}`}
         open={modelDialog.open}
         onOpenChange={(open) => setModelDialog({ ...modelDialog, open })}
         model={modelDialog.model}
@@ -663,6 +696,10 @@ export function ModelsPage() {
             <User className="mr-2 h-4 w-4" />
             Vendors
           </TabsTrigger>
+          <TabsTrigger value="canonical">
+            <Settings2 className="mr-2 h-4 w-4" />
+            Canonical Names
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="llm" className="mt-4">
@@ -684,6 +721,9 @@ export function ModelsPage() {
                           {!model.is_active && <Badge variant="destructive">Inactive</Badge>}
                         </div>
                         <p className="text-sm text-muted-foreground font-mono">{model.id}</p>
+                        {(model as any).canonical_name && (
+                          <Badge variant="secondary" className="mt-1 text-xs">{model.canonical_name}</Badge>
+                        )}
                       </div>
                       <div className="flex items-center gap-2">
                         <Badge variant="outline">{model.vendor_id}</Badge>
@@ -835,6 +875,10 @@ export function ModelsPage() {
               )}
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="canonical" className="mt-4">
+          <CanonicalNamesPanel />
         </TabsContent>
       </Tabs>
     </div>

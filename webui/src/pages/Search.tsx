@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useKBs, useSearch, useModels } from '@/api/hooks'
+import { useKBs, useSearch } from '@/api/hooks'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -21,7 +21,6 @@ import type { SearchResult } from '@/types/api'
 
 export function SearchPage() {
   const { data: kbs } = useKBs()
-  const { data: embeddingModels } = useModels('embedding')
   const searchMutation = useSearch()
 
   const [query, setQuery] = useState('')
@@ -29,7 +28,6 @@ export function SearchPage() {
   const [results, setResults] = useState<SearchResult[]>([])
   const [hasSearched, setHasSearched] = useState(false)
   const [retrievalMode, setRetrievalMode] = useState<'vector' | 'hybrid'>('vector')
-  const [embedModelId, setEmbedModelId] = useState<string>('')
   const [useAutoMerging, setUseAutoMerging] = useState(false)
   const [kbSearch, setKbSearch] = useState('')
   const [topK, setTopK] = useState(10)
@@ -54,7 +52,6 @@ export function SearchPage() {
         top_k: topK,
         route_mode: 'general',
         retrieval_mode: retrievalMode,
-        embed_model_id: embedModelId || undefined,
         use_auto_merging: useAutoMerging || undefined,
       })
       setResults(response)
@@ -108,22 +105,6 @@ export function SearchPage() {
               <span>1</span>
               <span>50</span>
             </div>
-          </div>
-
-          <div className="space-y-2">
-            <Label>Embedding Model</Label>
-            <Select value={embedModelId} onValueChange={setEmbedModelId}>
-              <SelectTrigger>
-                <SelectValue placeholder="Default model" />
-              </SelectTrigger>
-              <SelectContent>
-                {embeddingModels?.map((model) => (
-                  <SelectItem key={model.id} value={model.id}>
-                    {model.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
           </div>
 
           <div className="flex items-center justify-between">

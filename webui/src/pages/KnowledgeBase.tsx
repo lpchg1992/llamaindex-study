@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useKBs, useCreateKB, useDeleteKB, useKBTopics, useRefreshTopics, useConsistencyCheck, useConsistencyRepair, useInitializeKB, useRepairAll, useCheckAndMarkFailed, useRevectorTask } from '@/api/hooks'
+import { useKBs, useCreateKB, useDeleteKB, useKBTopics, useRefreshTopics, useConsistencyCheck, useConsistencyRepair, useInitializeKB, useRepairAll, useCheckAndMarkFailed, useRevectorTask, useModels } from '@/api/hooks'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -30,6 +30,9 @@ function KBDetailsPanel({ kb }: { kb: KBInfo }) {
   const { data: consistency, isLoading: consistencyLoading, refetch: refetchConsistency } = useConsistencyCheck(kb.id)
   const repairConsistency = useConsistencyRepair()
   const initializeKB = useInitializeKB()
+  const { data: embeddingModels } = useModels('embedding')
+  const embedModel = embeddingModels?.find(m => m.id === kb.embedding_model_id)
+  const embedCanonical = embedModel?.canonical_name
   const checkAndMarkFailed = useCheckAndMarkFailed()
   const revectorTask = useRevectorTask()
   const [isRefreshingTopics, setIsRefreshingTopics] = useState(false)
@@ -141,6 +144,21 @@ function KBDetailsPanel({ kb }: { kb: KBInfo }) {
                 <div>
                   <span className="text-muted-foreground">Chunk: </span>
                   <span>{kb.chunk_strategy}</span>
+                </div>
+              )}
+              {kb.embedding_model_id && (
+                <div>
+                  <span className="text-muted-foreground">Embedding: </span>
+                  <span className="font-mono text-xs">{kb.embedding_model_id}</span>
+                  {embedCanonical && (
+                    <Badge variant="secondary" className="ml-1 text-xs">{embedCanonical}</Badge>
+                  )}
+                </div>
+              )}
+              {kb.canonical_name && (
+                <div>
+                  <span className="text-muted-foreground">Canonical Name: </span>
+                  <Badge variant="outline" className="text-xs">{kb.canonical_name}</Badge>
                 </div>
               )}
               {kb.description && (

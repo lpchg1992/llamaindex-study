@@ -16,33 +16,32 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { MessageSquare, FileText, Loader2, Sparkles, X, Rocket, Microscope, BookOpen, FileSearch } from 'lucide-react'
+import { MessageSquare, FileText, Loader2, Sparkles, X, Rocket, Microscope, BookOpen } from 'lucide-react'
 import { toast } from 'sonner'
+import { MarkdownRenderer } from '@/components/MarkdownRenderer'
 import type { QueryResponse } from '@/types/api'
 import { cn } from '@/lib/utils'
 
-type PresetMode = 'smart' | 'deep' | 'full' | 'search'
+type PresetMode = 'smart' | 'deep' | 'full'
 
-const PRESETS: Record<PresetMode, { label: string; icon: React.ElementType; config: Partial<QueryConfig> }> = {
+const PRESETS: Record<PresetMode, { label: string; icon: React.ElementType; description: string; config: Partial<QueryConfig> }> = {
   smart: {
     label: 'Smart Q&A',
     icon: Rocket,
-    config: { retrieval_mode: 'vector', useHyde: false, useMultiQuery: false, useAutoMerging: false, responseMode: 'compact' }
+    description: 'HyDE + Auto-Merging',
+    config: { retrieval_mode: 'vector', useHyde: true, useMultiQuery: false, useAutoMerging: true, responseMode: 'compact' }
   },
   deep: {
     label: 'Deep Analysis',
     icon: Microscope,
+    description: 'HyDE + Tree Summarize',
     config: { retrieval_mode: 'vector', useHyde: true, useMultiQuery: false, useAutoMerging: true, responseMode: 'tree_summarize' }
   },
   full: {
     label: 'Full Retrieval',
     icon: BookOpen,
+    description: 'Hybrid + Multi-Query',
     config: { retrieval_mode: 'hybrid', useHyde: false, useMultiQuery: true, useAutoMerging: false, responseMode: 'compact' }
-  },
-  search: {
-    label: 'Search Only',
-    icon: FileSearch,
-    config: { retrieval_mode: 'vector', useHyde: false, useMultiQuery: false, useAutoMerging: false, responseMode: 'compact' }
   }
 }
 
@@ -52,7 +51,6 @@ interface QueryConfig {
   excludedKBs: string[]
   retrieval_mode: 'vector' | 'hybrid'
   llmModelId: string
-  embedModelId: string
   useHyde: boolean
   useMultiQuery: boolean
   numMultiQueries: number
@@ -64,7 +62,6 @@ interface QueryConfig {
 export function QueryPage() {
   const { data: kbs } = useKBs()
   const { data: llmModels } = useModels('llm')
-  const { data: embeddingModels } = useModels('embedding')
   const queryMutation = useQueryMutation()
 
   const [config, setConfig] = useState<QueryConfig>({
@@ -73,7 +70,6 @@ export function QueryPage() {
     excludedKBs: [],
     retrieval_mode: 'vector',
     llmModelId: '',
-    embedModelId: '',
     useHyde: false,
     useMultiQuery: false,
     numMultiQueries: 3,
@@ -97,7 +93,6 @@ export function QueryPage() {
 
   const updateConfig = <K extends keyof QueryConfig>(key: K, value: QueryConfig[K]) => {
     setConfig(prev => ({ ...prev, [key]: value }))
-    setActivePreset(null)
   }
 
   const applyPreset = (preset: PresetMode) => {
@@ -145,11 +140,10 @@ export function QueryPage() {
         exclude: config.route_mode === 'auto' && config.excludedKBs.length > 0 ? config.excludedKBs : undefined,
         retrieval_mode: config.retrieval_mode,
         model_id: config.llmModelId || undefined,
-        embed_model_id: config.embedModelId || undefined,
-        use_hyde: config.useHyde || undefined,
-        use_multi_query: config.useMultiQuery || undefined,
+        use_hyde: config.useHyde,
+        use_multi_query: config.useMultiQuery,
         num_multi_queries: config.useMultiQuery ? config.numMultiQueries : undefined,
-        use_auto_merging: config.useAutoMerging || undefined,
+        use_auto_merging: config.useAutoMerging,
         response_mode: config.responseMode,
         top_k: config.topK,
       })
@@ -172,7 +166,7 @@ export function QueryPage() {
         <div className="space-y-4 flex-1 overflow-y-auto">
           <div className="space-y-2">
             <Label>Presets</Label>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-1">
               {(Object.keys(PRESETS) as PresetMode[]).map((mode) => {
                 const preset = PRESETS[mode]
                 const Icon = preset.icon
@@ -182,10 +176,11 @@ export function QueryPage() {
                     variant={activePreset === mode ? 'default' : 'outline'}
                     size="sm"
                     onClick={() => applyPreset(mode)}
-                    className={cn('justify-start', activePreset === mode && 'bg-primary')}
+                    className={cn('w-full justify-start', activePreset === mode && 'bg-primary')}
                   >
-                    <Icon className="mr-2 h-4 w-4" />
-                    {preset.label}
+                    <Icon className="mr-2 h-4 w-4 shrink-0" />
+                    <span className="flex-1 text-left">{preset.label}</span>
+                    <span className="text-[10px] text-muted-foreground ml-1">{preset.description}</span>
                   </Button>
                 )
               })}
@@ -323,22 +318,6 @@ export function QueryPage() {
             </div>
 
             <div className="space-y-2">
-              <Label>Embedding Model</Label>
-              <Select value={config.embedModelId} onValueChange={(v) => updateConfig('embedModelId', v)}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Default model" />
-                </SelectTrigger>
-                <SelectContent>
-                  {embeddingModels?.map((model) => (
-                    <SelectItem key={model.id} value={model.id}>
-                      {model.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-2">
               <Label>Response Mode</Label>
               <Select value={config.responseMode} onValueChange={(v) => updateConfig('responseMode', v)}>
                 <SelectTrigger>
@@ -430,9 +409,7 @@ export function QueryPage() {
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="overflow-hidden">
-                  <div className="prose prose-sm max-w-none dark:prose-invert overflow-wrap-anywhere">
-                    <p className="whitespace-pre-wrap break-all leading-relaxed">{response.response}</p>
-                  </div>
+                  <MarkdownRenderer content={response.response} />
                 </CardContent>
               </Card>
 
