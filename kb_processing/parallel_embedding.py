@@ -474,6 +474,10 @@ class ParallelEmbeddingProcessor:
         - 快速重试全部耗尽后：进入持久重试模式（固定间隔 4s，最多 100 轮），
           确保最终成功而非放弃
         """
+        stripped = text.strip()
+        if not stripped:
+            return (ep.name, [0.0] * ep.dimensions, "空文本，无法向量化")
+
         sf_ep = next((e for e in self.endpoints if e.url == "siliconflow://"), None)
 
         def call_sf() -> EmbeddingResult:

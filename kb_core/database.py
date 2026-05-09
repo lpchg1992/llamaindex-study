@@ -1551,6 +1551,15 @@ class ChunkDB:
             )
             return result.rowcount or 0
 
+    def delete_bulk(self, chunk_ids: List[str]) -> int:
+        if not chunk_ids:
+            return 0
+        with self.db.session_scope() as session:
+            result = session.execute(
+                delete(ChunkModel).where(ChunkModel.id.in_(chunk_ids))
+            )
+            return result.rowcount or 0
+
     def get_unembedded(self, kb_id: str, limit: int = 100) -> List[Dict[str, Any]]:
         with self.db.session_scope() as session:
             rows = session.scalars(

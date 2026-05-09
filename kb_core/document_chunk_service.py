@@ -99,7 +99,12 @@ class DocumentChunkService:
             created_doc_id = doc["id"]
 
             chunks = []
-            for idx, node in enumerate(nodes):
+            chunk_idx = 0
+            for node in nodes:
+                text = node.get_content() if hasattr(node, "get_content") else str(node)
+                if not text.strip():
+                    continue
+
                 metadata = node.metadata if hasattr(node, "metadata") else {}
                 parent_id = metadata.get("parent_doc_id") or metadata.get("parent_id")
                 hierarchy_level = (
@@ -119,7 +124,7 @@ class DocumentChunkService:
                 node_id = (
                     node.node_id
                     if hasattr(node, "node_id")
-                    else (node.id_ if hasattr(node, "id_") else f"chunk_{idx}")
+                    else (node.id_ if hasattr(node, "id_") else f"chunk_{chunk_idx}")
                 )
 
                 if node_id in failed_set:
@@ -131,19 +136,16 @@ class DocumentChunkService:
                     "id": node_id,
                     "doc_id": created_doc_id,
                     "kb_id": self.kb_id,
-                    "text": node.get_content()
-                    if hasattr(node, "get_content")
-                    else str(node),
-                    "text_length": len(node.get_content())
-                    if hasattr(node, "get_content")
-                    else len(str(node)),
-                    "chunk_index": idx,
+                    "text": text,
+                    "text_length": len(text),
+                    "chunk_index": chunk_idx,
                     "parent_chunk_id": parent_id,
                     "hierarchy_level": hierarchy_level,
                     "metadata": metadata,
                     "embedding_generated": emb_status,
                 }
                 chunks.append(chunk)
+                chunk_idx += 1
 
             if chunks:
                 chunk_db.create_bulk(chunks)

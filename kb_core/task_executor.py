@@ -1154,6 +1154,25 @@ class TaskExecutor:
             embedded_chunks = chunk_db.get_embedded(kb_id, limit=limit)
 
         all_chunks = pending_chunks + failed_chunks + embedded_chunks
+
+        empty_chunks = [c for c in all_chunks if not (c.get("text") or "").strip()]
+        if empty_chunks:
+            empty_ids = [c["id"] for c in empty_chunks]
+            logger.info(
+                f"[{task_id}] 发现 {len(empty_ids)} 个空 chunk，将删除"
+            )
+            try:
+                deleted_sqlite = chunk_db.delete_bulk(empty_ids)
+                logger.info(f"[{task_id}] 已从 SQLite 删除 {deleted_sqlite} 个空 chunk")
+            except Exception as e:
+                logger.warning(f"[{task_id}] 删除空 chunk (SQLite) 失败: {e}")
+            try:
+                LanceCRUDService.delete_by_chunk_ids(kb_id, empty_ids)
+            except Exception as e:
+                logger.warning(f"[{task_id}] 清理空 chunk (LanceDB) 失败: {e}")
+            empty_id_set = set(empty_ids)
+            all_chunks = [c for c in all_chunks if c["id"] not in empty_id_set]
+
         total_chunks = len(all_chunks)
 
         # Setup file_progress for progress bar display
