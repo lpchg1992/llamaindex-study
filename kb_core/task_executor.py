@@ -354,6 +354,15 @@ class TaskExecutor:
         """
         return bool(params.get("refresh_topics", True))
 
+    def _record_embedding_model(self, kb_id: str) -> None:
+        try:
+            from rag.embedding_service import get_default_embedding_from_registry
+            model_id, _ = get_default_embedding_from_registry()
+            if model_id:
+                self._get_vector_store(kb_id).set_embedding_model_id(model_id)
+        except Exception:
+            pass
+
     # ==================== Obsidian 导入 ====================
 
     async def _execute_obsidian(self, task: "Task") -> None:
@@ -717,6 +726,8 @@ class TaskExecutor:
         if self._should_refresh_topics(params):
             self._update_kb_topics(kb_id, has_new_docs=processed_files > 0)
 
+        self._record_embedding_model(kb_id)
+
     # ==================== 选择性导入 ====================
 
     async def _execute_selective(self, task: "Task") -> None:
@@ -1071,6 +1082,8 @@ class TaskExecutor:
 
         if params.get("refresh_topics", True):
             self._update_kb_topics(kb_id, has_new_docs=stats["files"] > 0)
+
+        self._record_embedding_model(kb_id)
 
         all_failed = stats["failed"] > 0 and stats["files"] == 0
         error_msg = f"所有项目都失败了 ({stats['failed']} 个)" if all_failed else None
@@ -1648,6 +1661,8 @@ class TaskExecutor:
             if self._should_refresh_topics(params):
                 self._update_kb_topics(kb_id, has_new_docs=stats.get("items", 0) > 0)
 
+            self._record_embedding_model(kb_id)
+
         except Exception as e:
             logger.error(f"[{task_id}] Zotero 导入任务执行失败: {e}", exc_info=True)
             await self._update_and_notify(task_id, message=f"导入失败: {str(e)}")
@@ -1956,6 +1971,8 @@ class TaskExecutor:
 
         if self._should_refresh_topics(params):
             self._update_kb_topics(kb_id, has_new_docs=stats["files"] > 0)
+
+        self._record_embedding_model(kb_id)
 
     async def _execute_initialize(self, task: "Task") -> None:
         """执行知识库初始化任务

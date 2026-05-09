@@ -401,7 +401,7 @@ class TaskQueue:
             row.message = "开始执行"
 
     def complete_task(self, task_id: str, result: Dict = None, error: str = None):
-        """完成任务"""
+        """完成任务，自动计算 chunk embedding 统计"""
         with self._session_scope() as session:
             row = session.get(TaskRecord, task_id)
             if not row:
@@ -439,6 +439,31 @@ class TaskQueue:
                     if total > 0
                     else (99 if processed > 0 else row.progress)
                 )
+
+            emb_success = 0
+            emb_failed = 0
+            emb_pending = 0
+            raw = row.file_progress
+            if raw:
+                try:
+                    files = json.loads(raw)
+                    for f in files:
+                        done = f.get("processed_chunks", 0)
+                        all_chunks = f.get("total_chunks", 0)
+                        written = f.get("db_written", False)
+                        if written and done >= all_chunks:
+                            emb_success += done
+                        elif f.get("status") in ("completed", "failed"):
+                            emb_failed += all_chunks - done
+                        elif f.get("status") in ("cancelled",):
+                            emb_pending += all_chunks - done
+                        else:
+                            emb_pending += all_chunks - done
+                    result["emb_success"] = emb_success
+                    result["emb_failed"] = emb_failed
+                    result["emb_pending"] = emb_pending
+                except Exception:
+                    pass
 
         # 通知等待者
         if task_id in self._task_events:
