@@ -41,10 +41,11 @@ import time
 from functools import lru_cache
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
-from typing import Optional, List, Callable
+from typing import List, Optional, Set, Tuple, Union
 
-from llama_index.core import SimpleDirectoryReader
 from llama_index.core.schema import Document as LlamaDocument
+
+from kb_processing.reference_detector import apply_reference_strategy
 from llama_index.readers.file import PptxReader, PandasExcelReader
 from llama_index.core.node_parser import HierarchicalNodeParser, SentenceSplitter, MarkdownNodeParser
 
@@ -1751,6 +1752,7 @@ class DocumentProcessor:
                 docs = self.process_file(str(file_path))
                 if docs:
                     nodes = self.parse_to_nodes(docs)
+                    nodes = apply_reference_strategy(nodes)
                     saved, failed_ids = self.save_nodes(vector_store, nodes, progress)
                     stats["nodes"] += saved
                     stats["files"] += 1

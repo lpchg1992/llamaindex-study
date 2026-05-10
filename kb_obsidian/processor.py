@@ -27,6 +27,8 @@ from kb_processing.document_processor import (
 from kb_core.document_chunk_service import get_document_chunk_service
 from rag.logger import get_logger
 
+from kb_processing.reference_detector import apply_reference_strategy
+
 logger = get_logger(__name__)
 
 
@@ -398,6 +400,8 @@ class ObsidianImporter:
             # 解析为节点
             nodes = node_parser.get_nodes_from_documents([doc])
 
+            nodes = apply_reference_strategy(nodes, strategy=getattr(self, 'reference_strategy', None))
+
             # 清理节点 metadata，确保所有值都是标准类型且长度合适
             def clean_node_metadata(node):
                 """清理节点 metadata"""
@@ -553,6 +557,9 @@ class ObsidianImporter:
                 all_file_nodes = []
                 for doc in docs:
                     nodes = node_parser.get_nodes_from_documents([doc])
+
+                    nodes = apply_reference_strategy(nodes, strategy=getattr(self, 'reference_strategy', None))
+
                     all_file_nodes.extend(nodes)
 
                 if all_file_nodes:

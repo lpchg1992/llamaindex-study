@@ -19,6 +19,7 @@ from .document_processor import (
     DocumentProcessorConfig,
     ProcessingProgress,
 )
+from .reference_detector import apply_reference_strategy
 from kb_core.document_chunk_service import get_document_chunk_service
 
 
@@ -264,6 +265,8 @@ class GenericImporter:
                     for doc in docs:
                         doc.id_ = f"doc_{doc_id_hash}"
                         nodes = node_parser.get_nodes_from_documents([doc])
+
+                        nodes = apply_reference_strategy(nodes, strategy=getattr(self, 'reference_strategy', None))
 
                         # Generate embeddings inline (same pattern as _execute_generic)
                         if nodes:

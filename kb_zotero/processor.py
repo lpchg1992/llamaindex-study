@@ -25,6 +25,7 @@ from kb_processing.document_processor import (
     DocumentProcessorConfig,
     ProcessingProgress,
 )
+from kb_processing.reference_detector import apply_reference_strategy
 
 
 @dataclass
@@ -491,6 +492,7 @@ class ZoteroImporter:
                     id_=f"zotero_meta_{item.item_id}",
                 )
                 nodes = node_parser.get_nodes_from_documents([doc])
+                nodes = apply_reference_strategy(nodes, strategy=getattr(self, 'reference_strategy', None))
 
                 # Generate embeddings before upsert
                 texts = [node.get_content() for node in nodes]
@@ -655,6 +657,7 @@ class ZoteroImporter:
 
                 for doc in docs:
                     nodes = node_parser.get_nodes_from_documents([doc])
+                    nodes = apply_reference_strategy(nodes, strategy=getattr(self, 'reference_strategy', None))
                     if not nodes:
                         logger.warning(
                             f"节点解析返回空: {file_path}, doc文本长度: {len(doc.text)}"
