@@ -980,6 +980,10 @@ export function useUpdateSettings() {
   })
 }
 
+/**
+ * @deprecated Scheduler runs embedded in the API process since v3.1.
+ * Use useRestartApi() instead — restarting the API also restarts the scheduler.
+ */
 export function useRestartScheduler() {
   const queryClient = useQueryClient()
   return useMutation<RestartResponse, Error, void>({
@@ -1012,6 +1016,19 @@ export function useRestartApi() {
     mutationFn: async () => {
       const { data } = await apiClient.post<RestartResponse>(`${API_BASE}/admin/restart-api`)
       return data
+    },
+  })
+}
+
+export function useResetSettings() {
+  const queryClient = useQueryClient()
+  return useMutation<RestartResponse, Error, void>({
+    mutationFn: async () => {
+      const { data } = await apiClient.post<RestartResponse>(`${API_BASE}/settings/reset`)
+      return data
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['settings'] })
     },
   })
 }

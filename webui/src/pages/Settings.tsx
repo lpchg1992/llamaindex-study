@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useSettings, useUpdateSettings, useRestartScheduler, useReloadConfig, useRestartApi, useKBs, useEvaluate, useObservabilityStats, useResetObservability, useTraces, useObservabilityDates } from '@/api/hooks'
+import { useSettings, useUpdateSettings, useRestartApi, useReloadConfig, useKBs, useEvaluate, useObservabilityStats, useResetObservability, useTraces, useObservabilityDates, useResetSettings } from '@/api/hooks'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -210,9 +210,9 @@ function ModelRow({ model }: { model: any }) {
 export function SettingsPage() {
   const { data: settings, isLoading, error } = useSettings()
   const updateSettings = useUpdateSettings()
-  const restartScheduler = useRestartScheduler()
-  const reloadConfig = useReloadConfig()
   const restartApi = useRestartApi()
+  const reloadConfig = useReloadConfig()
+  const resetSettings = useResetSettings()
 
   // Evaluate hooks and state
   const { data: kbs } = useKBs()
@@ -261,15 +261,6 @@ export function SettingsPage() {
     }
   }
 
-  const handleRestartScheduler = async () => {
-    try {
-      await restartScheduler.mutateAsync()
-      toast.success('Scheduler restarted')
-    } catch (err) {
-      toast.error('Failed to restart scheduler')
-    }
-  }
-
   const handleReloadConfig = async () => {
     try {
       await reloadConfig.mutateAsync()
@@ -288,6 +279,16 @@ export function SettingsPage() {
       }, 2000)
     } catch (err) {
       toast.error('Failed to restart API')
+    }
+  }
+
+  const handleResetDefaults = async () => {
+    if (!confirm('Reset all settings to their default values? This cannot be undone.')) return
+    try {
+      await resetSettings.mutateAsync()
+      toast.success('Settings restored to defaults')
+    } catch (err) {
+      toast.error('Failed to reset settings')
     }
   }
 
@@ -469,6 +470,21 @@ export function SettingsPage() {
                   />
                 </div>
 
+                <div className="space-y-2">
+                  <Label htmlFor="oversampling">Retrieval Oversampling Factor</Label>
+                  <Input
+                    id="oversampling"
+                    type="number"
+                    min={1}
+                    max={20}
+                    value={localSettings.retrieval_oversampling_factor}
+                    onChange={(e) => updateField('retrieval_oversampling_factor', parseInt(e.target.value) || 5)}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Retrieve top_k × N candidates before reranking. Higher = more recall, slower.
+                  </p>
+                </div>
+
                 <div className="flex items-center justify-between">
                   <div className="space-y-0.5">
                     <Label htmlFor="hybrid-search">Hybrid Search</Label>
@@ -533,6 +549,34 @@ export function SettingsPage() {
                     onCheckedChange={(checked) => updateField('use_auto_merging', checked)}
                   />
                 </div>
+
+                {localSettings.use_auto_merging && (
+                  <div className="space-y-2 pl-6 border-l-2">
+                    <Label htmlFor="merge-thresh">Merge Threshold</Label>
+                    <div className="flex items-center gap-4">
+                      <Input
+                        id="merge-thresh"
+                        type="number"
+                        min={0.1}
+                        max={1.0}
+                        step={0.05}
+                        value={localSettings.auto_merging_simple_ratio_thresh}
+                        onChange={(e) => updateField('auto_merging_simple_ratio_thresh', parseFloat(e.target.value) || 0.5)}
+                        className="w-24"
+                      />
+                      <span className="text-sm text-muted-foreground">
+                        {localSettings.auto_merging_simple_ratio_thresh >= 0.6
+                          ? 'Conservative'
+                          : localSettings.auto_merging_simple_ratio_thresh <= 0.35
+                            ? 'Aggressive'
+                            : 'Balanced'}
+                      </span>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Only merge if {Math.round(localSettings.auto_merging_simple_ratio_thresh * 100)}% of child nodes match. Higher = less noise.
+                    </p>
+                  </div>
+                )}
 
                 <div className="flex items-center justify-between">
                   <div className="space-y-0.5">
@@ -626,6 +670,37 @@ export function SettingsPage() {
               </CardContent>
             </Card>
 
+            {/* Reference Filtering */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Reference Filtering</CardTitle>
+                <CardDescription>How to handle bibliography and citation sections during import and retrieval</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="ref-strategy">Reference Strategy</Label>
+                  <Select
+                    value={localSettings.reference_strategy}
+                    onValueChange={(v) => updateField('reference_strategy', v)}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="flag">Flag (mark & downrank)</SelectItem>
+                      <SelectItem value="skip">Skip (exclude at import)</SelectItem>
+                      <SelectItem value="none">None (no filtering)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <div className="text-xs text-muted-foreground space-y-1 mt-2">
+                    <p><Badge variant="outline">flag</Badge> Mark references, downrank 70% at retrieval time</p>
+                    <p><Badge variant="outline">skip</Badge> Completely exclude reference chunks during import</p>
+                    <p><Badge variant="outline">none</Badge> No reference detection or filtering</p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
             <Button onClick={() => handleSave('Search')} disabled={updateSettings.isPending}>
               {updateSettings.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Save Search Settings
@@ -671,12 +746,12 @@ export function SettingsPage() {
                         <Input
                           id="parent-size"
                           type="number"
-                          min={512}
-                          max={8192}
-                          value={localSettings.hierarchical_chunk_sizes?.[0] || 2048}
+                          min={256}
+                          max={4096}
+                          value={localSettings.hierarchical_chunk_sizes?.[0] || 1024}
                           onChange={(e) => {
-                            const sizes = [...(localSettings.hierarchical_chunk_sizes || [2048, 1024, 512])]
-                            sizes[0] = parseInt(e.target.value) || 2048
+                            const sizes = [...(localSettings.hierarchical_chunk_sizes || [1024, 512, 256])]
+                            sizes[0] = parseInt(e.target.value) || 1024
                             updateField('hierarchical_chunk_sizes', sizes)
                           }}
                         />
@@ -687,12 +762,12 @@ export function SettingsPage() {
                         <Input
                           id="child-size"
                           type="number"
-                          min={256}
-                          max={4096}
-                          value={localSettings.hierarchical_chunk_sizes?.[1] || 1024}
+                          min={128}
+                          max={2048}
+                          value={localSettings.hierarchical_chunk_sizes?.[1] || 512}
                           onChange={(e) => {
-                            const sizes = [...(localSettings.hierarchical_chunk_sizes || [2048, 1024, 512])]
-                            sizes[1] = parseInt(e.target.value) || 1024
+                            const sizes = [...(localSettings.hierarchical_chunk_sizes || [1024, 512, 256])]
+                            sizes[1] = parseInt(e.target.value) || 512
                             updateField('hierarchical_chunk_sizes', sizes)
                           }}
                         />
@@ -703,12 +778,12 @@ export function SettingsPage() {
                         <Input
                           id="leaf-size"
                           type="number"
-                          min={128}
-                          max={2048}
-                          value={localSettings.hierarchical_chunk_sizes?.[2] || 512}
+                          min={64}
+                          max={1024}
+                          value={localSettings.hierarchical_chunk_sizes?.[2] || 256}
                           onChange={(e) => {
-                            const sizes = [...(localSettings.hierarchical_chunk_sizes || [2048, 1024, 512])]
-                            sizes[2] = parseInt(e.target.value) || 512
+                            const sizes = [...(localSettings.hierarchical_chunk_sizes || [1024, 512, 256])]
+                            sizes[2] = parseInt(e.target.value) || 256
                             updateField('hierarchical_chunk_sizes', sizes)
                           }}
                         />
@@ -799,76 +874,96 @@ export function SettingsPage() {
         </TabsContent>
 
         <TabsContent value="system">
-          <Card>
-            <CardHeader>
-              <CardTitle>System Administration</CardTitle>
-              <CardDescription>Restart services and reload configuration</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="space-y-4">
-                <div className="flex items-start justify-between gap-4 p-4 border rounded-lg border-destructive/50">
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2">
-                      <RotateCcw className="h-5 w-5 text-destructive" />
-                      <Label className="text-base">Restart API</Label>
+          <div className="space-y-6">
+            <Card>
+              <CardHeader>
+                <CardTitle>System Administration</CardTitle>
+                <CardDescription>Restart services and reload configuration</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                <div className="space-y-4">
+                  <div className="flex items-start justify-between gap-4 p-4 border rounded-lg border-destructive/50">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <RotateCcw className="h-5 w-5 text-destructive" />
+                        <Label className="text-base">Restart API</Label>
+                      </div>
+                      <p className="text-sm text-muted-foreground">
+                        Fully restart the API server and embedded task scheduler.
+                        This will interrupt all ongoing requests.
+                        Use when the service is in an inconsistent state or after major config changes.
+                      </p>
                     </div>
-                    <p className="text-sm text-muted-foreground">
-                      Fully restart the API server. This will interrupt all ongoing requests. Use when the service is in an inconsistent state.
-                    </p>
+                    <Button
+                      variant="destructive"
+                      onClick={handleRestartApi}
+                      disabled={restartApi.isPending}
+                    >
+                      {restartApi.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                      Restart API
+                    </Button>
                   </div>
-                  <Button
-                    variant="destructive"
-                    onClick={handleRestartApi}
-                    disabled={restartApi.isPending}
-                  >
-                    {restartApi.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                    Restart API
-                  </Button>
+
+                  <div className="flex items-start justify-between gap-4 p-4 border rounded-lg">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <RotateCcw className="h-5 w-5" />
+                        <Label className="text-base">Reload Configuration</Label>
+                      </div>
+                      <p className="text-sm text-muted-foreground">
+                        Hot-reload model registry, runtime settings, and embedding endpoints without restarting.
+                        Use after changing LLM/Embedding model settings or system parameters.
+                      </p>
+                    </div>
+                    <Button
+                      variant="outline"
+                      onClick={handleReloadConfig}
+                      disabled={reloadConfig.isPending}
+                    >
+                      {reloadConfig.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                      Reload
+                    </Button>
+                  </div>
+
+                  <div className="flex items-start justify-between gap-4 p-4 border rounded-lg border-amber-500/30">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <RotateCcw className="h-5 w-5 text-amber-500" />
+                        <Label className="text-base">Reset to Defaults</Label>
+                      </div>
+                      <p className="text-sm text-muted-foreground">
+                        Clear all persisted settings and restore factory defaults.
+                        Use when settings are stale or misconfigured.
+                      </p>
+                    </div>
+                    <Button
+                      variant="outline"
+                      onClick={handleResetDefaults}
+                      disabled={resetSettings.isPending}
+                    >
+                      {resetSettings.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                      Reset
+                    </Button>
+                  </div>
                 </div>
 
-                <div className="flex items-start justify-between gap-4 p-4 border rounded-lg">
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2">
-                      <RotateCcw className="h-5 w-5" />
-                      <Label className="text-base">Restart Scheduler</Label>
-                    </div>
-                    <p className="text-sm text-muted-foreground">
-                      Scheduler runs embedded in the API process. Restart API to restart scheduler.
-                    </p>
-                  </div>
-                  <Button
-                    variant="outline"
-                    onClick={handleRestartScheduler}
-                    disabled={restartScheduler.isPending}
-                  >
-                    {restartScheduler.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                    Restart
-                  </Button>
+                <div className="bg-muted/50 p-4 rounded-lg">
+                  <h4 className="font-medium mb-2">When to use these:</h4>
+                  <ul className="text-sm text-muted-foreground space-y-1 list-disc list-inside">
+                    <li><strong>Restart API</strong> — Full restart of API + embedded scheduler. Use when the service is unresponsive, after model/vendor changes, or when tasks are stuck.</li>
+                    <li><strong>Reload Configuration</strong> — Hot-reload without downtime. Use for runtime settings changes (top_k, chunk sizes, etc.) that don't require a full restart.</li>
+                    <li><strong>Reset to Defaults</strong> — Clear all persisted overrides. Use after upgrading when old cached settings conflict with new defaults.</li>
+                  </ul>
                 </div>
+              </CardContent>
+            </Card>
 
-                <div className="flex items-start justify-between gap-4 p-4 border rounded-lg">
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2">
-                      <RotateCcw className="h-5 w-5" />
-                      <Label className="text-base">Reload Configuration</Label>
-                    </div>
-                    <p className="text-sm text-muted-foreground">
-                      Reload model registry and settings. Use after changing LLM/Embedding models to apply changes.
-                    </p>
-                  </div>
-                  <Button
-                    variant="outline"
-                    onClick={handleReloadConfig}
-                    disabled={reloadConfig.isPending}
-                  >
-                    {reloadConfig.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                    Reload
-                  </Button>
-                </div>
-              </div>
-
-              <div className="border rounded-lg p-4">
-                <h4 className="font-medium mb-4">Task Processing Settings</h4>
+            <Card>
+              <CardHeader>
+                <CardTitle>Task Processing</CardTitle>
+                <CardDescription>Configure task execution behavior</CardDescription>
+              </CardHeader>
+              <CardContent>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label htmlFor="progress-interval">Progress Update Interval</Label>
@@ -881,7 +976,7 @@ export function SettingsPage() {
                       onChange={(e) => updateField('progress_update_interval', parseInt(e.target.value) || 10)}
                     />
                     <p className="text-xs text-muted-foreground">
-                      Update progress every N files
+                      Update task progress every N files processed
                     </p>
                   </div>
                   <div className="space-y-2">
@@ -895,14 +990,19 @@ export function SettingsPage() {
                       onChange={(e) => updateField('max_concurrent_tasks', parseInt(e.target.value) || 10)}
                     />
                     <p className="text-xs text-muted-foreground">
-                      Maximum simultaneous tasks
+                      Maximum simultaneous import/processing tasks
                     </p>
                   </div>
                 </div>
-              </div>
+              </CardContent>
+            </Card>
 
-              <div className="border rounded-lg p-4 mt-4">
-                <h4 className="font-medium mb-4">Embedding Retry Settings</h4>
+            <Card>
+              <CardHeader>
+                <CardTitle>Embedding Retry</CardTitle>
+                <CardDescription>Configure resilience for embedding API calls</CardDescription>
+              </CardHeader>
+              <CardContent>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label htmlFor="max-retries">Max Retries</Label>
@@ -915,7 +1015,7 @@ export function SettingsPage() {
                       onChange={(e) => updateField('max_retries', parseInt(e.target.value) || 5)}
                     />
                     <p className="text-xs text-muted-foreground">
-                      Retry embedding calls up to N times on failure
+                      Retry failed embedding calls up to N times
                     </p>
                   </div>
                   <div className="space-y-2">
@@ -934,18 +1034,208 @@ export function SettingsPage() {
                     </p>
                   </div>
                 </div>
-              </div>
+              </CardContent>
+            </Card>
 
-              <div className="bg-muted/50 p-4 rounded-lg">
-                <h4 className="font-medium mb-2">When to use these:</h4>
-                <ul className="text-sm text-muted-foreground space-y-1 list-disc list-inside">
-                  <li><strong>Restart API</strong> - Full service restart. Use when the service is unresponsive or in an inconsistent state.</li>
-                  <li><strong>Restart Scheduler</strong> - After adding/removing models, or when tasks are stuck</li>
-                  <li><strong>Reload Configuration</strong> - After changing LLM/Embedding settings that show "Requires restart"</li>
-                </ul>
-              </div>
-            </CardContent>
-          </Card>
+            <Card>
+              <CardHeader>
+                <CardTitle>Embedding Concurrency</CardTitle>
+                <CardDescription>Control parallel embedding throughput</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="embed-pool">Thread Pool Size</Label>
+                    <Input
+                      id="embed-pool"
+                      type="number"
+                      min={4}
+                      max={64}
+                      value={localSettings.embed_concurrent_pool_size}
+                      onChange={(e) => updateField('embed_concurrent_pool_size', parseInt(e.target.value) || 16)}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Total embedding worker threads across all endpoints
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="embed-endpoint">Per-Endpoint Max</Label>
+                    <Input
+                      id="embed-endpoint"
+                      type="number"
+                      min={1}
+                      max={32}
+                      value={localSettings.embed_endpoint_max_concurrent}
+                      onChange={(e) => updateField('embed_endpoint_max_concurrent', parseInt(e.target.value) || 8)}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Max concurrent requests per single endpoint
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Embedding Thresholds</CardTitle>
+                <CardDescription>Control embedding parallelism based on text length</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="short-thresh">Short Text Threshold</Label>
+                    <Input
+                      id="short-thresh"
+                      type="number"
+                      min={100}
+                      max={5000}
+                      value={localSettings.ollama_short_text_threshold}
+                      onChange={(e) => updateField('ollama_short_text_threshold', parseInt(e.target.value) || 600)}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Texts shorter than this use single endpoint
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="fanout-thresh">Fanout Threshold</Label>
+                    <Input
+                      id="fanout-thresh"
+                      type="number"
+                      min={500}
+                      max={10000}
+                      value={localSettings.ollama_fanout_text_threshold}
+                      onChange={(e) => updateField('ollama_fanout_text_threshold', parseInt(e.target.value) || 1800)}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Texts longer than this use fanout to all endpoints
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Task Heartbeat</CardTitle>
+                <CardDescription>Configure task liveliness monitoring</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="heartbeat">Heartbeat Interval (s)</Label>
+                    <Input
+                      id="heartbeat"
+                      type="number"
+                      min={10}
+                      max={600}
+                      value={localSettings.heartbeat_interval}
+                      onChange={(e) => updateField('heartbeat_interval', parseInt(e.target.value) || 30)}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      How often tasks report liveness
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="stale-timeout">Stale Task Timeout (s)</Label>
+                    <Input
+                      id="stale-timeout"
+                      type="number"
+                      min={60}
+                      max={3600}
+                      value={localSettings.stale_task_timeout}
+                      onChange={(e) => updateField('stale_task_timeout', parseInt(e.target.value) || 300)}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Tasks without heartbeat for this long are marked stale
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>OCR & API</CardTitle>
+                <CardDescription>OCR pipeline and network configuration</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="mineru-key">MinerU API Key</Label>
+                    <Input
+                      id="mineru-key"
+                      type="password"
+                      value={localSettings.mineru_api_key}
+                      onChange={(e) => updateField('mineru_api_key', e.target.value)}
+                      placeholder="Stored in .env"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Primary source: MINERU_API_KEY in .env
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="doc2x-key">doc2x API Key</Label>
+                    <Input
+                      id="doc2x-key"
+                      type="password"
+                      value={localSettings.doc2x_api_key}
+                      onChange={(e) => updateField('doc2x_api_key', e.target.value)}
+                      placeholder="Stored in .env"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Primary source: DOC2X_API_KEY in .env
+                    </p>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="mineru-pipeline">MinerU Pipeline ID</Label>
+                  <Input
+                    id="mineru-pipeline"
+                    value={localSettings.mineru_pipeline_id}
+                    onChange={(e) => updateField('mineru_pipeline_id', e.target.value)}
+                    placeholder="e.g. vlm"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    OCR pipeline for MinerU scanned PDF processing
+                  </p>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="api-port">API Port</Label>
+                    <Input
+                      id="api-port"
+                      type="number"
+                      min={1024}
+                      max={65535}
+                      value={localSettings.api_port}
+                      onChange={(e) => updateField('api_port', parseInt(e.target.value) || 37241)}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Requires restart to take effect
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="cors-origins">CORS Extra Origins</Label>
+                    <Input
+                      id="cors-origins"
+                      value={localSettings.cors_extra_origins}
+                      onChange={(e) => updateField('cors_extra_origins', e.target.value)}
+                      placeholder="http://192.168.1.100:5173"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Comma-separated. Requires restart.
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Button onClick={() => handleSave('System')} disabled={updateSettings.isPending}>
+              {updateSettings.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Save System Settings
+            </Button>
+          </div>
         </TabsContent>
 
         <TabsContent value="evaluate">

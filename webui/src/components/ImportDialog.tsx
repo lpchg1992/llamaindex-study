@@ -128,6 +128,7 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
   const [chunkStrategy, setChunkStrategy] = useState<string>("hierarchical")
   const [chunkSize, setChunkSize] = useState<number>(1024)
   const [hierarchicalChunkSizes, setHierarchicalChunkSizes] = useState<string>("2048,1024,512")
+  const [referenceStrategy, setReferenceStrategy] = useState<string>("flag")
 
   const zoteroTreeItems = useMemo<FileTreeItem[]>(() => {
     if (!zoteroCollectionsData?.collections) return []
@@ -451,6 +452,7 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
       ...(chunkStrategy === 'hierarchical' && {
         hierarchical_chunk_sizes: hierarchicalChunkSizes.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n))
       }),
+      reference_strategy: referenceStrategy,
     }
 
     try {
@@ -549,6 +551,7 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
     setZoteroManualScannedIds(new Set())
     setZoteroDetectedScannedIds(new Set())
     setZoteroMdCacheIds(new Set())
+    setReferenceStrategy("flag")
   }
 
   const handleClose = (open: boolean) => {
@@ -772,6 +775,20 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
                         />
                       </div>
                     )}
+                    <div className="space-y-1">
+                      <Label htmlFor="ref-strategy" className="text-xs">参考文献处理</Label>
+                      <Select value={referenceStrategy} onValueChange={setReferenceStrategy}>
+                        <SelectTrigger id="ref-strategy" className="h-8 text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="flag">标记并降权 (推荐)</SelectItem>
+                          <SelectItem value="skip">完全跳过 (不导入)</SelectItem>
+                          <SelectItem value="none">不做处理</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-muted-foreground">导入时如何处理参考文献/书目章节</p>
+                    </div>
                   </div>
                 )}
               </div>

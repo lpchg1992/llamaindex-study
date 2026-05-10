@@ -136,6 +136,7 @@ export interface ObsidianIngestRequest {
   chunk_strategy?: string
   chunk_size?: number
   hierarchical_chunk_sizes?: number[]
+  reference_strategy?: string
 }
 
 export interface ZoteroIngestRequest {
@@ -147,6 +148,7 @@ export interface ZoteroIngestRequest {
   chunk_strategy?: string
   chunk_size?: number
   hierarchical_chunk_sizes?: number[]
+  reference_strategy?: string
 }
 
 export interface SelectiveImportItem {
@@ -169,6 +171,7 @@ export interface SelectiveImportRequest {
   chunk_strategy?: string
   chunk_size?: number
   hierarchical_chunk_sizes?: number[]
+  reference_strategy?: string
 }
 
 export interface FilesImportRequest {
@@ -178,6 +181,7 @@ export interface FilesImportRequest {
   chunk_strategy?: string
   chunk_size?: number
   hierarchical_chunk_sizes?: number[]
+  reference_strategy?: string
 }
 
 export interface ModelInfo {
@@ -659,10 +663,14 @@ export interface FilePreviewItem {
 // Settings
 export interface SystemSettings {
   embed_batch_size: number
+  ollama_short_text_threshold: number
+  ollama_fanout_text_threshold: number
   top_k: number
   use_semantic_chunking: boolean
   use_hybrid_search: boolean
   use_auto_merging: boolean
+  auto_merging_simple_ratio_thresh: number
+  retrieval_oversampling_factor: number
   use_hyde: boolean
   use_multi_query: boolean
   num_multi_queries: number
@@ -673,6 +681,7 @@ export interface SystemSettings {
   chunk_overlap: number
   hierarchical_chunk_sizes: number[]
   use_reranker: boolean
+  reference_strategy: string
   response_mode: string
   progress_update_interval: number
   max_concurrent_tasks: number
@@ -680,14 +689,25 @@ export interface SystemSettings {
   embed_endpoint_max_concurrent: number
   max_retries: number
   retry_delay: number
+  heartbeat_interval: number
+  stale_task_timeout: number
+  mineru_api_key: string
+  mineru_pipeline_id: string
+  doc2x_api_key: string
+  api_port: number
+  cors_extra_origins: string
 }
 
 export interface SettingsUpdateRequest {
   embed_batch_size?: number
+  ollama_short_text_threshold?: number
+  ollama_fanout_text_threshold?: number
   top_k?: number
   use_semantic_chunking?: boolean
   use_hybrid_search?: boolean
   use_auto_merging?: boolean
+  auto_merging_simple_ratio_thresh?: number
+  retrieval_oversampling_factor?: number
   use_hyde?: boolean
   use_multi_query?: boolean
   num_multi_queries?: number
@@ -698,6 +718,7 @@ export interface SettingsUpdateRequest {
   chunk_overlap?: number
   hierarchical_chunk_sizes?: number[]
   use_reranker?: boolean
+  reference_strategy?: string
   response_mode?: string
   progress_update_interval?: number
   max_concurrent_tasks?: number
@@ -705,6 +726,13 @@ export interface SettingsUpdateRequest {
   embed_endpoint_max_concurrent?: number
   max_retries?: number
   retry_delay?: number
+  heartbeat_interval?: number
+  stale_task_timeout?: number
+  mineru_api_key?: string
+  mineru_pipeline_id?: string
+  doc2x_api_key?: string
+  api_port?: number
+  cors_extra_origins?: string
 }
 
 export interface RestartResponse {
