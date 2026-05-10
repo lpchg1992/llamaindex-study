@@ -105,11 +105,6 @@ class QueryResponse(BaseModel):
     sources: List[dict] = []
 
 
-class EvaluateRequest(BaseModel):
-    questions: List[str] = Field(..., description="问题列表")
-    ground_truths: List[str] = Field(..., description="标准答案列表")
-    top_k: int = Field(5, ge=1, le=100, description="检索返回结果数")
-
 
 class IngestRequest(BaseModel):
     path: str = Field(..., description="文件路径")

@@ -11,7 +11,7 @@ FastAPI application entry point with modular router architecture.
     - tasks:      /tasks/*
     - knowledge_bases: /kbs/*
     - models:     /vendors/*, /models/*
-    - search:     /search, /query, /evaluate/*
+    - search:     /search, /query
     - ingest:     /kbs/{kb_id}/ingest/*
     - zotero:     /zotero/*
     - obsidian:   /obsidian/*

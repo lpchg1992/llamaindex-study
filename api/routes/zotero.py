@@ -75,12 +75,13 @@ def preview_zotero_import(req: ZoteroPreviewRequest):
         except (ValueError, TypeError):
             pass
 
-    prefix = req.prefix or "[kb]"
+    prefix = req.prefix
     include_exts = req.include_exts
     filtering_rules = [
-        f"附件标题必须包含 {prefix} 前缀才会被导入",
         "已导入的文献会被跳过（通过 document 表查询）",
     ]
+    if prefix:
+        filtering_rules.insert(0, f"附件标题必须包含 {prefix} 前缀才会被导入")
     if include_exts:
         filtering_rules.append(f"只导入扩展名: {', '.join(include_exts)}")
 
@@ -105,13 +106,18 @@ def preview_zotero_import(req: ZoteroPreviewRequest):
             ineligible_items.append(preview_item)
             continue
         if not item:
+            no_attach_reason = (
+                f"无法获取文献信息（文献可能不存在或附件不含 {prefix} 标记）"
+                if prefix
+                else "无法获取文献信息（文献可能不存在或无附件）"
+            )
             preview_item = ZoteroPreviewItem(
                 item_id=item_id,
                 title=f"文献 #{item_id} (无法获取)",
                 creators=[],
                 has_attachment=False,
                 is_eligible=False,
-                ineligible_reason=f"无法获取文献信息（文献可能不存在或附件不含 {prefix} 标记）",
+                ineligible_reason=no_attach_reason,
             )
             ineligible_items.append(preview_item)
             continue
@@ -128,7 +134,9 @@ def preview_zotero_import(req: ZoteroPreviewRequest):
 
         if not attachment_path:
             preview_item.is_eligible = False
-            preview_item.ineligible_reason = f"附件标题不含 {prefix} 标记"
+            preview_item.ineligible_reason = (
+                f"附件标题不含 {prefix} 标记" if prefix else "文献无附件"
+            )
             ineligible_items.append(preview_item)
             continue
 

@@ -1,5 +1,5 @@
 """
-Search, query and evaluation endpoints.
+Search and query endpoints.
 """
 
 from typing import List
@@ -11,7 +11,6 @@ from api.schemas import (
     SearchResult,
     QueryRequest,
     QueryResponse,
-    EvaluateRequest,
     _parse_kb_ids_or_raise,
 )
 from rag.logger import get_logger
@@ -157,39 +156,3 @@ def query(req: QueryRequest):
         raise HTTPException(
             status_code=500, detail=f"查询失败: {type(e).__name__}: {str(e)}"
         )
-
-
-@router.post("/evaluate/{kb_id}")
-def evaluate(kb_id: str, req: EvaluateRequest):
-    from kb_core.services import SearchService
-    from rag.rag_evaluator import RAGEvaluator
-
-    if len(req.questions) != len(req.ground_truths):
-        raise HTTPException(
-            status_code=400,
-            detail="questions 和 ground_truths 数量必须一致",
-        )
-
-    contexts, answers = [], []
-    for question in req.questions:
-        results = SearchService.search(kb_id, question, top_k=req.top_k)
-        contexts.append([r["text"] for r in results])
-        answers.append("[仅检索模式]")
-
-    evaluator = RAGEvaluator()
-    result = evaluator.evaluate(
-        questions=req.questions,
-        contexts=contexts,
-        answers=answers,
-        ground_truths=req.ground_truths,
-    )
-
-    result["note"] = "仅检索模式评估，无法评估生成质量"
-    return result
-
-
-@router.get("/evaluate/metrics")
-def evaluate_metrics():
-    from rag.rag_evaluator import RAGMetrics
-
-    return RAGMetrics.get_metrics_info()
