@@ -69,18 +69,21 @@ def restart_api():
     import os
     import signal
     import threading
+    import time
     from pathlib import Path
     from rag.logger import get_logger
 
     logger = get_logger(__name__)
-    PROJECT_ROOT = Path(__file__).parent.parent
 
-    logger.info(f"Restarting API service (PID: {os.getpid()}, embedded scheduler will restart with it)")
-    threading.Timer(0.5, lambda: os.kill(os.getpid(), signal.SIGTERM)).start()
+    def delayed_shutdown():
+        time.sleep(3)
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    threading.Thread(target=delayed_shutdown, daemon=True).start()
 
     return {
-        "status": "restarting",
-        "message": "API service restarting (scheduler restarts with it)"
+        "status": "graceful_restart",
+        "message": "API will restart in 3 seconds to allow in-flight requests to complete"
     }
 
 

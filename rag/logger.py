@@ -14,6 +14,7 @@ import threading
 from pathlib import Path
 from typing import Optional
 from datetime import datetime
+from logging.handlers import RotatingFileHandler
 
 
 # 日志格式
@@ -101,14 +102,19 @@ def setup_task_logger(
 
 
 def configure_all_loggers(log_dir: Path, level: int = LOG_LEVEL) -> None:
-    """配置所有 llamaindex 模块的 logger 写入共享日志文件"""
+    """配置所有 llamaindex 模块的 logger 写入共享日志文件（带轮转）"""
     log_dir = Path(log_dir)
     log_dir.mkdir(parents=True, exist_ok=True)
 
     today = datetime.now().strftime("%Y%m%d")
     main_log_file = log_dir / f"llamaindex_{today}.log"
 
-    file_handler = logging.FileHandler(main_log_file, encoding="utf-8")
+    file_handler = RotatingFileHandler(
+        main_log_file,
+        maxBytes=10 * 1024 * 1024,
+        backupCount=5,
+        encoding="utf-8",
+    )
     file_handler.setLevel(level)
     file_handler.setFormatter(logging.Formatter(FILE_FORMAT, datefmt=DATE_FORMAT))
 

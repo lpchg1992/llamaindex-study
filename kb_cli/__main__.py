@@ -2029,29 +2029,63 @@ def _get_service_status() -> dict:
     return status
 
 
+def _ensure_frontend_built() -> bool:
+    """确保前端已构建，如不存在则自动构建"""
+    frontend_dir = PROJECT_ROOT / "webui"
+    dist_dir = frontend_dir / "dist"
+
+    if dist_dir.exists():
+        return True
+
+    print("前端 dist 目录不存在，开始构建前端...")
+
+    if not (frontend_dir / "package.json").exists():
+        print(f"❌ 前端目录不存在: {frontend_dir}")
+        return False
+
+    print("[1/2] 安装前端依赖...")
+    result = subprocess.run(
+        ["npm", "install"],
+        cwd=str(frontend_dir),
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        print(f"❌ 依赖安装失败: {result.stderr}")
+        return False
+
+    print("[2/2] 构建前端...")
+    result = subprocess.run(
+        ["npm", "run", "build"],
+        cwd=str(frontend_dir),
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        print(f"❌ 前端构建失败: {result.stderr}")
+        return False
+
+    print("✅ 前端构建完成")
+    return True
+
+
 def handle_service_start(args: argparse.Namespace) -> int:
     """启动所有服务"""
     status = _get_service_status()
-    api_ok = frontend_ok = True
-
-    if status["frontend"]["running"]:
-        print(f"前端服务已在运行 (PID: {status['frontend']['pid']})")
-    else:
-        frontend_ok = _start_frontend()
 
     if status["api"]["running"]:
         print(f"API 服务已在运行 (PID: {status['api']['pid']})")
     else:
+        if not _ensure_frontend_built():
+            print("⚠️  前端构建失败，API 将以无前端模式启动")
         api_ok = _start_api()
+        if not api_ok:
+            print("⚠️  API 启动失败")
+            return 1
 
     print(f"\n调度器随 API 一同管理")
-
-    if api_ok and frontend_ok:
-        print("所有服务启动完成")
-        return 0
-    else:
-        print("⚠️  部分服务启动失败")
-        return 1
+    print("所有服务启动完成")
+    return 0
 
 
 def handle_service_stop(args: argparse.Namespace) -> int:
@@ -2073,20 +2107,19 @@ def handle_service_restart(args: argparse.Namespace) -> int:
     _stop_api()
     time.sleep(2)
 
+    if not _ensure_frontend_built():
+        print("⚠️  前端构建失败，API 将以无前端模式启动")
+
     api_ok = _start_api()
-    frontend_ok = _start_frontend()
 
     print()
-    if api_ok and frontend_ok:
+    if api_ok:
         print("✅ 所有服务重启完成")
         return 0
     else:
-        print("⚠️  部分服务启动失败，请检查上方错误信息")
-        if not api_ok:
-            print("   提示: 检查 Python 环境及 .env 配置")
-            print(f"   日志: {PROJECT_ROOT}/logs/api_watchdog.log")
-        if not frontend_ok:
-            print("   提示: 确保 webui 目录下已执行 npm install")
+        print("⚠️  API 启动失败，请检查上方错误信息")
+        print("   提示: 检查 Python 环境及 .env 配置")
+        print(f"   日志: {PROJECT_ROOT}/logs/api_watchdog.log")
         return 1
 
 

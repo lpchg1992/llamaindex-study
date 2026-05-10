@@ -24,11 +24,14 @@ FastAPI application entry point with modular router architecture.
     - settings:   /settings
 """
 
+from pathlib import Path
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from api.deps import lifespan, get_cors_origins
+from api.middleware.ip_whitelist import IPSubnetMiddleware
 from api.routes import (
     health_router,
     tasks_router,
@@ -82,6 +85,9 @@ RAG 检索增强生成 API，支持任务队列异步处理。
         expose_headers=["*"],
     )
 
+    # IP 白名单中间件（在内嵌调度器之后、其他路由之前）
+    app.add_middleware(IPSubnetMiddleware)
+
     @app.exception_handler(HTTPException)
     async def http_exception_handler(request, exc):
         response = JSONResponse(
@@ -127,7 +133,29 @@ RAG 检索增强生成 API，支持任务队列异步处理。
     app.include_router(observability_router)
     app.include_router(settings_router)
 
+    # 挂载前端静态文件（如果 dist 目录存在）
+    _mount_frontend(app)
+
     return app
+
+
+def _mount_frontend(app: FastAPI) -> None:
+    """挂载前端静态文件到根路径"""
+    project_root = Path(__file__).parent.parent
+    webui_dir = project_root / "webui"
+    dist_dir = webui_dir / "dist"
+
+    if not dist_dir.exists():
+        logger.warning(
+            "前端 dist 目录不存在，前端将无法访问。"
+            "请运行以下命令构建前端: ./scripts/build_frontend.sh"
+        )
+        return
+
+    from fastapi.staticfiles import StaticFiles
+
+    app.mount("/", StaticFiles(directory=str(dist_dir), html=True), name="static")
+    logger.info(f"前端静态文件已挂载: {dist_dir}")
 
 
 app = create_app()
