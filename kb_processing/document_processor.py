@@ -128,17 +128,21 @@ class DocumentProcessorConfig:
     hierarchical_chunk_sizes: list = None
     batch_size: int = 50  # 每 N 个节点保存一次
     max_file_size: int = 100 * 1024 * 1024  # 100MB
-    pdf_scan_threshold: float = 10.0  # 文字密度阈值 (chars/sq inch)
-    pdf_image_ratio_threshold: float = 0.8  # 图片比例阈值
+    pdf_scan_threshold: float = 0.0  # 0 means use Settings default
+    pdf_image_ratio_threshold: float = 0.0  # 0 means use Settings default
     pdf_convert_timeout: int = 600  # PDF 转换超时 (秒)
     incremental: bool = True  # 增量更新模式
 
     def __post_init__(self):
-        if self.hierarchical_chunk_sizes is None:
-            from rag.config import get_settings
+        from rag.config import get_settings
 
-            settings = get_settings()
+        settings = get_settings()
+        if self.hierarchical_chunk_sizes is None:
             self.hierarchical_chunk_sizes = settings.hierarchical_chunk_sizes
+        if self.pdf_scan_threshold == 0.0:
+            self.pdf_scan_threshold = settings.pdf_scan_threshold
+        if self.pdf_image_ratio_threshold == 0.0:
+            self.pdf_image_ratio_threshold = settings.pdf_image_ratio_threshold
 
 
 @dataclass
@@ -255,6 +259,12 @@ class DocumentProcessor:
         writable_ids = []
         doc_ids = set()
         for node in nodes:
+            # 空 text 过滤（与 document_chunk_service.create_document 对齐）
+            text = node.get_content()
+            if not text or not text.strip():
+                skipped += 1
+                failed_ids.append(node.node_id)
+                continue
             if not hasattr(node, "embedding") or node.embedding is None:
                 skipped += 1
                 failed_ids.append(node.node_id)

@@ -667,6 +667,16 @@ export interface SystemSettings {
   chunk_size: number
   chunk_overlap: number
   hierarchical_chunk_sizes: number[]
+  semantic_chunking_similarity_threshold: number
+  semantic_chunking_percentile_threshold: number | null
+  reference_strong_ratio: number
+  reference_moderate_ratio: number
+  reference_weak_ratio: number
+  reference_moderate_min_matches: number
+  reference_weak_min_matches: number
+  reference_weak_min_strong: number
+  pdf_scan_threshold: number
+  pdf_image_ratio_threshold: number
   use_reranker: boolean
   reference_strategy: string
   response_mode: string
@@ -704,6 +714,16 @@ export interface SettingsUpdateRequest {
   chunk_size?: number
   chunk_overlap?: number
   hierarchical_chunk_sizes?: number[]
+  semantic_chunking_similarity_threshold?: number
+  semantic_chunking_percentile_threshold?: number | null
+  reference_strong_ratio?: number
+  reference_moderate_ratio?: number
+  reference_weak_ratio?: number
+  reference_moderate_min_matches?: number
+  reference_weak_min_matches?: number
+  reference_weak_min_strong?: number
+  pdf_scan_threshold?: number
+  pdf_image_ratio_threshold?: number
   use_reranker?: boolean
   reference_strategy?: string
   response_mode?: string

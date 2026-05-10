@@ -489,6 +489,40 @@ class SystemSettings(BaseModel):
     hierarchical_chunk_sizes: List[int] = Field(
         [1024, 512, 256], description="分层分块大小 [parent, child, leaf]"
     )
+    semantic_chunking_similarity_threshold: float = Field(
+        0.5, ge=0.1, le=1.0, description="语义分块相似度阈值"
+    )
+    semantic_chunking_percentile_threshold: Optional[float] = Field(
+        None, description="语义分块百分位阈值（替代方案）"
+    )
+
+    # Reference detection
+    reference_strong_ratio: float = Field(
+        0.5, ge=0.1, le=1.0, description="参考文献强信号阈值"
+    )
+    reference_moderate_ratio: float = Field(
+        0.3, ge=0.1, le=1.0, description="参考文献中等信号阈值"
+    )
+    reference_weak_ratio: float = Field(
+        0.4, ge=0.1, le=1.0, description="参考文献弱信号阈值"
+    )
+    reference_moderate_min_matches: int = Field(
+        5, ge=1, description="中等信号最小匹配数"
+    )
+    reference_weak_min_matches: int = Field(
+        3, ge=1, description="弱信号最小匹配数"
+    )
+    reference_weak_min_strong: int = Field(
+        2, ge=1, description="弱信号最小强匹配数"
+    )
+
+    # PDF detection
+    pdf_scan_threshold: float = Field(
+        10.0, ge=0, description="PDF扫描件检测文字密度阈值"
+    )
+    pdf_image_ratio_threshold: float = Field(
+        0.8, ge=0, le=1.0, description="PDF图片比例阈值"
+    )
 
     # Reranker
     use_reranker: bool = Field(True, description="启用Reranker")
@@ -568,6 +602,40 @@ class SettingsUpdateRequest(BaseModel):
     chunk_overlap: Optional[int] = Field(None, ge=0, le=500, description="分块重叠")
     hierarchical_chunk_sizes: Optional[List[int]] = Field(
         None, description="分层分块大小 [parent, child, leaf]"
+    )
+    semantic_chunking_similarity_threshold: Optional[float] = Field(
+        None, ge=0.1, le=1.0, description="语义分块相似度阈值"
+    )
+    semantic_chunking_percentile_threshold: Optional[float] = Field(
+        None, description="语义分块百分位阈值（替代方案）"
+    )
+
+    # Reference detection
+    reference_strong_ratio: Optional[float] = Field(
+        None, ge=0.1, le=1.0, description="参考文献强信号阈值"
+    )
+    reference_moderate_ratio: Optional[float] = Field(
+        None, ge=0.1, le=1.0, description="参考文献中等信号阈值"
+    )
+    reference_weak_ratio: Optional[float] = Field(
+        None, ge=0.1, le=1.0, description="参考文献弱信号阈值"
+    )
+    reference_moderate_min_matches: Optional[int] = Field(
+        None, ge=1, description="中等信号最小匹配数"
+    )
+    reference_weak_min_matches: Optional[int] = Field(
+        None, ge=1, description="弱信号最小匹配数"
+    )
+    reference_weak_min_strong: Optional[int] = Field(
+        None, ge=1, description="弱信号最小强匹配数"
+    )
+
+    # PDF detection
+    pdf_scan_threshold: Optional[float] = Field(
+        None, ge=0, description="PDF扫描件检测文字密度阈值"
+    )
+    pdf_image_ratio_threshold: Optional[float] = Field(
+        None, ge=0, le=1.0, description="PDF图片比例阈值"
     )
 
     # Reranker

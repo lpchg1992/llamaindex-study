@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { useKBs, useSearch } from '@/api/hooks'
+import { useState, useEffect } from 'react'
+import { useKBs, useSearch, useSettings } from '@/api/hooks'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -21,6 +21,7 @@ import type { SearchResult } from '@/types/api'
 
 export function SearchPage() {
   const { data: kbs } = useKBs()
+  const { data: settings } = useSettings()
   const searchMutation = useSearch()
 
   const [query, setQuery] = useState('')
@@ -30,7 +31,16 @@ export function SearchPage() {
   const [retrievalMode, setRetrievalMode] = useState<'vector' | 'hybrid'>('vector')
   const [useAutoMerging, setUseAutoMerging] = useState(false)
   const [kbSearch, setKbSearch] = useState('')
-  const [topK, setTopK] = useState(10)
+  const [topK, setTopK] = useState(5)
+
+  // Sync with settings when settings load
+  useEffect(() => {
+    if (settings) {
+      setRetrievalMode(settings.use_hybrid_search ? 'hybrid' : 'vector')
+      setUseAutoMerging(settings.use_auto_merging ?? false)
+      setTopK(settings.top_k ?? 5)
+    }
+  }, [settings])
 
   const filteredKBs = kbs?.filter(kb =>
     (kb.name || kb.id).toLowerCase().includes(kbSearch.toLowerCase())

@@ -9,6 +9,7 @@ import {
   useZoteroPreview,
   useObsidianPreview,
   useFilePreview,
+  useSettings,
 } from '@/api/hooks'
 
 import { Button } from '@/components/ui/button'
@@ -50,6 +51,7 @@ interface ImportDialogProps {
 }
 
 export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogProps) {
+  const { data: settings } = useSettings()
   const ingestSelective = useIngestSelective()
   const ingestFiles = useIngestFiles()
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -127,8 +129,12 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [chunkStrategy, setChunkStrategy] = useState<string>("hierarchical")
   const [chunkSize, setChunkSize] = useState<number>(1024)
-  const [hierarchicalChunkSizes, setHierarchicalChunkSizes] = useState<string>("2048,1024,512")
-  const [referenceStrategy, setReferenceStrategy] = useState<string>("flag")
+  const [hierarchicalChunkSizes, setHierarchicalChunkSizes] = useState<string>(
+    settings?.hierarchical_chunk_sizes?.join(',') || "1024,512,256"
+  )
+  const [referenceStrategy, setReferenceStrategy] = useState<string>(
+    settings?.reference_strategy || "flag"
+  )
 
   const zoteroTreeItems = useMemo<FileTreeItem[]>(() => {
     if (!zoteroCollectionsData?.collections) return []

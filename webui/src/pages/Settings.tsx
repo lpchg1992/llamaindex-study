@@ -602,9 +602,9 @@ export function SettingsPage() {
                     </SelectContent>
                   </Select>
                   <div className="text-xs text-muted-foreground space-y-1 mt-2">
-                    <p><Badge variant="outline">compact</Badge> Combine context into single response</p>
-                    <p><Badge variant="outline">refine</Badge> Iteratively refine answer</p>
-                    <p><Badge variant="outline">tree_summarize</Badge> Summarize from multiple sources</p>
+                    <div><Badge variant="outline">compact</Badge> Combine context into single response</div>
+                    <div><Badge variant="outline">refine</Badge> Iteratively refine answer</div>
+                    <div><Badge variant="outline">tree_summarize</Badge> Summarize from multiple sources</div>
                   </div>
                 </div>
               </CardContent>
@@ -633,11 +633,96 @@ export function SettingsPage() {
                     </SelectContent>
                   </Select>
                   <div className="text-xs text-muted-foreground space-y-1 mt-2">
-                    <p><Badge variant="outline">flag</Badge> Mark references, downrank 70% at retrieval time</p>
-                    <p><Badge variant="outline">skip</Badge> Completely exclude reference chunks during import</p>
-                    <p><Badge variant="outline">none</Badge> No reference detection or filtering</p>
+                    <div><Badge variant="outline">flag</Badge> Mark references, downrank 70% at retrieval time</div>
+                    <div><Badge variant="outline">skip</Badge> Completely exclude reference chunks during import</div>
+                    <div><Badge variant="outline">none</Badge> No reference detection or filtering</div>
                   </div>
                 </div>
+
+                {localSettings.reference_strategy !== 'none' && (
+                  <div className="bg-muted/50 rounded-lg p-4 space-y-4">
+                    <p className="text-sm font-medium">Reference Detection Thresholds</p>
+                    <div className="grid grid-cols-3 gap-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="ref-strong">Strong Signal Ratio</Label>
+                        <Input
+                          id="ref-strong"
+                          type="number"
+                          min={0.1}
+                          max={1.0}
+                          step={0.05}
+                          value={localSettings.reference_strong_ratio}
+                          onChange={(e) => updateField('reference_strong_ratio', parseFloat(e.target.value) || 0.5)}
+                        />
+                        <p className="text-xs text-muted-foreground">Direct判定阈值</p>
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="ref-moderate">Moderate Ratio</Label>
+                        <Input
+                          id="ref-moderate"
+                          type="number"
+                          min={0.1}
+                          max={1.0}
+                          step={0.05}
+                          value={localSettings.reference_moderate_ratio}
+                          onChange={(e) => updateField('reference_moderate_ratio', parseFloat(e.target.value) || 0.3)}
+                        />
+                        <p className="text-xs text-muted-foreground">中等信号比例阈值</p>
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="ref-weak">Weak Ratio</Label>
+                        <Input
+                          id="ref-weak"
+                          type="number"
+                          min={0.1}
+                          max={1.0}
+                          step={0.05}
+                          value={localSettings.reference_weak_ratio}
+                          onChange={(e) => updateField('reference_weak_ratio', parseFloat(e.target.value) || 0.4)}
+                        />
+                        <p className="text-xs text-muted-foreground">弱信号比例阈值</p>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="ref-mod-matches">Moderate Min Matches</Label>
+                        <Input
+                          id="ref-mod-matches"
+                          type="number"
+                          min={1}
+                          max={20}
+                          value={localSettings.reference_moderate_min_matches}
+                          onChange={(e) => updateField('reference_moderate_min_matches', parseInt(e.target.value) || 5)}
+                        />
+                        <p className="text-xs text-muted-foreground">中等信号最小匹配数</p>
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="ref-weak-matches">Weak Min Matches</Label>
+                        <Input
+                          id="ref-weak-matches"
+                          type="number"
+                          min={1}
+                          max={20}
+                          value={localSettings.reference_weak_min_matches}
+                          onChange={(e) => updateField('reference_weak_min_matches', parseInt(e.target.value) || 3)}
+                        />
+                        <p className="text-xs text-muted-foreground">弱信号最小匹配数</p>
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="ref-weak-strong">Weak Min Strong</Label>
+                        <Input
+                          id="ref-weak-strong"
+                          type="number"
+                          min={1}
+                          max={10}
+                          value={localSettings.reference_weak_min_strong}
+                          onChange={(e) => updateField('reference_weak_min_strong', parseInt(e.target.value) || 2)}
+                        />
+                        <p className="text-xs text-muted-foreground">弱信号最小强匹配数</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </CardContent>
             </Card>
 
@@ -775,10 +860,45 @@ export function SettingsPage() {
                     </div>
                   </div>
                   {localSettings.chunk_strategy === 'semantic' && (
-                    <p className="text-xs text-muted-foreground">
-                      Semantic chunking uses embeddings to find natural breaking points.
-                      Chunk size is a target, not a hard limit.
-                    </p>
+                    <div className="space-y-4 bg-muted/50 rounded-lg p-4">
+                      <p className="text-sm font-medium">Semantic Chunking Thresholds</p>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <Label htmlFor="sem-similarity-thresh">Similarity Threshold</Label>
+                          <Input
+                            id="sem-similarity-thresh"
+                            type="number"
+                            min={0.1}
+                            max={1.0}
+                            step={0.05}
+                            value={localSettings.semantic_chunking_similarity_threshold}
+                            onChange={(e) => updateField('semantic_chunking_similarity_threshold', parseFloat(e.target.value) || 0.5)}
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            Split when similarity drops below this (higher = finer chunks)
+                          </p>
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="sem-percentile-thresh">Percentile Threshold</Label>
+                          <Input
+                            id="sem-percentile-thresh"
+                            type="number"
+                            min={0.1}
+                            max={1.0}
+                            step={0.05}
+                            value={localSettings.semantic_chunking_percentile_threshold ?? ''}
+                            onChange={(e) => {
+                              const val = e.target.value
+                              updateField('semantic_chunking_percentile_threshold', val ? parseFloat(val) : null)
+                            }}
+                            placeholder="Optional"
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            Alternative: split at percentile (leave empty to use similarity)
+                          </p>
+                        </div>
+                      </div>
+                    </div>
                   )}
 
                   <div className="space-y-2">
@@ -1139,6 +1259,42 @@ export function SettingsPage() {
                   <p className="text-xs text-muted-foreground">
                     OCR pipeline for MinerU scanned PDF processing
                   </p>
+                </div>
+
+                <div className="bg-muted/50 rounded-lg p-4 space-y-4">
+                  <p className="text-sm font-medium">PDF Scanned Detection</p>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="pdf-scan-thresh">Scan Density Threshold</Label>
+                      <Input
+                        id="pdf-scan-thresh"
+                        type="number"
+                        min={0}
+                        max={100}
+                        step={0.5}
+                        value={localSettings.pdf_scan_threshold}
+                        onChange={(e) => updateField('pdf_scan_threshold', parseFloat(e.target.value) || 10)}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Text density (chars/sq inch). Below this = scanned PDF
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="pdf-image-ratio">Image Ratio Threshold</Label>
+                      <Input
+                        id="pdf-image-ratio"
+                        type="number"
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={localSettings.pdf_image_ratio_threshold}
+                        onChange={(e) => updateField('pdf_image_ratio_threshold', parseFloat(e.target.value) || 0.8)}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Image coverage ratio. Above this = scanned PDF
+                      </p>
+                    </div>
+                  </div>
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">

@@ -1,4 +1,6 @@
 {
   "top_k": 20,
-  "response_mode": "tree_summarize"
+  "response_mode": "tree_summarize",
+  "use_auto_merging": true,
+  "semantic_chunking_percentile_threshold": null
 }

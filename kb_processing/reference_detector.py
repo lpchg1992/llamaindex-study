@@ -132,7 +132,15 @@ REF_HEADER_PATTERNS = [
 # Detection functions
 # ---------------------------------------------------------------------------
 
-def is_reference_chunk(text: str) -> Tuple[bool, float]:
+def is_reference_chunk(
+    text: str,
+    strong_ratio: float = 0.5,
+    moderate_ratio: float = 0.3,
+    weak_ratio: float = 0.4,
+    moderate_min_matches: int = 5,
+    weak_min_matches: int = 3,
+    weak_min_strong: int = 2,
+) -> Tuple[bool, float]:
     """Check if a text chunk is likely a reference/bibliography section.
 
     Uses ratio-based thresholding: if enough lines match reference patterns,
@@ -140,6 +148,12 @@ def is_reference_chunk(text: str) -> Tuple[bool, float]:
 
     Args:
         text: The chunk text content
+        strong_ratio: Threshold for strong signal (default 0.5)
+        moderate_ratio: Threshold for moderate signal (default 0.3)
+        weak_ratio: Threshold for weak signal (default 0.4)
+        moderate_min_matches: Minimum matches for moderate signal (default 5)
+        weak_min_matches: Minimum matches for weak signal (default 3)
+        weak_min_strong: Minimum strong matches for weak signal (default 2)
 
     Returns:
         Tuple of (is_reference, confidence) where confidence is 0.0-1.0
@@ -165,25 +179,33 @@ def is_reference_chunk(text: str) -> Tuple[bool, float]:
     ratio = ref_matches / total_lines
     confidence = min(ratio, 1.0)
 
-    # Strong signal: >= 50% of lines match
-    if ratio >= 0.5:
+    # Strong signal: >= N% of lines match
+    if ratio >= strong_ratio:
         return True, confidence
 
-    # Moderate signal: >= 5 matches, >= 30% ratio, with strong patterns present
-    if ref_matches >= 5 and ratio >= 0.3:
+    # Moderate signal: >= N matches, >= N% ratio, with strong patterns present
+    if ref_matches >= moderate_min_matches and ratio >= moderate_ratio:
         # Bonus for strong matches, capped at 1.0
         strong_bonus = min(strong_matches / ref_matches * 0.3, 0.3)
         confidence = min(ratio + strong_bonus, 1.0)
         return True, confidence
 
-    # Weak signal: >= 3 matches, >= 40% ratio but only strong patterns
-    if ref_matches >= 3 and ratio >= 0.4 and strong_matches >= 2:
+    # Weak signal: >= N matches, >= N% ratio but only strong patterns
+    if ref_matches >= weak_min_matches and ratio >= weak_ratio and strong_matches >= weak_min_strong:
         return True, min(ratio, 0.8)
 
     return False, 0.0
 
 
-def detect_reference_boundary(nodes: list) -> Set[int]:
+def detect_reference_boundary(
+    nodes: list,
+    strong_ratio: float = 0.5,
+    moderate_ratio: float = 0.3,
+    weak_ratio: float = 0.4,
+    moderate_min_matches: int = 5,
+    weak_min_matches: int = 3,
+    weak_min_strong: int = 2,
+) -> Set[int]:
     """Detect the boundary where reference/bibliography section starts.
 
     Scans nodes sequentially. Once a reference section header or a high-confidence
@@ -193,6 +215,12 @@ def detect_reference_boundary(nodes: list) -> Set[int]:
 
     Args:
         nodes: List of nodes (each with get_content() or str)
+        strong_ratio: Threshold for strong signal (default 0.5)
+        moderate_ratio: Threshold for moderate signal (default 0.3)
+        weak_ratio: Threshold for weak signal (default 0.4)
+        moderate_min_matches: Minimum matches for moderate signal (default 5)
+        weak_min_matches: Minimum matches for weak signal (default 3)
+        weak_min_strong: Minimum strong matches for weak signal (default 2)
 
     Returns:
         Set of indices identifying reference nodes
@@ -213,12 +241,19 @@ def detect_reference_boundary(nodes: list) -> Set[int]:
         # If reference section is active, check if we've hit a new non-reference section
         if ref_boundary_found:
             if any(re.match(p, first_non_empty, re.MULTILINE) for p in SECTION_PATTERNS):
-                # New section started — stop marking as references
                 ref_boundary_found = False
                 continue
 
         # If no header found yet, check for high-confidence reference chunks as boundary
-        is_ref, confidence = is_reference_chunk(text)
+        is_ref, confidence = is_reference_chunk(
+            text,
+            strong_ratio=strong_ratio,
+            moderate_ratio=moderate_ratio,
+            weak_ratio=weak_ratio,
+            moderate_min_matches=moderate_min_matches,
+            weak_min_matches=weak_min_matches,
+            weak_min_strong=weak_min_strong,
+        )
         if not ref_boundary_found and is_ref and confidence >= 0.8:
             ref_boundary_found = True
             ref_indices.add(i)
@@ -238,6 +273,12 @@ def detect_reference_boundary(nodes: list) -> Set[int]:
 def flag_reference_nodes(
     nodes: list,
     strategy: str = "flag",
+    strong_ratio: float = 0.5,
+    moderate_ratio: float = 0.3,
+    weak_ratio: float = 0.4,
+    moderate_min_matches: int = 5,
+    weak_min_matches: int = 3,
+    weak_min_strong: int = 2,
 ) -> list:
     """Apply reference detection strategy to a list of nodes.
 
@@ -249,6 +290,12 @@ def flag_reference_nodes(
     Args:
         nodes: List of nodes to process
         strategy: One of "flag", "skip", "none"
+        strong_ratio: Threshold for strong signal (default 0.5)
+        moderate_ratio: Threshold for moderate signal (default 0.3)
+        weak_ratio: Threshold for weak signal (default 0.4)
+        moderate_min_matches: Minimum matches for moderate signal (default 5)
+        weak_min_matches: Minimum matches for weak signal (default 3)
+        weak_min_strong: Minimum strong matches for weak signal (default 2)
 
     Returns:
         Filtered list of nodes (for "skip", reference nodes are removed)
@@ -256,13 +303,19 @@ def flag_reference_nodes(
     if strategy == "none":
         return nodes
 
-    ref_indices = detect_reference_boundary(nodes)
+    ref_indices = detect_reference_boundary(
+        nodes,
+        strong_ratio=strong_ratio,
+        moderate_ratio=moderate_ratio,
+        weak_ratio=weak_ratio,
+        moderate_min_matches=moderate_min_matches,
+        weak_min_matches=weak_min_matches,
+        weak_min_strong=weak_min_strong,
+    )
 
     if strategy == "skip":
-        # Actually remove reference nodes from the list
         return [node for i, node in enumerate(nodes) if i not in ref_indices]
 
-    # "flag" strategy: mark with metadata for later downranking
     for i in ref_indices:
         node = nodes[i]
         if not hasattr(node, "metadata") or node.metadata is None:
@@ -292,9 +345,32 @@ def apply_reference_strategy(nodes: list, strategy: str = None) -> list:
     """
     if strategy is None:
         from rag.config import get_settings
-        strategy = get_settings().reference_strategy
+        s = get_settings()
+        strategy = s.reference_strategy
+        strong_ratio = s.reference_strong_ratio
+        moderate_ratio = s.reference_moderate_ratio
+        weak_ratio = s.reference_weak_ratio
+        moderate_min_matches = s.reference_moderate_min_matches
+        weak_min_matches = s.reference_weak_min_matches
+        weak_min_strong = s.reference_weak_min_strong
+    else:
+        strong_ratio = 0.5
+        moderate_ratio = 0.3
+        weak_ratio = 0.4
+        moderate_min_matches = 5
+        weak_min_matches = 3
+        weak_min_strong = 2
 
     if strategy not in ("flag", "skip", "none"):
         strategy = "flag"
 
-    return flag_reference_nodes(nodes, strategy=strategy)
+    return flag_reference_nodes(
+        nodes,
+        strategy=strategy,
+        strong_ratio=strong_ratio,
+        moderate_ratio=moderate_ratio,
+        weak_ratio=weak_ratio,
+        moderate_min_matches=moderate_min_matches,
+        weak_min_matches=weak_min_matches,
+        weak_min_strong=weak_min_strong,
+    )

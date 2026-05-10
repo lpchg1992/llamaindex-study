@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { useKBs, useModels, useQueryMutation } from '@/api/hooks'
+import { useState, useEffect } from 'react'
+import { useKBs, useModels, useQueryMutation, useSettings } from '@/api/hooks'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
@@ -62,6 +62,7 @@ interface QueryConfig {
 export function QueryPage() {
   const { data: kbs } = useKBs()
   const { data: llmModels } = useModels('llm')
+  const { data: settings } = useSettings()
   const queryMutation = useQueryMutation()
 
   const [config, setConfig] = useState<QueryConfig>({
@@ -77,6 +78,22 @@ export function QueryPage() {
     responseMode: 'compact',
     topK: 5,
   })
+
+  // Sync config with settings when settings load
+  useEffect(() => {
+    if (settings) {
+      setConfig(prev => ({
+        ...prev,
+        topK: settings.top_k ?? prev.topK,
+        useAutoMerging: settings.use_auto_merging ?? prev.useAutoMerging,
+        useHyde: settings.use_hyde ?? prev.useHyde,
+        useMultiQuery: settings.use_multi_query ?? prev.useMultiQuery,
+        numMultiQueries: settings.num_multi_queries ?? prev.numMultiQueries,
+        retrieval_mode: settings.use_hybrid_search ? 'hybrid' : 'vector',
+        responseMode: settings.response_mode ?? prev.responseMode,
+      }))
+    }
+  }, [settings])
   const [query, setQuery] = useState('')
   const [response, setResponse] = useState<QueryResponse | null>(null)
   const [isLoading, setIsLoading] = useState(false)

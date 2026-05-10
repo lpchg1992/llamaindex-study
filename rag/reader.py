@@ -42,7 +42,7 @@ class ChunkConfig:
     header_path_separator: str = " > "     # 标题路径分隔符
     
     # 语义切分专用
-    similarity_threshold: float = 0.5      # 相似度阈值
+    similarity_threshold: Optional[float] = None
     percentile_threshold: Optional[float] = None  # 百分位阈值（替代）
     
     # 保留关系
@@ -83,12 +83,26 @@ class ChunkConfig:
                 "请安装: pip install llama-index-packs-node-parser-semantic-chunking"
             )
 
+        from rag.config import get_settings
+        settings = get_settings()
+
+        similarity_threshold = (
+            self.similarity_threshold
+            if self.similarity_threshold is not None
+            else settings.semantic_chunking_similarity_threshold
+        )
+        percentile_threshold = (
+            self.percentile_threshold
+            if self.percentile_threshold is not None
+            else settings.semantic_chunking_percentile_threshold
+        )
+
         return SemanticChunker(
             embed_model=embed_model,
             chunk_size=self.chunk_size,
             chunk_overlap=self.chunk_overlap,
-            similarity_threshold=self.similarity_threshold,
-            percentile_threshold=self.percentile_threshold,
+            similarity_threshold=similarity_threshold,
+            percentile_threshold=percentile_threshold,
             include_metadata=self.include_metadata,
             include_prev_next_rel=self.include_prev_next_rel,
         )

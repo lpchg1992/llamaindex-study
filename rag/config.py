@@ -118,6 +118,44 @@ class Settings:
             for x in os.getenv("HIERARCHICAL_CHUNK_SIZES", "1024,512,256").split(",")
         ]
 
+        # ========== 语义分块配置 ==========
+        self.semantic_chunking_similarity_threshold: float = float(
+            os.getenv("SEMANTIC_CHUNKING_SIMILARITY_THRESH", "0.5")
+        )
+        self.semantic_chunking_percentile_threshold: Optional[float] = None
+        if os.getenv("SEMANTIC_CHUNKING_PERCENTILE_THRESH"):
+            self.semantic_chunking_percentile_threshold = float(
+                os.getenv("SEMANTIC_CHUNKING_PERCENTILE_THRESH")
+            )
+
+        # ========== 参考文献检测配置 ==========
+        self.reference_strong_ratio: float = float(
+            os.getenv("REFERENCE_STRONG_RATIO", "0.5")
+        )
+        self.reference_moderate_ratio: float = float(
+            os.getenv("REFERENCE_MODERATE_RATIO", "0.3")
+        )
+        self.reference_weak_ratio: float = float(
+            os.getenv("REFERENCE_WEAK_RATIO", "0.4")
+        )
+        self.reference_moderate_min_matches: int = int(
+            os.getenv("REFERENCE_MODERATE_MIN_MATCHES", "5")
+        )
+        self.reference_weak_min_matches: int = int(
+            os.getenv("REFERENCE_WEAK_MIN_MATCHES", "3")
+        )
+        self.reference_weak_min_strong: int = int(
+            os.getenv("REFERENCE_WEAK_MIN_STRONG", "2")
+        )
+
+        # ========== PDF 检测配置 ==========
+        self.pdf_scan_threshold: float = float(
+            os.getenv("PDF_SCAN_THRESHOLD", "10.0")
+        )
+        self.pdf_image_ratio_threshold: float = float(
+            os.getenv("PDF_IMAGE_RATIO_THRESHOLD", "0.8")
+        )
+
         # ========== Query Transform 配置 ==========
         self.use_hyde: bool = os.getenv("USE_HYDE", "false").lower() == "true"
         self.use_multi_query: bool = (
@@ -209,6 +247,16 @@ class Settings:
             "hierarchical_chunk_sizes": self.hierarchical_chunk_sizes,
             "use_reranker": self.use_reranker,
             "reference_strategy": self.reference_strategy,
+            "semantic_chunking_similarity_threshold": self.semantic_chunking_similarity_threshold,
+            "semantic_chunking_percentile_threshold": self.semantic_chunking_percentile_threshold,
+            "reference_strong_ratio": self.reference_strong_ratio,
+            "reference_moderate_ratio": self.reference_moderate_ratio,
+            "reference_weak_ratio": self.reference_weak_ratio,
+            "reference_moderate_min_matches": self.reference_moderate_min_matches,
+            "reference_weak_min_matches": self.reference_weak_min_matches,
+            "reference_weak_min_strong": self.reference_weak_min_strong,
+            "pdf_scan_threshold": self.pdf_scan_threshold,
+            "pdf_image_ratio_threshold": self.pdf_image_ratio_threshold,
             "response_mode": self.response_mode,
             "progress_update_interval": self.progress_update_interval,
             "max_concurrent_tasks": self.max_concurrent_tasks,
