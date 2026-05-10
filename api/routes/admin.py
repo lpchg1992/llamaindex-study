@@ -55,13 +55,12 @@ def delete_table(kb_id: str):
 
 @router.post("/restart-scheduler")
 def restart_scheduler():
-    """重启内嵌调度器（调度器随 API 一同管理，不再作为独立子进程）"""
     from rag.logger import get_logger
     logger = get_logger(__name__)
-    logger.info("调度器随 API 内嵌运行，重启 API 即可重启调度器。使用 POST /restart-api")
+    logger.info("POST /admin/restart-scheduler is deprecated; scheduler runs embedded in API process")
     return {
-        "status": "embedded",
-        "message": "调度器已内嵌于 API 进程，请使用 POST /restart-api 重启"
+        "status": "deprecated",
+        "message": "Scheduler runs embedded in the API process. Use POST /admin/restart-api to restart everything."
     }
 
 
@@ -76,10 +75,13 @@ def restart_api():
     logger = get_logger(__name__)
     PROJECT_ROOT = Path(__file__).parent.parent
 
-    logger.info(f"重启 API 服务 (PID: {os.getpid()})")
+    logger.info(f"Restarting API service (PID: {os.getpid()}, embedded scheduler will restart with it)")
     threading.Timer(0.5, lambda: os.kill(os.getpid(), signal.SIGTERM)).start()
 
-    return {"status": "restarting", "message": "API 服务正在重启..."}
+    return {
+        "status": "restarting",
+        "message": "API service restarting (scheduler restarts with it)"
+    }
 
 
 @router.post("/reload-config")
