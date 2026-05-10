@@ -163,12 +163,14 @@ def apply_reranker(
 # Multi-Query 默认 Prompt
 DEFAULT_MULTI_QUERY_PROMPT = """你是一个查询增强专家。你的任务是根据用户问题，生成 {num_queries} 个不同的查询变体。
 
+核心原则：保持查询在同一个语义空间内，变化用词但不改变概念边界。
+
 要求：
 1. 每个变体从不同角度或用不同措辞表达同一个问题
-2. 变体之间要有差异化，涵盖问题的不同方面
-3. 保持原问题的核心意图不变
-4. 避免重复，每个变体要有独特价值
-5. 重要：必须保留原问题中的专业术语、动物名称、品种名称等关键实体（如"gilt"、"sow"、"pig"、"swine"、"肉鸡"、"蛋鸡"等），只变换通用描述词
+2. 变体之间要有差异化，但仅限于调换语序、补充限定词、拆分/合并子问题
+3. 严格保持原问题的核心概念不变：禁止将专业术语替换为近义词（如"diarrhea"不可换成"enteritis"、"piglet"不可换成"neonatal swine"）
+4. 如果原问题已经是精炼的专业表达，则变换查询结构而非替换关键词
+5. 重要：必须保留原问题中的所有实体词（动物名称、品种、病症、药物、营养素等），只变换功能词和句式
 6. 只输出查询变体，每行一个，不要其他解释
 
 原问题：{query_str}
@@ -242,13 +244,24 @@ class MultiQueryFusionRetriever:
         )
 
     def _rrf_fusion(self, results: list[tuple], top_k: int) -> list[Any]:
+        """Best-Rank RRF：取每个节点在各变体中的最高排名得分，而非累加。
+
+        累加式 RRF（score += weight/(k+rank)）会让「在所有变体中都排第 3」
+        的平庸节点，击败「只在原始查询排第 1」的高相关节点。
+        Best-Rank 策略避免了这种对「跨变体多次出现」的过度奖励，
+        适合于多查询变体共享同一个 base_retriever（信号高度相关）的场景。
+
+        同时使用 node.node_id 做去重（比 id() 可靠，不同检索批次可能
+        返回同一逻辑节点的不同 Python 对象）。
+        """
         k = 60
         fused_scores: dict = {}
         for node_with_score, weight, rank in results:
-            node_id = id(node_with_score.node)
-            if node_id not in fused_scores:
-                fused_scores[node_id] = {"node": node_with_score, "score": 0.0}
-            fused_scores[node_id]["score"] += weight / (k + rank)
+            node_obj = node_with_score.node
+            node_id = getattr(node_obj, "node_id", None) or id(node_obj)
+            score = weight / (k + rank)
+            if node_id not in fused_scores or score > fused_scores[node_id]["score"]:
+                fused_scores[node_id] = {"node": node_with_score, "score": score}
         sorted_results = sorted(
             fused_scores.values(),
             key=lambda x: x["score"],
@@ -364,6 +377,12 @@ class QueryEngineWrapper:
     def _create_retriever(self) -> Any:
         """创建检索器，支持 Auto-Merging 和混合搜索"""
         oversampling = self.settings.retrieval_oversampling_factor
+        if self.use_multi_query and oversampling > 2:
+            logger.info(
+                f"Multi-Query 模式下 oversampling 从 {oversampling}x 降至 2x "
+                f"（多查询变体已提供覆盖度，减少噪声候选）"
+            )
+            oversampling = 2
         base_retriever = self.index.as_retriever(similarity_top_k=self.top_k * oversampling)
 
         docstore = self.index.storage_context.docstore
