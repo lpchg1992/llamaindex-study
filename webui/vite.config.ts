@@ -1,5 +1,5 @@
 import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
+import react from '@vitejs/plugin-react-swc'
 import path from 'path'
 
 const API_URL = process.env.VITE_API_BASE || `http://localhost:${process.env.VITE_API_PORT || '37241'}`
