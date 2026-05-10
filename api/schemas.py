@@ -122,6 +122,9 @@ class IngestRequest(BaseModel):
     hierarchical_chunk_sizes: Optional[List[int]] = Field(
         None, description="hierarchical 模式分层大小列表"
     )
+    reference_strategy: Optional[str] = Field(
+        None, description="参考文献处理策略: flag/skip/none（覆盖全局设置）"
+    )
 
 
 class IngestResponse(BaseModel):
@@ -249,6 +252,9 @@ class ZoteroIngestRequest(BaseModel):
     hierarchical_chunk_sizes: Optional[List[int]] = Field(
         None, description="hierarchical 模式分层大小列表"
     )
+    reference_strategy: Optional[str] = Field(
+        None, description="参考文献处理策略: flag/skip/none（覆盖全局设置）"
+    )
 
 
 class ZoteroPreviewRequest(BaseModel):
@@ -329,6 +335,9 @@ class ObsidianIngestRequest(BaseModel):
     hierarchical_chunk_sizes: Optional[List[int]] = Field(
         None, description="hierarchical 模式分层大小列表"
     )
+    reference_strategy: Optional[str] = Field(
+        None, description="参考文献处理策略: flag/skip/none（覆盖全局设置）"
+    )
 
 
 class SelectiveImportRequest(BaseModel):
@@ -344,6 +353,9 @@ class SelectiveImportRequest(BaseModel):
     hierarchical_chunk_sizes: Optional[List[int]] = Field(
         None, description="hierarchical 模式分层大小列表"
     )
+    reference_strategy: Optional[str] = Field(
+        None, description="参考文献处理策略: flag/skip/none（覆盖全局设置）"
+    )
 
 
 class FilesImportRequest(BaseModel):
@@ -356,6 +368,9 @@ class FilesImportRequest(BaseModel):
     chunk_size: Optional[int] = Field(None, description="分块大小")
     hierarchical_chunk_sizes: Optional[List[int]] = Field(
         None, description="hierarchical 模式分层大小列表"
+    )
+    reference_strategy: Optional[str] = Field(
+        None, description="参考文献处理策略: flag/skip/none（覆盖全局设置）"
     )
 
 
@@ -446,12 +461,24 @@ class SystemSettings(BaseModel):
 
     # Embedding
     embed_batch_size: int = Field(32, ge=1, le=256, description="Embedding批处理大小")
+    ollama_short_text_threshold: int = Field(
+        600, ge=100, le=5000, description="文本低于此长度用单端点embedding"
+    )
+    ollama_fanout_text_threshold: int = Field(
+        1800, ge=500, le=10000, description="文本高于此长度用fanout embedding"
+    )
 
     # Retrieval
     top_k: int = Field(5, ge=1, le=100, description="检索返回数量")
     use_semantic_chunking: bool = Field(False, description="启用语义分块")
     use_hybrid_search: bool = Field(False, description="启用混合搜索")
     use_auto_merging: bool = Field(False, description="启用Auto-Merging")
+    auto_merging_simple_ratio_thresh: float = Field(
+        0.5, ge=0.1, le=1.0, description="Auto-Merging合并阈值（越大越保守）"
+    )
+    retrieval_oversampling_factor: int = Field(
+        5, ge=1, le=20, description="检索候选倍数"
+    )
     use_hyde: bool = Field(False, description="启用HyDE查询")
     use_multi_query: bool = Field(False, description="启用多查询转换")
     num_multi_queries: int = Field(3, ge=1, le=10, description="多查询变体数量")
@@ -465,11 +492,16 @@ class SystemSettings(BaseModel):
     chunk_size: int = Field(1024, ge=100, le=4096, description="分块大小")
     chunk_overlap: int = Field(100, ge=0, le=500, description="分块重叠")
     hierarchical_chunk_sizes: List[int] = Field(
-        [2048, 1024, 512], description="分层分块大小 [parent, child, leaf]"
+        [1024, 512, 256], description="分层分块大小 [parent, child, leaf]"
     )
 
     # Reranker
     use_reranker: bool = Field(True, description="启用Reranker")
+
+    # Reference filtering
+    reference_strategy: Literal["flag", "skip", "none"] = Field(
+        "flag", description="参考文献处理策略: flag/skip/none"
+    )
 
     # Response
     response_mode: str = Field("compact", description="答案生成模式")
@@ -486,18 +518,43 @@ class SystemSettings(BaseModel):
     max_retries: int = Field(5, ge=1, le=20, description="Embedding 最大重试次数")
     retry_delay: float = Field(2.0, ge=0.5, le=30, description="重试间隔（秒）")
 
+    # Task heartbeat
+    heartbeat_interval: int = Field(30, ge=10, le=600, description="任务心跳间隔（秒）")
+    stale_task_timeout: int = Field(300, ge=60, le=3600, description="任务超时（秒）")
+
+    # OCR
+    mineru_api_key: str = Field("", description="MinerU OCR API Key（存储在 .env）")
+    mineru_pipeline_id: str = Field("", description="MinerU OCR pipeline ID")
+    doc2x_api_key: str = Field("", description="doc2x OCR API Key（存储在 .env）")
+
+    # API
+    api_port: int = Field(37241, ge=1024, le=65535, description="API 服务端口（需重启）")
+    cors_extra_origins: str = Field("", description="额外 CORS 来源（需重启）")
+
 
 class SettingsUpdateRequest(BaseModel):
     """设置更新请求"""
 
     # Embedding
     embed_batch_size: Optional[int] = Field(None, ge=1, le=256, description="Embedding批处理大小")
+    ollama_short_text_threshold: Optional[int] = Field(
+        None, ge=100, le=5000, description="文本低于此长度用单端点embedding"
+    )
+    ollama_fanout_text_threshold: Optional[int] = Field(
+        None, ge=500, le=10000, description="文本高于此长度用fanout embedding"
+    )
 
     # Retrieval
     top_k: Optional[int] = Field(None, ge=1, le=100, description="检索返回数量")
     use_semantic_chunking: Optional[bool] = Field(None, description="启用语义分块")
     use_hybrid_search: Optional[bool] = Field(None, description="启用混合搜索")
     use_auto_merging: Optional[bool] = Field(None, description="启用Auto-Merging")
+    auto_merging_simple_ratio_thresh: Optional[float] = Field(
+        None, ge=0.1, le=1.0, description="Auto-Merging合并阈值"
+    )
+    retrieval_oversampling_factor: Optional[int] = Field(
+        None, ge=1, le=20, description="检索候选倍数"
+    )
     use_hyde: Optional[bool] = Field(None, description="启用HyDE查询")
     use_multi_query: Optional[bool] = Field(None, description="启用多查询转换")
     num_multi_queries: Optional[int] = Field(
@@ -521,6 +578,11 @@ class SettingsUpdateRequest(BaseModel):
     # Reranker
     use_reranker: Optional[bool] = Field(None, description="启用Reranker")
 
+    # Reference filtering
+    reference_strategy: Optional[str] = Field(
+        None, description="参考文献处理策略: flag/skip/none"
+    )
+
     # Response
     response_mode: Optional[str] = Field(None, description="答案生成模式")
 
@@ -535,6 +597,19 @@ class SettingsUpdateRequest(BaseModel):
     # Retry
     max_retries: Optional[int] = Field(None, ge=1, le=20, description="Embedding 最大重试次数")
     retry_delay: Optional[float] = Field(None, ge=0.5, le=30, description="重试间隔（秒）")
+
+    # Task heartbeat
+    heartbeat_interval: Optional[int] = Field(None, ge=10, le=600, description="任务心跳间隔（秒）")
+    stale_task_timeout: Optional[int] = Field(None, ge=60, le=3600, description="任务超时（秒）")
+
+    # OCR
+    mineru_api_key: Optional[str] = Field(None, description="MinerU OCR API Key")
+    mineru_pipeline_id: Optional[str] = Field(None, description="MinerU OCR pipeline ID")
+    doc2x_api_key: Optional[str] = Field(None, description="doc2x OCR API Key")
+
+    # API
+    api_port: Optional[int] = Field(None, ge=1024, le=65535, description="API 服务端口（需重启）")
+    cors_extra_origins: Optional[str] = Field(None, description="额外 CORS 来源（需重启）")
 
 
 # ============== Helper Functions ==============
