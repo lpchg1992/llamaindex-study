@@ -237,7 +237,7 @@ class SearchService:
         top_k: int,
         settings: Any,
     ) -> Any:
-        """使用 LanceDB 原生混合搜索（向量 + FTS/BM25）"""
+        """使用 LanceDB 原生混合搜索（向量 + 全文搜索 FTS）"""
         import lancedb
         from llama_index.core.vector_stores.types import VectorStoreQueryMode
         from llama_index.core.indices.vector_store.retrievers import (

@@ -12,7 +12,7 @@
 - 🧭 **统一导入编排** — CLI / API / 脚本共用 `ImportApplicationService`
 
 ### 检索策略
-- 🔍 **混合搜索** — 向量检索 + BM25 关键词融合
+- 🔍 **混合搜索** — 向量检索 + LanceDB 原生全文搜索（FTS）
 - 🔄 **Auto-Merging** — 检索时自动合并子节点为父节点
 - 💭 **HyDE 查询** — 假设文档嵌入，提升检索质量
 - 📝 **多查询转换** — 生成多个查询变体，减少遗漏
@@ -145,7 +145,7 @@ curl -X POST http://localhost:37241/kbs/HTE_history/topics/refresh \
 | `CHUNK_OVERLAP` | `100` | 分块重叠 |
 | `HIERARCHICAL_CHUNK_SIZES` | `1024,512,256` | 层级分块各层大小 |
 | `USE_AUTO_MERGING` | `false` | 启用 Auto-Merging |
-| `USE_HYBRID_SEARCH` | `false` | 启用混合搜索（向量+BM25） |
+| `USE_HYBRID_SEARCH` | `false` | 启用混合搜索（向量+关键词） |
 | `MAX_CONCURRENT_TASKS` | `10` | 最大并发任务数 |
 | `CORS_EXTRA_ORIGINS` | - | 额外的 CORS 来源（逗号分隔） |
 

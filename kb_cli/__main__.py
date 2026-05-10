@@ -2137,7 +2137,7 @@ CONFIG_OPTION_DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "TOP_K": ("检索", "每个知识库返回的结果数量"),
     "USE_SEMANTIC_CHUNKING": ("检索", "启用语义分块（需重建知识库）"),
     "USE_AUTO_MERGING": ("检索", "启用 Auto-Merging Retriever（需重建知识库）"),
-    "USE_HYBRID_SEARCH": ("检索", "启用混合搜索（向量 + BM25）"),
+    "USE_HYBRID_SEARCH": ("检索", "启用混合搜索（向量 + 关键词）"),
     "HYBRID_SEARCH_ALPHA": ("检索", "混合搜索向量权重（0-1）"),
     "HYBRID_SEARCH_MODE": ("检索", "混合搜索融合模式"),
     "USE_HYDE": ("检索", "启用 HyDE 查询转换"),

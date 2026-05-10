@@ -974,7 +974,7 @@ uv run llamaindex-study config list
 ============================================================
   配置项                            值                    说明
   ------------------------------ -------------------- ------------------------------
-  USE_HYBRID_SEARCH             false                启用混合搜索（向量 + BM25）
+  USE_HYBRID_SEARCH             false                启用混合搜索（向量 + 关键词）
   USE_HYDE                       false                启用 HyDE 查询转换
   ...
 ```
@@ -1023,7 +1023,7 @@ uv run llamaindex-study config set RESPONSE_MODE refine
 
 | 配置项 | 说明 | 可选值 |
 |--------|------|--------|
-| `USE_HYBRID_SEARCH` | 启用混合搜索（向量 + BM25） | `true`/`false` |
+| `USE_HYBRID_SEARCH` | 启用混合搜索（向量 + 关键词） | `true`/`false` |
 | `HYBRID_SEARCH_ALPHA` | 混合搜索权重（1=仅向量） | `0.0`-`1.0` |
 | `USE_HYDE` | 启用 HyDE 查询转换 | `true`/`false` |
 | `USE_MULTI_QUERY` | 启用多查询转换 | `true`/`false` |

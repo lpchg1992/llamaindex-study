@@ -17,7 +17,7 @@
 - **任务队列** - 异步提交，随时查询状态
 - **增量同步** - 基于文件哈希检测变更
 - **资源保护** - documents 表串行访问、LanceDB 串行写入
-- **混合搜索** - 向量检索 + BM25 关键词融合（需启用）
+- **混合搜索** - 向量检索 + 关键词全文搜索（需启用）
 - **Auto-Merging** - 检索时自动合并相关子节点（需启用）
 
 ## 启动服务
@@ -1616,7 +1616,7 @@ curl -X POST "http://localhost:37241/search" \
 | `HIERARCHICAL_CHUNK_SIZES` | `2048,1024,512` | 层级分块各层大小 |
 | `USE_SEMANTIC_CHUNKING` | `false` | 启用语义分块（需重建知识库） |
 | `USE_AUTO_MERGING` | `false` | 启用 Auto-Merging Retriever（需知识库使用 hierarchical 分块） |
-| `USE_HYBRID_SEARCH` | `false` | 启用混合搜索（向量 + BM25） |
+| `USE_HYBRID_SEARCH` | `false` | 启用混合搜索（向量 + 关键词） |
 | `HYBRID_SEARCH_ALPHA` | `0.5` | 混合搜索向量权重（0-1，1=仅向量） |
 | `HYBRID_SEARCH_MODE` | `relative_score` | 混合搜索融合模式 |
 | `USE_HYDE` | `false` | 启用 HyDE 查询转换 |

@@ -915,7 +915,7 @@ uv run llamaindex-study kb topics --all --update
        └── similarity_top_k=15
 
 4. (可选) 混合搜索融合
-   └── BM25Retriever + QueryFusionRetriever
+    └── LanceDB 原生 FTS（Full-Text Search）混合查询
 
 5. (可选) Auto-Merging
    └── 合并叶子节点到父节点
@@ -944,13 +944,16 @@ uv run llamaindex-study kb topics --all --update
 ```
 用户查询
     │
-    ├── 向量检索器 (similarity_top_k=15)
+    ▼
+VectorIndexRetriever (query_mode=HYBRID)
     │
-    └── BM25 检索器 (similarity_top_k=15)
+    ├── 向量检索（embedding 相似度）
+    │
+    └── 全文搜索（LanceDB FTS 索引）
             │
             ▼
-    QueryFusionRetriever 融合
-    (mode=relative_score, RRF, 或 dist_based_score)
+    LanceDB 原生融合
+    (LinearCombinationReranker / RRFReranker)
             │
             ▼
         融合结果
