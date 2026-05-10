@@ -1902,78 +1902,6 @@ def _show_startup_errors(log_file: Path) -> None:
         pass
 
 
-def _stop_frontend() -> bool:
-    """停止前端服务"""
-    import subprocess
-
-    pid_file = PROJECT_ROOT / ".frontend.pid"
-    pid = _get_pid_from_file(pid_file)
-
-    if pid and _kill_pid(pid, signal.SIGTERM, "frontend"):
-        print(f"停止前端 (PID: {pid})...")
-        time.sleep(1)
-        _kill_pid(pid, signal.SIGKILL, "frontend")
-        pid_file.unlink(missing_ok=True)
-        return True
-
-    if _is_port_in_use(5173):
-        print("停止前端 (通过端口 5173)...")
-        subprocess.run(
-            f"lsof -ti:5173 | xargs kill -9 2>/dev/null || true",
-            shell=True,
-        )
-        time.sleep(1)
-        pid_file.unlink(missing_ok=True)
-        return True
-
-    return False
-
-
-def _start_frontend() -> bool:
-    """启动前端服务，返回是否成功"""
-    import subprocess
-
-    pid_file = PROJECT_ROOT / ".frontend.pid"
-    frontend_dir = PROJECT_ROOT / "webui"
-
-    if not frontend_dir.exists():
-        print(f"❌ 前端目录不存在: {frontend_dir}")
-        return False
-
-    # 清理 Vite 缓存
-    vite_cache = frontend_dir / "node_modules" / ".vite"
-    if vite_cache.exists():
-        import shutil
-        shutil.rmtree(vite_cache)
-
-    print(f"启动前端服务 (Port: 5173)...")
-    log_dir = PROJECT_ROOT / "logs"
-    log_dir.mkdir(exist_ok=True)
-    frontend_log = log_dir / "frontend_startup.log"
-
-    with open(frontend_log, "w") as log_fp:
-        proc = subprocess.Popen(
-            ["npm", "run", "dev"],
-            cwd=str(frontend_dir),
-            stdout=log_fp,
-            stderr=log_fp,
-            start_new_session=True,
-        )
-
-    # 等待端口就绪
-    for attempt in range(1, 5):
-        time.sleep(3)
-        if _is_port_in_use(5173):
-            pid_file.write_text(str(proc.pid))
-            print(f"✅ 前端运行中 (PID: {proc.pid}, Port: 5173)")
-            return True
-        print(f"   等待中... ({attempt * 3}s)")
-
-    print(f"\n❌ 前端启动失败 (Port: 5173)")
-    _show_startup_errors(frontend_log)
-    return False
-
-
 def _is_port_in_use(port: int) -> bool:
     """检查端口是否被占用"""
     import socket
@@ -1996,15 +1924,14 @@ def _get_service_status() -> dict:
     api_port = getattr(settings, "api_port", 37241)
 
     api_pid_file = PROJECT_ROOT / ".api.pid"
-    frontend_pid_file = PROJECT_ROOT / ".frontend.pid"
+    dist_dir = PROJECT_ROOT / "webui" / "dist"
 
     status = {
         "api": {"running": False, "pid": None, "port": api_port},
         "scheduler": {"running": False, "pid": None},
-        "frontend": {"running": False, "pid": None, "port": 5173},
+        "frontend": {"running": False, "built": False},
     }
 
-    # API - 检查 PID 文件 + 端口
     api_pid = _get_pid_from_file(api_pid_file)
     if api_pid and _is_process_running(api_pid):
         status["api"]["running"] = True
@@ -2013,39 +1940,42 @@ def _get_service_status() -> dict:
         status["api"]["running"] = True
         status["api"]["pid"] = "unknown (port in use)"
 
-    # Scheduler - 内嵌于 API，随 API 一同启停
     status["scheduler"]["running"] = status["api"]["running"]
     status["scheduler"]["pid"] = status["api"].get("pid", "embedded")
-
-    # Frontend - 检查 PID 文件 + 端口
-    frontend_pid = _get_pid_from_file(frontend_pid_file)
-    if frontend_pid and _is_process_running(frontend_pid):
-        status["frontend"]["running"] = True
-        status["frontend"]["pid"] = frontend_pid
-    elif _is_port_in_use(5173):
-        status["frontend"]["running"] = True
-        status["frontend"]["pid"] = "unknown (port in use)"
+    status["frontend"]["built"] = dist_dir.exists()
 
     return status
 
 
 def _ensure_frontend_built() -> bool:
-    """确保前端已构建，如不存在则自动构建"""
     frontend_dir = PROJECT_ROOT / "webui"
+    src_dir = frontend_dir / "src"
     dist_dir = frontend_dir / "dist"
-
-    if dist_dir.exists():
-        return True
-
-    print("前端 dist 目录不存在，开始构建前端...")
+    hash_file = PROJECT_ROOT / ".frontend_src_hash"
 
     if not (frontend_dir / "package.json").exists():
         print(f"❌ 前端目录不存在: {frontend_dir}")
         return False
 
+    import hashlib
+
+    src_hash = subprocess.run(
+        ["find", "src", "-type", "f", "-exec", "md5", "{}", "+"],
+        cwd=str(frontend_dir),
+        capture_output=True,
+        text=True,
+    ).stdout.strip() if src_dir.exists() else ""
+
+    last_hash = hash_file.read_text().strip() if hash_file.exists() else ""
+
+    if dist_dir.exists() and src_hash and src_hash == last_hash:
+        return True
+
+    print("前端源码有变更，开始构建前端...")
+
     print("[1/2] 安装前端依赖...")
     result = subprocess.run(
-        ["npm", "install"],
+        ["npm", "ci"],
         cwd=str(frontend_dir),
         capture_output=True,
         text=True,
@@ -2064,6 +1994,9 @@ def _ensure_frontend_built() -> bool:
     if result.returncode != 0:
         print(f"❌ 前端构建失败: {result.stderr}")
         return False
+
+    if src_hash:
+        hash_file.write_text(src_hash)
 
     print("✅ 前端构建完成")
     return True
@@ -2092,7 +2025,6 @@ def handle_service_stop(args: argparse.Namespace) -> int:
     """停止所有服务"""
     print("停止所有服务...")
 
-    _stop_frontend()
     _stop_api()
 
     print("\n所有服务已停止")
@@ -2103,7 +2035,6 @@ def handle_service_restart(args: argparse.Namespace) -> int:
     """重启所有服务"""
     print("重启所有服务...\n")
 
-    _stop_frontend()
     _stop_api()
     time.sleep(2)
 
@@ -2129,26 +2060,23 @@ def handle_service_status(args: argparse.Namespace) -> int:
 
     print("\n=== 服务状态 ===\n")
 
-    # API
     api = status["api"]
     if api["running"]:
         print(f"✅ API      运行中 (PID: {api['pid']}, Port: {api['port']})")
     else:
         print(f"❌ API      已停止")
 
-    # Scheduler
     scheduler = status["scheduler"]
     if scheduler["running"]:
         print(f"✅ Scheduler 运行中 (PID: {scheduler['pid']})")
     else:
         print(f"❌ Scheduler 已停止")
 
-    # Frontend
     frontend = status["frontend"]
-    if frontend["running"]:
-        print(f"✅ Frontend 运行中 (PID: {frontend['pid']}, Port: {frontend['port']})")
+    if frontend["built"]:
+        print(f"✅ Frontend 已构建 (由 API serve)")
     else:
-        print(f"❌ Frontend 已停止")
+        print(f"❌ Frontend 未构建")
 
     print()
     return 0

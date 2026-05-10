@@ -140,7 +140,6 @@ RAG 检索增强生成 API，支持任务队列异步处理。
 
 
 def _mount_frontend(app: FastAPI) -> None:
-    """挂载前端静态文件到根路径"""
     project_root = Path(__file__).parent.parent
     webui_dir = project_root / "webui"
     dist_dir = webui_dir / "dist"
@@ -152,10 +151,27 @@ def _mount_frontend(app: FastAPI) -> None:
         )
         return
 
-    from fastapi.staticfiles import StaticFiles
+    dist_path = dist_dir.resolve()
 
-    app.mount("/", StaticFiles(directory=str(dist_dir), html=True), name="static")
-    logger.info(f"前端静态文件已挂载: {dist_dir}")
+    @app.get("/{path:path}", include_in_schema=False)
+    async def serve_spa(path: str):
+        from fastapi.responses import FileResponse
+
+        file_path = dist_path / path
+
+        if file_path.is_file() and str(file_path).startswith(str(dist_path)):
+            return FileResponse(file_path)
+
+        index_path = dist_path / "index.html"
+        if index_path.is_file():
+            return FileResponse(index_path)
+
+        return JSONResponse(
+            status_code=404,
+            content={"detail": "Not found"}
+        )
+
+    logger.info(f"前端静态文件已挂载: {dist_dir} (SPA fallback enabled)")
 
 
 app = create_app()
