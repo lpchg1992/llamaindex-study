@@ -687,7 +687,7 @@ curl -X POST "http://localhost:37241/consistency/repair-all?mode=sync"
 
 #### POST /search
 
-向量检索的统一入口，支持两种路由模式：
+向量检索的统一入口，支持三种路由模式：
 
 ```bash
 # 用户选择知识库检索（默认）
@@ -709,6 +709,11 @@ curl -X POST "http://localhost:37241/search" \
 curl -X POST "http://localhost:37241/search" \
   -H "Content-Type: application/json" \
   -d '{"query": "Python 异步编程", "kb_ids": "tech_tools", "retrieval_mode": "hybrid"}'
+
+# 全库检索（所有知识库）
+curl -X POST "http://localhost:37241/search" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "Python 异步编程", "route_mode": "all"}'
 ```
 
 **请求参数说明：**
@@ -716,18 +721,22 @@ curl -X POST "http://localhost:37241/search" \
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `query` | string | 必填 | 查询内容 |
-| `route_mode` | enum | `"general"` | 路由模式：`general` 或 `auto` |
+| `route_mode` | enum | `"general"` | 路由模式：`general`(用户选择知识库)、`auto`(自动路由)、`all`(所有知识库) |
 | `top_k` | int | `5` | 返回结果数量 |
 | `retrieval_mode` | enum | `"vector"` | 检索模式：`vector` 或 `hybrid` |
 | `model_id` | string | null | 使用的模型ID（如 `siliconflow/DeepSeek-V3.2`, `ollama/lfm2.5-instruct`），不填则使用默认模型（Ollama） |
 | `embed_model_id` | string | null | 使用的 Embedding 模型ID（如 `ollama/bge-m3:latest`） |
 | `kb_ids` | string | null | 指定知识库 ID（逗号分隔，`route_mode=general` 时必填） |
-| `exclude` | string[] | null | 排除的知识库 ID 列表（仅 `route_mode=auto` 时有效） |
+| `exclude` | string[] | null | 排除的知识库 ID 列表（仅 `route_mode=auto` 或 `route_mode=all` 时有效） |
 | `use_auto_merging` | bool | null | 启用 Auto-Merging（null=使用配置默认值） |
+| `use_reranker` | bool | null | 启用 Reranker（null=使用配置默认值） |
 
 **参数约束：**
+- `route_mode=general`：**忽略 `model_id`**，仅做向量检索
+- `route_mode=auto`/`route_mode=all`：`model_id` 用于 LLM 辅助路由决策
 - `route_mode=general`：必须提供 `kb_ids`，且不支持 `exclude`
 - `route_mode=auto`：可使用 `exclude`，`kb_ids` 可省略
+- `route_mode=all`：检索所有知识库，可使用 `exclude` 排除部分
 
 **响应格式：**
 
@@ -744,23 +753,28 @@ curl -X POST "http://localhost:37241/search" \
 
 #### POST /query
 
-RAG 问答的统一入口，支持两种路由模式：
+RAG 问答的统一入口，支持三种路由模式：
 
 ```bash
 # 用户选择知识库问答（默认）
 curl -X POST "http://localhost:37241/query" \
   -H "Content-Type: application/json" \
-  -d '{"query": "如何优化 Python 性能？", "kb_ids": "tech_tools,academic", "top_k": 5}'
+  -d '{"query": "Python 异步编程的要点是什么？", "kb_ids": "tech_tools"}'
 
 # 自动路由问答
 curl -X POST "http://localhost:37241/query" \
   -H "Content-Type: application/json" \
-  -d '{"query": "如何优化 Python 性能？", "route_mode": "auto"}'
+  -d '{"query": "如何配置 Nginx 反向代理", "route_mode": "auto"}'
 
-# 使用指定模型问答
+# 全库问答
 curl -X POST "http://localhost:37241/query" \
   -H "Content-Type: application/json" \
-  -d '{"query": "如何优化 Python 性能？", "kb_ids": "tech_tools", "model_id": "ollama/lfm2.5-thinking:latest"}'
+  -d '{"query": "公司有哪些技术积累？", "route_mode": "all"}'
+
+# 指定模型 + 混合搜索
+curl -X POST "http://localhost:37241/query" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "Python 性能优化", "kb_ids": "tech_tools", "model_id": "ollama/lfm2.5-instruct:1.2b", "retrieval_mode": "hybrid"}'
 ```
 
 **请求参数说明：**
@@ -768,28 +782,38 @@ curl -X POST "http://localhost:37241/query" \
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `query` | string | 必填 | 查询内容 |
-| `route_mode` | enum | `"general"` | 路由模式：`general` 或 `auto` |
-| `top_k` | int | `5` | 返回结果数量 |
-| `retrieval_mode` | enum | `"vector"` | 检索模式：`vector` 或 `hybrid` |
-| `model_id` | string | null | 使用的模型ID（如 `siliconflow/DeepSeek-V3.2`, `ollama/lfm2.5-instruct`），不填则使用默认模型 |
+| `route_mode` | enum | `"general"` | 路由模式：`general`(用户选择知识库)、`auto`(自动路由)、`all`(所有知识库) |
+| `top_k` | int | `5` | 检索返回的结果数量 |
+| `retrieval_mode` | enum | `"vector"` | 检索模式：`vector`(向量检索) 或 `hybrid`(混合搜索) |
+| `model_id` | string | null | 使用的 LLM 模型ID（如 `siliconflow/DeepSeek-V3.2`, `ollama/lfm2.5-instruct`），不填则使用默认模型 |
+| `embed_model_id` | string | null | 使用的 Embedding 模型ID（如 `ollama/bge-m3:latest`） |
+| `llm_mode` | string | null | **已废弃**，请使用 `model_id` |
 | `kb_ids` | string | null | 指定知识库 ID（逗号分隔，`route_mode=general` 时必填） |
-| `exclude` | string[] | null | 排除的知识库 ID 列表（仅 `route_mode=auto` 时有效） |
-| `use_hyde` | bool | null | 启用 HyDE 查询转换（null=使用配置默认值） |
-| `use_multi_query` | bool | null | 启用多查询转换（null=使用配置默认值） |
-| `use_auto_merging` | bool | null | 启用 Auto-Merging（null=使用配置默认值） |
-| `response_mode` | string | null | 答案生成模式（null=使用配置默认值） |
+| `exclude` | string[] | null | 排除的知识库 ID 列表（仅 `route_mode=auto` 或 `route_mode=all` 时有效） |
+| `use_hyde` | bool | null | 启用 HyDE 查询转换（None=使用配置默认值） |
+| `use_multi_query` | bool | null | 启用多查询转换（None=使用配置默认值） |
+| `num_multi_queries` | int | null | 多查询变体数量（None=使用配置默认值，默认 3） |
+| `use_auto_merging` | bool | null | 启用 Auto-Merging（None=使用配置默认值） |
+| `use_reranker` | bool | null | 启用 Reranker（None=使用配置默认值） |
+| `response_mode` | string | null | 答案生成模式：`compact`(默认)、`refine`、`tree_summarize`、`simple`、`accumulate` |
 
 **参数约束：**
 - `route_mode=general`：必须提供 `kb_ids`，且不支持 `exclude`
 - `route_mode=auto`：可使用 `exclude`，`kb_ids` 可省略
+- `route_mode=all`：检索所有知识库，可使用 `exclude` 排除部分
+- `route_mode=general`：**忽略 `model_id`**，仅做检索
 
 **响应格式：**
 
 ```json
 {
-  "response": "优化 Python 性能可以从以下几个方面入手...",
+  "response": "AI 生成的答案...",
   "sources": [
-    {"text": "Python 性能优化技巧...", "score": 0.85}
+    {
+      "text": "检索到的文档片段...",
+      "score": 0.85,
+      "kb_id": "tech_tools"
+    }
   ]
 }
 ```

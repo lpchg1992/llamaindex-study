@@ -6,12 +6,13 @@
 
 ## 核心概念：路由模式 (route_mode)
 
-RAG 查询有两种路由方式：
+RAG 查询有三种路由方式：
 
 | 模式 | route_mode 值 | 说明 | 使用场景 |
 |------|--------------|------|---------|
 | **用户选择** | `"general"` | 用户在前端勾选要查询的知识库 | 明确知道问题属于哪个/哪些知识库 |
 | **自动路由** | `"auto"` | 系统根据 query 内容选择相关知识库 | 不确定问题属于哪个知识库 |
+| **全库问答** | `"all"` | 查询所有知识库 | 需要全局搜索所有内容 |
 
 ---
 
@@ -29,9 +30,9 @@ RAG 查询有两种路由方式：
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `route_mode` | string | `"general"` | 路由模式：`general`(用户选择知识库), `auto`(自动路由) |
+| `route_mode` | string | `"general"` | 路由模式：`general`(用户选择知识库), `auto`(自动路由), `all`(所有知识库) |
 | `kb_ids` | string | - | 指定知识库（逗号分隔，`route_mode=general` 时必填） |
-| `exclude` | string[] | - | 排除的知识库 ID 列表（仅 `route_mode=auto` 时有效） |
+| `exclude` | string[] | - | 排除的知识库 ID 列表（仅 `route_mode=auto` 或 `route_mode=all` 时有效） |
 
 ### 检索参数
 
@@ -47,13 +48,17 @@ RAG 查询有两种路由方式：
 |------|------|--------|------|
 | `use_hyde` | bool | null | 启用 HyDE 查询转换 |
 | `use_multi_query` | bool | null | 启用多查询转换 |
+| `num_multi_queries` | int | null | 多查询变体数量（null=使用配置默认值，默认 3） |
 | `use_auto_merging` | bool | null | 启用 Auto-Merging 检索 |
+| `use_reranker` | bool | null | 启用 Reranker（null=使用配置默认值） |
 
 ### 模型参数
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `model_id` | string | null | 使用的模型ID（如 `siliconflow/DeepSeek-V3.2`, `ollama/lfm2.5-instruct`），不填则使用默认模型 |
+| `embed_model_id` | string | null | 使用的 Embedding 模型ID（如 `ollama/bge-m3:latest`），不填则使用默认模型 |
+| `llm_mode` | string | null | **已废弃**，请使用 `model_id` |
 
 ### 答案生成参数
 
@@ -118,6 +123,34 @@ POST /query
   "query": "如何配置 Nginx",
   "route_mode": "auto",
   "model_id": "ollama/lfm2.5-instruct:1.2b"
+}
+```
+
+---
+
+### route_mode = "all"（全库问答）
+
+系统查询所有知识库，返回综合答案。
+
+**有效参数**：
+- `exclude`：排除的知识库 ID 列表
+
+**示例**：
+
+```json
+POST /query
+{
+  "query": "公司有哪些技术积累？",
+  "route_mode": "all"
+}
+```
+
+```json
+POST /query
+{
+  "query": "公司有哪些技术积累？",
+  "route_mode": "all",
+  "exclude": ["test_kb", "archived_kb"]
 }
 ```
 

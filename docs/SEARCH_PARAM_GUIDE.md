@@ -6,12 +6,13 @@
 
 ## 核心概念：路由模式 (route_mode)
 
-Search 检索有两种路由方式：
+Search 检索有三种路由方式：
 
 | 模式 | route_mode 值 | 说明 | 使用场景 |
 |------|--------------|------|---------|
 | **用户选择** | `"general"` | 用户在前端勾选要检索的知识库 | 明确知道问题属于哪个/哪些知识库 |
 | **自动路由** | `"auto"` | 系统根据 query 内容选择相关知识库 | 不确定问题属于哪个知识库 |
+| **全库检索** | `"all"` | 系统检索所有知识库 | 需要跨多个知识库全面检索 |
 
 ---
 
@@ -29,9 +30,9 @@ Search 检索有两种路由方式：
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `route_mode` | string | `"general"` | 路由模式：`general`(用户选择知识库), `auto`(自动路由) |
+| `route_mode` | string | `"general"` | 路由模式：`general`(用户选择知识库), `auto`(自动路由), `all`(所有知识库) |
 | `kb_ids` | string | - | 指定知识库（逗号分隔，`route_mode=general` 时必填） |
-| `exclude` | string[] | - | 排除的知识库 ID 列表（仅 `route_mode=auto` 时有效） |
+| `exclude` | string[] | - | 排除的知识库 ID 列表（仅 `route_mode=auto` 或 `route_mode=all` 时有效） |
 
 ### 检索参数
 
@@ -46,6 +47,7 @@ Search 检索有两种路由方式：
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `use_auto_merging` | bool | null | 启用 Auto-Merging 检索 |
+| `use_reranker` | bool | null | 启用 Reranker（null=使用配置默认值） |
 
 ### 模型参数
 
@@ -99,6 +101,34 @@ POST /search
 {
   "query": "如何配置 Nginx",
   "route_mode": "auto"
+}
+```
+
+---
+
+### route_mode = "all"（全库检索）
+
+系统检索所有知识库，返回综合结果。
+
+**有效参数**：
+- `exclude`：排除的知识库 ID 列表
+
+**示例**：
+
+```json
+POST /search
+{
+  "query": "公司有哪些技术文档？",
+  "route_mode": "all"
+}
+```
+
+```json
+POST /search
+{
+  "query": "公司有哪些技术文档？",
+  "route_mode": "all",
+  "exclude": ["test_kb", "archived_kb"]
 }
 ```
 
