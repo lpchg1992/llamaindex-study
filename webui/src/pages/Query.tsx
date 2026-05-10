@@ -425,9 +425,16 @@ export function QueryPage() {
                     {response.sources.map((source, index) => (
                       <div key={index} className="p-4 border rounded-lg hover:bg-muted/50 transition-colors overflow-hidden">
                         <div className="flex items-center justify-between mb-2">
-                          <Badge variant={source.score > 0.8 ? 'default' : 'outline'} className="font-mono shrink-0">
-                            {(source.score * 100).toFixed(0)}%
-                          </Badge>
+                          <div className="flex items-center gap-1">
+                            {source.metadata?.is_reference === true && (
+                              <Badge variant="outline" className="border-amber-500 text-amber-600">
+                                Ref
+                              </Badge>
+                            )}
+                            <Badge variant={source.score > 0.8 ? 'default' : 'outline'} className="font-mono">
+                              {(source.score * 100).toFixed(0)}%
+                            </Badge>
+                          </div>
                         </div>
                         <p className="text-sm text-muted-foreground line-clamp-3 break-all leading-relaxed">
                           {source.text}

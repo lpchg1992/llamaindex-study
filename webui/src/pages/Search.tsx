@@ -191,9 +191,16 @@ export function SearchPage() {
                           {result.metadata?.file_name as string || 'Document'}
                         </CardTitle>
                       </div>
-                      <Badge variant={result.score > 0.8 ? 'default' : 'outline'} className="flex-shrink-0">
-                        {(result.score * 100).toFixed(0)}%
-                      </Badge>
+                      <div className="flex items-center gap-1 flex-shrink-0">
+                        {result.metadata?.is_reference === true && (
+                          <Badge variant="outline" className="border-amber-500 text-amber-600">
+                            Ref
+                          </Badge>
+                        )}
+                        <Badge variant={result.score > 0.8 ? 'default' : 'outline'}>
+                          {(result.score * 100).toFixed(0)}%
+                        </Badge>
+                      </div>
                     </div>
                   </CardHeader>
                   <CardContent>
