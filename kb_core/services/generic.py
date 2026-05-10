@@ -25,6 +25,7 @@ class GenericService:
         chunk_strategy: Optional[str] = None,
         chunk_size: Optional[int] = None,
         hierarchical_chunk_sizes: Optional[List[int]] = None,
+        reference_strategy: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         导入单个文件
@@ -57,6 +58,7 @@ class GenericService:
             hierarchical_chunk_sizes=hierarchical_chunk_sizes or settings.hierarchical_chunk_sizes,
         )
         importer = GenericImporter(kb_id=kb_id, persist_dir=persist_dir, processor_config=config)
+        importer.reference_strategy = reference_strategy
 
         if progress_callback:
             progress_callback(f"开始导入: {file_path.name}")

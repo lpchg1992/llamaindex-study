@@ -145,6 +145,7 @@ class ZoteroService:
         hierarchical_chunk_sizes: Optional[List[int]] = None,
         cancel_event: Any = None,
         chunk_progress_callback: Any = None,
+        reference_strategy: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         导入单个 Zotero 文献
@@ -175,6 +176,7 @@ class ZoteroService:
             hierarchical_chunk_sizes=hierarchical_chunk_sizes or settings.hierarchical_chunk_sizes,
         )
         importer = ZoteroImporter(config=config, kb_id=kb_id)
+        importer.reference_strategy = reference_strategy
         try:
             item_id_int = int(item_id)
             item = importer.get_item(item_id_int, prefix=prefix)

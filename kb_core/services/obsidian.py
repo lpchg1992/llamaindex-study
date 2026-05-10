@@ -278,6 +278,7 @@ class ObsidianService:
         chunk_strategy: Optional[str] = None,
         chunk_size: Optional[int] = None,
         hierarchical_chunk_sizes: Optional[List[int]] = None,
+        reference_strategy: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         导入 Obsidian 笔记
@@ -326,6 +327,7 @@ class ObsidianService:
             persist_dir=persist_dir,
             config=config,
         )
+        importer.reference_strategy = reference_strategy
 
         exclude_patterns = exclude_patterns or [
             "*/image/*",

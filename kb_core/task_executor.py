@@ -103,6 +103,7 @@ from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from rag.logger import get_logger
 from rag.config import get_settings
+from kb_processing.reference_detector import apply_reference_strategy
 
 logger = get_logger(__name__)
 
@@ -563,6 +564,8 @@ class TaskExecutor:
 
                 nodes = node_parser.get_nodes_from_documents([doc])
 
+                nodes = apply_reference_strategy(nodes, strategy=params.get("reference_strategy"))
+
                 if nodes:
                     self.queue.update_file_progress(
                         task.task_id, obsidian_file_id,
@@ -749,6 +752,7 @@ class TaskExecutor:
         chunk_strategy = params.get("chunk_strategy")
         chunk_size = params.get("chunk_size")
         hierarchical_chunk_sizes = params.get("hierarchical_chunk_sizes")
+        reference_strategy = params.get("reference_strategy")
 
         logger.info(f"[{task_id}] 开始选择性导入: kb_id={kb_id}, items={len(items)}")
 
@@ -944,6 +948,7 @@ class TaskExecutor:
                             chunk_strategy=chunk_strategy,
                             chunk_size=chunk_size,
                             hierarchical_chunk_sizes=hierarchical_chunk_sizes,
+                            reference_strategy=reference_strategy,
                             cancel_event=cancel_event,
                             chunk_progress_callback=make_progress_callback(file_id) if file_id else None,
                         )
@@ -1834,11 +1839,14 @@ class TaskExecutor:
                 )
                 processor = DocumentProcessor(config=config)
                 docs = processor.process_file(str(file_path))
+                ref_strategy = params.get("reference_strategy")
 
                 if docs:
                     file_nodes = []
                     for doc in docs:
                         nodes = node_parser.get_nodes_from_documents([doc])
+
+                        nodes = apply_reference_strategy(nodes, strategy=ref_strategy)
 
                         if nodes:
                             texts = [node.get_content() for node in nodes]
