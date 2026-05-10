@@ -40,7 +40,6 @@ from kb_core.services import (
 from kb_core.import_service import ImportRequest
 from rag.config import get_settings
 from rag.query_engine import QueryEngineWrapper
-from rag.rag_evaluator import RAGEvaluator, RAGMetrics
 from rag.reader import DocumentReader
 
 
@@ -1608,61 +1607,6 @@ def handle_scheduler_restart(args: argparse.Namespace) -> int:
     return 0
 
 
-def handle_evaluate(args: argparse.Namespace) -> int:
-    from kb_core.services import SearchService
-
-    if args.show_metrics:
-        print("\n=== RAG 评估指标 ===\n")
-        for key, info in RAGMetrics.get_metrics_info().items():
-            print(f"【{info['name']}】({key})")
-            print(f"  {info['description']}")
-            print(f"  良好范围: {info['good_range']}\n")
-        return 0
-
-    if not args.dataset:
-        print("错误: 请提供 --dataset 参数指定测试数据文件")
-        print("测试数据格式: questions, answers")
-        return 1
-
-    import json
-
-    with open(args.dataset, encoding="utf-8") as f:
-        dataset = json.load(f)
-
-    questions = dataset.get("questions", [])
-    ground_truths = dataset.get("ground_truths", [])
-
-    if not questions or len(ground_truths) != len(questions):
-        print("错误: 测试数据格式错误，questions 和 ground_truths 数量必须一致")
-        return 1
-
-    print(f"\n评估知识库: {args.kb_id}, 问题数: {len(questions)}\n")
-
-    contexts, answers = [], []
-    for i, q in enumerate(questions):
-        print(f"[{i + 1}/{len(questions)}] {q[:50]}...")
-        try:
-            results = SearchService.search(args.kb_id, q, top_k=args.top_k)
-            contexts.append([r["text"] for r in results])
-            answers.append("[仅检索模式]")
-        except Exception as e:
-            print(f"  失败: {e}")
-            contexts.append([])
-            answers.append("")
-
-    print("\n执行评估...")
-    result = RAGEvaluator().evaluate(questions, contexts, answers, ground_truths)
-    print("\n=== 评估结果 ===\n")
-    print_json(result)
-
-    if args.output:
-        with open(args.output, "w", encoding="utf-8") as f:
-            json.dump(result, f, ensure_ascii=False, indent=2, default=str)
-        print(f"\n结果已保存到: {args.output}")
-
-    return 0
-
-
 def handle_admin_tables(_: argparse.Namespace) -> int:
     print_table(
         AdminService.list_tables()["tables"], ["kb_id", "status", "row_count", "path"]
@@ -2570,19 +2514,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="使用的Embedding模型ID（如 ollama/bge-m3:latest），默认已启用本地Ollama模型的503重试",
     )
     query_parser.set_defaults(handler=handle_query)
-
-    evaluate_parser = subparsers.add_parser("evaluate", help="RAG 性能评估")
-    evaluate_parser.add_argument("kb_id", nargs="?", help="知识库 ID")
-    evaluate_parser.add_argument(
-        "--dataset",
-        help="测试数据文件 (JSON 格式: questions, ground_truths)",
-    )
-    evaluate_parser.add_argument("--top-k", type=int, default=5, help="检索返回结果数")
-    evaluate_parser.add_argument("--output", help="评估结果输出文件 (JSON)")
-    evaluate_parser.add_argument(
-        "--show-metrics", action="store_true", help="显示评估指标说明"
-    )
-    evaluate_parser.set_defaults(handler=handle_evaluate)
 
     ingest_parser = subparsers.add_parser("ingest", help="提交导入任务")
     ingest_sub = ingest_parser.add_subparsers(dest="ingest_command", required=True)

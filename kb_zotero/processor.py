@@ -113,32 +113,52 @@ class ZoteroImporter:
 
         Args:
             item_id: Zotero 文献 ID
-            prefix: 附件标题前缀标记（默认 [kb]）
+            prefix: 附件标题前缀标记（默认 [kb]，空字符串表示不筛选）
         """
         conn = self.connect()
         cursor = conn.cursor()
 
-        cursor.execute(
-            """
-            SELECT ia.itemID, ia.path, ia.contentType, i.key as item_key, v.value as attachment_title
-            FROM itemAttachments ia
-            JOIN items i ON ia.itemID = i.itemID
-            JOIN itemData d ON d.itemID = ia.itemID AND d.fieldID = 1
-            JOIN itemDataValues v ON d.valueID = v.valueID
-            WHERE (ia.itemID = ? OR ia.parentItemID = ?)
-            AND v.value LIKE ?
-            LIMIT 1
-        """,
-            (item_id, item_id, f"%{prefix}%"),
-        )
-        row = cursor.fetchone()
+        if prefix:
+            cursor.execute(
+                """
+                SELECT ia.itemID, ia.path, ia.contentType,
+                       i.key as item_key, v.value as attachment_title
+                FROM itemAttachments ia
+                JOIN items i ON ia.itemID = i.itemID
+                JOIN itemData d ON d.itemID = ia.itemID AND d.fieldID = 1
+                JOIN itemDataValues v ON d.valueID = v.valueID
+                WHERE (ia.itemID = ? OR ia.parentItemID = ?)
+                AND v.value LIKE ?
+                LIMIT 1
+            """,
+                (item_id, item_id, f"%{prefix}%"),
+            )
+            row = cursor.fetchone()
 
-        if not row or not row["path"]:
-            return None
+            if not row or not row["path"]:
+                return None
 
-        title = row["attachment_title"] if row["attachment_title"] else ""
-        if prefix not in title:
-            return None
+            title = row["attachment_title"] if row["attachment_title"] else ""
+            if prefix not in title:
+                return None
+        else:
+            cursor.execute(
+                """
+                SELECT ia.itemID, ia.path, ia.contentType,
+                       i.key as item_key, v.value as attachment_title
+                FROM itemAttachments ia
+                JOIN items i ON ia.itemID = i.itemID
+                JOIN itemData d ON d.itemID = ia.itemID AND d.fieldID = 1
+                JOIN itemDataValues v ON d.valueID = v.valueID
+                WHERE (ia.itemID = ? OR ia.parentItemID = ?)
+                LIMIT 1
+            """,
+                (item_id, item_id),
+            )
+            row = cursor.fetchone()
+
+            if not row or not row["path"]:
+                return None
 
         path = row["path"]
         item_key = row["item_key"]
