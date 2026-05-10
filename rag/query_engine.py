@@ -277,6 +277,8 @@ class MultiQueryFusionRetriever:
             nodes = retriever.retrieve(query_str)
             for rank, node_with_score in enumerate(nodes):
                 original_score = getattr(node_with_score, "score", 1.0)
+                if original_score is None:
+                    original_score = 1.0
                 all_nodes_with_scores.append((node_with_score, original_score, rank + 1))
         return self._rrf_fusion(all_nodes_with_scores, self.top_k)
 
@@ -377,12 +379,6 @@ class QueryEngineWrapper:
     def _create_retriever(self) -> Any:
         """创建检索器，支持 Auto-Merging 和混合搜索"""
         oversampling = self.settings.retrieval_oversampling_factor
-        if self.use_multi_query and oversampling > 2:
-            logger.info(
-                f"Multi-Query 模式下 oversampling 从 {oversampling}x 降至 2x "
-                f"（多查询变体已提供覆盖度，减少噪声候选）"
-            )
-            oversampling = 2
         base_retriever = self.index.as_retriever(similarity_top_k=self.top_k * oversampling)
 
         docstore = self.index.storage_context.docstore
