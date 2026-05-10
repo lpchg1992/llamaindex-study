@@ -1949,29 +1949,13 @@ def _get_service_status() -> dict:
 
 def _ensure_frontend_built() -> bool:
     frontend_dir = PROJECT_ROOT / "webui"
-    src_dir = frontend_dir / "src"
     dist_dir = frontend_dir / "dist"
-    hash_file = PROJECT_ROOT / ".frontend_src_hash"
 
     if not (frontend_dir / "package.json").exists():
         print(f"❌ 前端目录不存在: {frontend_dir}")
         return False
 
-    import hashlib
-
-    src_hash = subprocess.run(
-        ["find", "src", "-type", "f", "-exec", "md5", "{}", "+"],
-        cwd=str(frontend_dir),
-        capture_output=True,
-        text=True,
-    ).stdout.strip() if src_dir.exists() else ""
-
-    last_hash = hash_file.read_text().strip() if hash_file.exists() else ""
-
-    if dist_dir.exists() and src_hash and src_hash == last_hash:
-        return True
-
-    print("前端源码有变更，开始构建前端...")
+    print("构建前端...")
 
     print("[1/2] 安装前端依赖...")
     result = subprocess.run(
@@ -1990,13 +1974,11 @@ def _ensure_frontend_built() -> bool:
         cwd=str(frontend_dir),
         capture_output=True,
         text=True,
+        env={**os.environ, "PATH": os.environ.get("PATH", "")},
     )
     if result.returncode != 0:
-        print(f"❌ 前端构建失败: {result.stderr}")
+        print(f"❌ 前端构建失败:\n{result.stdout}\n{result.stderr}")
         return False
-
-    if src_hash:
-        hash_file.write_text(src_hash)
 
     print("✅ 前端构建完成")
     return True
