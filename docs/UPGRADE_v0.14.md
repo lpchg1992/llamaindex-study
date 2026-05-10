@@ -18,12 +18,6 @@
 | `llama-index-readers-file` | `>=0.6.0,<0.7.0` | `>=0.6.0,<0.7.0` (保持) |
 | `lancedb` | `>=0.30.1,<0.31.0` | `>=0.6.0,<1.0.0` |
 
-### Qdrant 支持变更
-
-由于 Qdrant 相关的 `llama-index-vector-stores-qdrant` 尚未支持 Python 3.14，该功能暂时禁用。
-
-**如需使用 Qdrant，请确保 Python 版本 < 3.14。**
-
 ## 已知问题
 
 ### 1. SimpleDirectoryReader 隐藏文件过滤

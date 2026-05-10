@@ -146,7 +146,7 @@ curl -X POST http://localhost:37241/kbs/HTE_history/topics/refresh \
 | `CHUNK_STRATEGY` | `hierarchical` | 分块策略：`hierarchical`/`sentence`/`semantic`/`markdown` |
 | `CHUNK_SIZE` | `1024` | 分块大小 |
 | `CHUNK_OVERLAP` | `100` | 分块重叠 |
-| `HIERARCHICAL_CHUNK_SIZES` | `2048,1024,512` | 层级分块各层大小 |
+| `HIERARCHICAL_CHUNK_SIZES` | `1024,512,256` | 层级分块各层大小 |
 | `USE_AUTO_MERGING` | `false` | 启用 Auto-Merging |
 | `USE_HYBRID_SEARCH` | `false` | 启用混合搜索（向量+BM25） |
 | `MAX_CONCURRENT_TASKS` | `10` | 最大并发任务数 |

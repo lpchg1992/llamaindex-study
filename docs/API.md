@@ -1695,11 +1695,8 @@ curl -X POST "http://localhost:37241/search" \
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `VECTOR_STORE_TYPE` | `lancedb` | 向量存储类型（lancedb/qdrant） |
-| `VECTOR_DB_URI` | 空 | 向量数据库 URI |
+| `VECTOR_STORE_TYPE` | `lancedb` | 向量存储类型 |
 | `VECTOR_TABLE_NAME` | `llamaindex` | 向量表名称 |
-| `QDRANT_URL` | `http://localhost:6333` | Qdrant 服务器地址 |
-| `QDRANT_API_KEY` | 空 | Qdrant API 密钥 |
 
 ---
 

@@ -86,7 +86,7 @@
 | Ollama 工具 | `ollama_utils.py` | Embedding 工具 |
 | Embedding 服务 | `embedding_service.py` | Ollama Embedding |
 | 负载均衡 | `embedding_loadbalancer.py` | 多端点负载均衡 |
-| 向量存储 | `vector_store.py` | LanceDB/Chroma/Qdrant |
+| 向量存储 | `vector_store.py` | LanceDB |
 | 查询引擎 | `query_engine.py` | RAG 查询 |
 | 重排序 | `reranker.py` | SiliconFlow Reranker |
 | 节点解析器 | `node_parser.py` | 统一分块（语义分块、父子节点） |
@@ -217,7 +217,7 @@ curl -X POST "http://localhost:37241/query" \
 | `CHUNK_STRATEGY` | `hierarchical` | 分块策略：`hierarchical`/`sentence`/`semantic`/`markdown` |
 | `CHUNK_SIZE` | `1024` | 分块大小 |
 | `CHUNK_OVERLAP` | `100` | 分块重叠 |
-| `HIERARCHICAL_CHUNK_SIZES` | `2048,1024,512` | 层级分块各层大小 |
+| `HIERARCHICAL_CHUNK_SIZES` | `1024,512,256` | 层级分块各层大小 |
 | `MAX_RETRIES` | `5` | 最大重试次数 |
 | `MAX_CONCURRENT_TASKS` | `10` | 最大并发 |
 
