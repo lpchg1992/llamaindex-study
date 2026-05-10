@@ -1872,9 +1872,10 @@ def _stop_api() -> bool:
     return True
 
 
-def _start_api() -> None:
-    """启动 API 服务"""
+def _start_api() -> bool:
+    """启动 API 服务，返回是否成功"""
     import subprocess
+    import tempfile
 
     from rag.config import get_settings
 
@@ -1889,36 +1890,72 @@ def _start_api() -> None:
         )
         time.sleep(2)
         if _is_port_in_use(api_port):
-            print(f"错误: 端口 {api_port} 无法释放，请手动检查")
-            return
+            print(f"❌ 端口 {api_port} 无法释放，请手动检查")
+            return False
 
     pid_file = PROJECT_ROOT / ".api.pid"
-    print("启动 API 服务...")
-    subprocess.Popen(
-        [str(PROJECT_ROOT / "scripts/run_api.sh"), "start"],
-        cwd=str(PROJECT_ROOT),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
-    # 等待 API 进程启动
-    time.sleep(5)
-    # 检查实际 API 进程 PID（uvicorn）
-    try:
-        result = subprocess.run(
-            f"lsof -ti:37241 2>/dev/null | head -1",
-            shell=True,
-            capture_output=True,
-            text=True,
+    log_dir = PROJECT_ROOT / "logs"
+    log_dir.mkdir(exist_ok=True)
+
+    # 捕获 stderr 以便启动失败时展示错误
+    stderr_file = log_dir / "api_startup.log"
+
+    print(f"启动 API 服务 (Port: {api_port})...")
+    with open(stderr_file, "w") as err_fp:
+        subprocess.Popen(
+            [str(PROJECT_ROOT / "scripts/run_api.sh"), "start"],
+            cwd=str(PROJECT_ROOT),
+            stdout=err_fp,
+            stderr=err_fp,
+            start_new_session=True,
         )
-        actual_pid = result.stdout.strip()
-        if actual_pid:
-            pid_file.write_text(actual_pid)
-            print(f"API 服务已启动 (PID: {actual_pid}, Port: 37241)")
-        else:
-            print("API 服务已启动 (PID unknown)")
+
+    # 等待启动并做健康检查（最多等 15 秒）
+    for attempt in range(1, 4):
+        time.sleep(5)
+        try:
+            result = subprocess.run(
+                ["curl", "-sf", f"http://localhost:{api_port}/health"],
+                capture_output=True, text=True, timeout=3,
+            )
+            if result.returncode == 0:
+                # 健康检查通过
+                pid_result = subprocess.run(
+                    f"lsof -ti:{api_port} 2>/dev/null | head -1",
+                    shell=True, capture_output=True, text=True,
+                )
+                actual_pid = pid_result.stdout.strip()
+                if actual_pid:
+                    pid_file.write_text(actual_pid)
+                print(f"✅ API 运行中 (PID: {actual_pid or 'unknown'}, Port: {api_port})")
+                return True
+        except Exception:
+            pass
+        print(f"   等待中... ({attempt * 5}s)")
+
+    # 启动失败 —— 展示错误日志
+    print(f"\n❌ API 启动失败 (Port: {api_port})")
+    _show_startup_errors(stderr_file)
+
+    return False
+
+
+def _show_startup_errors(log_file: Path) -> None:
+    """展示启动日志中的错误信息"""
+    if not log_file.exists():
+        return
+    try:
+        lines = log_file.read_text(errors="replace").splitlines()
+        error_lines = [
+            l for l in lines
+            if any(kw in l for kw in ("Error", "error", "Traceback", "Failed", "✗"))
+        ]
+        if error_lines:
+            print("  最近的错误日志：")
+            for line in error_lines[-12:]:
+                print(f"    {line[:200]}")
     except Exception:
-        print("API 服务已启动")
+        pass
 
 
 def _stop_frontend() -> bool:
@@ -1948,24 +1985,49 @@ def _stop_frontend() -> bool:
     return False
 
 
-def _start_frontend() -> None:
-    """启动前端服务"""
+def _start_frontend() -> bool:
+    """启动前端服务，返回是否成功"""
     import subprocess
 
     pid_file = PROJECT_ROOT / ".frontend.pid"
     frontend_dir = PROJECT_ROOT / "webui"
 
-    print("启动前端服务...")
-    proc = subprocess.Popen(
-        ["npm", "run", "dev"],
-        cwd=str(frontend_dir),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
-    # 写入 PID
-    pid_file.write_text(str(proc.pid))
-    print(f"前端服务已启动 (PID: {proc.pid}, Port: 5173)")
+    if not frontend_dir.exists():
+        print(f"❌ 前端目录不存在: {frontend_dir}")
+        return False
+
+    # 清理 Vite 缓存
+    vite_cache = frontend_dir / "node_modules" / ".vite"
+    if vite_cache.exists():
+        import shutil
+        shutil.rmtree(vite_cache)
+
+    print(f"启动前端服务 (Port: 5173)...")
+    log_dir = PROJECT_ROOT / "logs"
+    log_dir.mkdir(exist_ok=True)
+    frontend_log = log_dir / "frontend_startup.log"
+
+    with open(frontend_log, "w") as log_fp:
+        proc = subprocess.Popen(
+            ["npm", "run", "dev"],
+            cwd=str(frontend_dir),
+            stdout=log_fp,
+            stderr=log_fp,
+            start_new_session=True,
+        )
+
+    # 等待端口就绪
+    for attempt in range(1, 5):
+        time.sleep(3)
+        if _is_port_in_use(5173):
+            pid_file.write_text(str(proc.pid))
+            print(f"✅ 前端运行中 (PID: {proc.pid}, Port: 5173)")
+            return True
+        print(f"   等待中... ({attempt * 3}s)")
+
+    print(f"\n❌ 前端启动失败 (Port: 5173)")
+    _show_startup_errors(frontend_log)
+    return False
 
 
 def _is_port_in_use(port: int) -> bool:
@@ -1984,11 +2046,16 @@ def _is_port_in_use(port: int) -> bool:
 
 def _get_service_status() -> dict:
     """获取所有服务状态"""
+    from rag.config import get_settings
+
+    settings = get_settings()
+    api_port = getattr(settings, "api_port", 37241)
+
     api_pid_file = PROJECT_ROOT / ".api.pid"
     frontend_pid_file = PROJECT_ROOT / ".frontend.pid"
 
     status = {
-        "api": {"running": False, "pid": None, "port": 37241},
+        "api": {"running": False, "pid": None, "port": api_port},
         "scheduler": {"running": False, "pid": None},
         "frontend": {"running": False, "pid": None, "port": 5173},
     }
@@ -1998,7 +2065,7 @@ def _get_service_status() -> dict:
     if api_pid and _is_process_running(api_pid):
         status["api"]["running"] = True
         status["api"]["pid"] = api_pid
-    elif _is_port_in_use(37241):
+    elif _is_port_in_use(api_port):
         status["api"]["running"] = True
         status["api"]["pid"] = "unknown (port in use)"
 
@@ -2021,24 +2088,26 @@ def _get_service_status() -> dict:
 def handle_service_start(args: argparse.Namespace) -> int:
     """启动所有服务"""
     status = _get_service_status()
+    api_ok = frontend_ok = True
 
-    # 前端
     if status["frontend"]["running"]:
         print(f"前端服务已在运行 (PID: {status['frontend']['pid']})")
     else:
-        _start_frontend()
+        frontend_ok = _start_frontend()
 
-    # API
     if status["api"]["running"]:
         print(f"API 服务已在运行 (PID: {status['api']['pid']})")
     else:
-        _start_api()
+        api_ok = _start_api()
 
-    # Scheduler 随 API 一同启停
-    print(f"调度器随 API 一同管理")
+    print(f"\n调度器随 API 一同管理")
 
-    print("\n所有服务启动完成")
-    return 0
+    if api_ok and frontend_ok:
+        print("所有服务启动完成")
+        return 0
+    else:
+        print("⚠️  部分服务启动失败")
+        return 1
 
 
 def handle_service_stop(args: argparse.Namespace) -> int:
@@ -2054,18 +2123,27 @@ def handle_service_stop(args: argparse.Namespace) -> int:
 
 def handle_service_restart(args: argparse.Namespace) -> int:
     """重启所有服务"""
-    print("重启所有服务...")
+    print("重启所有服务...\n")
 
     _stop_frontend()
     _stop_api()
-
     time.sleep(2)
 
-    _start_api()
-    _start_frontend()
+    api_ok = _start_api()
+    frontend_ok = _start_frontend()
 
-    print("\n所有服务重启完成")
-    return 0
+    print()
+    if api_ok and frontend_ok:
+        print("✅ 所有服务重启完成")
+        return 0
+    else:
+        print("⚠️  部分服务启动失败，请检查上方错误信息")
+        if not api_ok:
+            print("   提示: 检查 Python 环境及 .env 配置")
+            print(f"   日志: {PROJECT_ROOT}/logs/api_watchdog.log")
+        if not frontend_ok:
+            print("   提示: 确保 webui 目录下已执行 npm install")
+        return 1
 
 
 def handle_service_status(args: argparse.Namespace) -> int:
@@ -2123,11 +2201,8 @@ CONFIG_OPTION_DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "RESPONSE_MODE": ("检索", "答案生成模式"),
     "RERANK_MODEL": ("Reranker", "重排序模型名称"),
     "USE_RERANKER": ("Reranker", "是否启用重排序"),
-    "VECTOR_STORE_TYPE": ("向量数据库", "向量存储类型（lancedb/qdrant）"),
-    "VECTOR_DB_URI": ("向量数据库", "向量数据库 URI"),
+    "VECTOR_STORE_TYPE": ("向量数据库", "向量存储类型"),
     "VECTOR_TABLE_NAME": ("向量数据库", "向量表名称"),
-    "QDRANT_URL": ("向量数据库", "Qdrant 服务器地址"),
-    "QDRANT_API_KEY": ("向量数据库", "Qdrant API 密钥"),
     "CHUNK_SIZE": ("任务处理", "文本分块大小"),
     "CHUNK_OVERLAP": ("任务处理", "文本分块重叠"),
     "EMBED_BATCH_SIZE": ("任务处理", "Embedding 批处理大小"),
