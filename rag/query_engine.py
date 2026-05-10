@@ -306,7 +306,7 @@ class QueryEngineWrapper:
             top_k: 检索返回的节点数量
             use_reranker: 是否使用 reranker（None=读取 .env 配置，True=启用，False=禁用）
             use_auto_merging: 是否使用 Auto-Merging Retriever（需要知识库使用 HierarchicalNodeParser 构建）
-            auto_merging_threshold: 自动合并阈值（0-1），默认 0.5
+            auto_merging_threshold: 自动合并阈值（0-1），默认从配置读取
             mode: 检索模式 ("vector", "hybrid")，默认 "vector"
             use_hyde: 是否使用 HyDE（假设文档嵌入）
             use_multi_query: 是否使用多查询转换
@@ -363,7 +363,8 @@ class QueryEngineWrapper:
 
     def _create_retriever(self) -> Any:
         """创建检索器，支持 Auto-Merging 和混合搜索"""
-        base_retriever = self.index.as_retriever(similarity_top_k=self.top_k * 3)
+        oversampling = self.settings.retrieval_oversampling_factor
+        base_retriever = self.index.as_retriever(similarity_top_k=self.top_k * oversampling)
 
         docstore = self.index.storage_context.docstore
         is_docstore_empty = not docstore or len(docstore.docs) == 0
@@ -418,7 +419,7 @@ class QueryEngineWrapper:
                     merger = AutoMergingRetriever(
                         base_retriever,
                         storage_context,
-                        simple_ratio_thresh=0.25,
+                        simple_ratio_thresh=self.auto_merging_threshold,
                         verbose=True,
                     )
                     logger.info("启用 Auto-Merging Retriever")
@@ -640,9 +641,12 @@ def create_query_engine(
     use_reranker: Optional[bool] = None,
     response_mode: str = "compact",
     model_id: Optional[str] = None,
+    auto_merging_threshold: Optional[float] = None,
 ) -> Any:
     from kb_core.services import VectorStoreService
+    from rag.config import get_settings
 
+    settings = get_settings()
     vector_store = VectorStoreService.get_vector_store(kb_id)
 
     index = vector_store.load_index()
@@ -654,6 +658,9 @@ def create_query_engine(
         top_k=top_k,
         use_reranker=use_reranker,
         use_auto_merging=use_auto_merging,
+        auto_merging_threshold=auto_merging_threshold
+        if auto_merging_threshold is not None
+        else settings.auto_merging_simple_ratio_thresh,
         mode=mode,
         use_hyde=use_hyde,
         use_multi_query=use_multi_query,

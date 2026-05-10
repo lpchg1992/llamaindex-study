@@ -9,12 +9,14 @@
 """
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import List, Optional, Union
 
 from llama_index.core.schema import Document as LlamaDocument
+
+from kb_processing.reference_detector import apply_reference_strategy
 
 
 class ChunkStrategy(str, Enum):
@@ -251,6 +253,7 @@ class SmartDocumentProcessor:
         """
         node_parser = self.get_node_parser(embed_model=embed_model)
         nodes = node_parser.get_nodes_from_documents(documents, show_progress=show_progress)
+        nodes = apply_reference_strategy(nodes)
         return nodes
 
     def process_file(

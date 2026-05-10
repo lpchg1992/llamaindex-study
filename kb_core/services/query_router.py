@@ -1,3 +1,4 @@
+import hashlib
 import re
 from typing import List, Optional, Dict, Any, Callable
 
@@ -303,15 +304,21 @@ class QueryRouter:
                 "kbs_queried": kb_ids,
             }
 
-        # Sort sources by score descending
+        # Sort sources by score descending and deduplicate
         all_sources.sort(key=lambda x: x.get("score", 0), reverse=True)
 
-        # Combine responses from all KBs
-        combined_response = "\n\n---\n\n".join(kb_responses)
+        unique_sources = _deduplicate_sources(all_sources)
+
+        if len(kb_responses) <= 1:
+            combined_response = kb_responses[0] if kb_responses else "No results"
+        else:
+            combined_response = _synthesize_cross_kb_response(
+                query, kb_responses, kb_ids, model_id
+            )
 
         return {
             "response": combined_response,
-            "sources": all_sources[:top_k],
+            "sources": unique_sources[:top_k],
             "kbs_queried": kb_ids,
         }
 
@@ -495,3 +502,45 @@ class QueryRouter:
         )
 
 # =============================================================================
+
+
+def _deduplicate_sources(sources: list) -> list:
+    seen_hashes = set()
+    unique = []
+    for s in sorted(sources, key=lambda x: x.get("score", 0), reverse=True):
+        text_prefix = s.get("text", "")[:200]
+        text_hash = hashlib.md5(text_prefix.encode()).hexdigest()
+        if text_hash not in seen_hashes:
+            seen_hashes.add(text_hash)
+            unique.append(s)
+    return unique
+
+
+def _synthesize_cross_kb_response(
+    query: str,
+    kb_responses: list,
+    kb_ids: list,
+    model_id: Optional[str] = None,
+) -> str:
+    try:
+        from rag.ollama_utils import create_llm
+
+        parts = []
+        for i, resp in enumerate(kb_responses):
+            parts.append(f"[Knowledge Base {kb_ids[i]}]:\n{resp}")
+        combined = "\n\n".join(parts)
+
+        prompt = (
+            "You are synthesizing answers from multiple knowledge bases. "
+            "Combine the information into a single coherent answer. "
+            "Remove duplicate information. If sources contradict, note the discrepancy.\n\n"
+            f"User Query: {query}\n\n"
+            f"Knowledge Base Responses:\n{combined}\n\n"
+            "Synthesized Answer:"
+        )
+
+        llm = create_llm(model_id=model_id)
+        response = llm.complete(prompt)
+        return str(response).strip()
+    except Exception:
+        return "\n\n---\n\n".join(kb_responses)

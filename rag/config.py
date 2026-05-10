@@ -42,7 +42,6 @@ class Settings:
     _DEFAULT_USE_RERANKER: ClassVar[bool] = False
     _DEFAULT_VECTOR_STORE_TYPE: ClassVar[str] = "lancedb"
     _DEFAULT_VECTOR_TABLE_NAME: ClassVar[str] = "llamaindex"
-    _DEFAULT_QDRANT_URL: ClassVar[str] = "http://localhost:6333"
     _DEFAULT_API_PORT: ClassVar[int] = 37241
     _DEFAULT_PROGRESS_UPDATE_INTERVAL: ClassVar[int] = 10
     _DEFAULT_MAX_CONCURRENT_TASKS: ClassVar[int] = 10
@@ -88,6 +87,12 @@ class Settings:
         self.use_auto_merging: bool = (
             os.getenv("USE_AUTO_MERGING", "false").lower() == "true"
         )
+        self.retrieval_oversampling_factor: int = int(
+            os.getenv("RETRIEVAL_OVERSAMPLING_FACTOR", "5")
+        )
+        self.auto_merging_simple_ratio_thresh: float = float(
+            os.getenv("AUTO_MERGING_SIMPLE_RATIO_THRESH", "0.5")
+        )
         self.use_hybrid_search: bool = (
             os.getenv("USE_HYBRID_SEARCH", "false").lower() == "true"
         )
@@ -110,7 +115,7 @@ class Settings:
         self.chunk_strategy: str = os.getenv("CHUNK_STRATEGY", "hierarchical")
         self.hierarchical_chunk_sizes: List[int] = [
             int(x)
-            for x in os.getenv("HIERARCHICAL_CHUNK_SIZES", "2048,1024,512").split(",")
+            for x in os.getenv("HIERARCHICAL_CHUNK_SIZES", "1024,512,256").split(",")
         ]
 
         # ========== Query Transform 配置 ==========
@@ -126,16 +131,22 @@ class Settings:
         # ========== Reranker 配置 ==========
         self.use_reranker: bool = os.getenv("USE_RERANKER", "true").lower() == "true"
 
+        # ========== 参考文献过滤配置 ==========
+        self.reference_strategy: str = os.getenv(
+            "REFERENCE_STRATEGY", "flag"
+        )  # "flag" | "skip" | "none"
+        VALID_STRATEGIES = {"flag", "skip", "none"}
+        if self.reference_strategy not in VALID_STRATEGIES:
+            logger.warning(f"Invalid REFERENCE_STRATEGY='{self.reference_strategy}', defaulting to 'flag'")
+            self.reference_strategy = "flag"
+
         # ========== 向量数据库配置 ==========
         self.vector_store_type: str = os.getenv(
             "VECTOR_STORE_TYPE", self._DEFAULT_VECTOR_STORE_TYPE
         )
-        self.vector_db_uri: str = os.getenv("VECTOR_DB_URI", "")
         self.vector_table_name: str = os.getenv(
             "VECTOR_TABLE_NAME", self._DEFAULT_VECTOR_TABLE_NAME
         )
-        self.qdrant_url: str = os.getenv("QDRANT_URL", self._DEFAULT_QDRANT_URL)
-        self.qdrant_api_key: Optional[str] = os.getenv("QDRANT_API_KEY")
 
         # ========== OCR 配置 ==========
         self.doc2x_api_key: Optional[str] = os.getenv("DOC2X_API_KEY")
@@ -175,6 +186,46 @@ class Settings:
             os.getenv("LLAMAINDEX_STORAGE_BASE", str(Path.home() / ".llamaindex" / "storage")),
             str(Path.home() / ".llamaindex" / "storage"),
         )
+
+        self._defaults = self._snapshot_defaults()
+
+    def _snapshot_defaults(self) -> dict:
+        return {
+            "embed_batch_size": self.embed_batch_size,
+            "top_k": self.top_k,
+            "use_semantic_chunking": self.use_semantic_chunking,
+            "use_hybrid_search": self.use_hybrid_search,
+            "use_auto_merging": self.use_auto_merging,
+            "auto_merging_simple_ratio_thresh": self.auto_merging_simple_ratio_thresh,
+            "retrieval_oversampling_factor": self.retrieval_oversampling_factor,
+            "use_hyde": self.use_hyde,
+            "use_multi_query": self.use_multi_query,
+            "num_multi_queries": self.num_multi_queries,
+            "hybrid_search_alpha": self.hybrid_search_alpha,
+            "hybrid_search_mode": self.hybrid_search_mode,
+            "chunk_strategy": self.chunk_strategy,
+            "chunk_size": self.chunk_size,
+            "chunk_overlap": self.chunk_overlap,
+            "hierarchical_chunk_sizes": self.hierarchical_chunk_sizes,
+            "use_reranker": self.use_reranker,
+            "reference_strategy": self.reference_strategy,
+            "response_mode": self.response_mode,
+            "progress_update_interval": self.progress_update_interval,
+            "max_concurrent_tasks": self.max_concurrent_tasks,
+            "embed_concurrent_pool_size": self.embed_concurrent_pool_size,
+            "embed_endpoint_max_concurrent": self.embed_endpoint_max_concurrent,
+            "max_retries": self.max_retries,
+            "retry_delay": self.retry_delay,
+            "ollama_short_text_threshold": self.ollama_short_text_threshold,
+            "ollama_fanout_text_threshold": self.ollama_fanout_text_threshold,
+            "heartbeat_interval": self.heartbeat_interval,
+            "stale_task_timeout": self.stale_task_timeout,
+            "mineru_pipeline_id": self.mineru_pipeline_id,
+            "mineru_api_key": self.mineru_api_key or "",
+            "doc2x_api_key": self.doc2x_api_key or "",
+            "api_port": self.api_port,
+            "cors_extra_origins": self.cors_extra_origins,
+        }
 
     def __repr__(self) -> str:
         return f"Settings(top_k={self.top_k})"
@@ -234,33 +285,56 @@ class Settings:
         return result
 
     def load_runtime_settings(self) -> None:
-        """从 JSON 文件加载运行时设置（启动时调用）"""
+        """从 JSON 文件加载运行时设置 — 仅应用与当前默认值不同的缓存值"""
         if not RUNTIME_SETTINGS_FILE.exists():
             return
         try:
             with open(RUNTIME_SETTINGS_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
+            applied = 0
             for key, value in data.items():
-                if hasattr(self, key):
-                    try:
-                        setattr(self, key, value)
-                    except (TypeError, ValueError):
-                        pass
-            logger.debug(f"已从 {RUNTIME_SETTINGS_FILE} 加载运行时设置")
+                if not hasattr(self, key):
+                    continue
+                default = self._defaults.get(key)
+                if default is not None and isinstance(value, type(default)):
+                    if isinstance(value, float):
+                        if abs(value - default) < 1e-9:
+                            continue
+                    elif value == default:
+                        continue
+                try:
+                    setattr(self, key, value)
+                    applied += 1
+                except (TypeError, ValueError):
+                    pass
+            logger.debug(
+                f"已从 {RUNTIME_SETTINGS_FILE} 加载运行时设置 ({applied} 项覆盖, {len(data)} 项缓存)"
+            )
         except Exception as e:
             logger.warning(f"加载运行时设置失败: {e}")
 
     def save_runtime_settings(self, settings_dict: dict) -> None:
-        """保存运行时设置到 JSON 文件"""
+        """保存运行时设置到 JSON 文件（仅保存与默认值不同的字段）"""
         try:
             existing = {}
             if RUNTIME_SETTINGS_FILE.exists():
                 with open(RUNTIME_SETTINGS_FILE, "r", encoding="utf-8") as f:
                     existing = json.load(f)
-            existing.update(settings_dict)
-            with open(RUNTIME_SETTINGS_FILE, "w", encoding="utf-8") as f:
-                json.dump(existing, f, indent=2, ensure_ascii=False)
-            logger.debug(f"运行时设置已保存到 {RUNTIME_SETTINGS_FILE}")
+            delta = {}
+            for key, value in settings_dict.items():
+                default = self._defaults.get(key)
+                if default is None:
+                    delta[key] = value
+                elif isinstance(value, float) and isinstance(default, float):
+                    if abs(value - default) > 1e-9:
+                        delta[key] = value
+                elif value != default:
+                    delta[key] = value
+            if delta:
+                existing.update(delta)
+                with open(RUNTIME_SETTINGS_FILE, "w", encoding="utf-8") as f:
+                    json.dump(existing, f, indent=2, ensure_ascii=False)
+                logger.debug(f"运行时设置已保存 (delta): {list(delta.keys())}")
         except Exception as e:
             logger.error(f"保存运行时设置失败: {e}")
             raise

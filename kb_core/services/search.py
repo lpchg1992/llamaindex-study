@@ -90,7 +90,9 @@ class SearchService:
         if index is None:
             return []
 
-        base_retriever = index.as_retriever(similarity_top_k=top_k * 5)
+        base_retriever = index.as_retriever(
+            similarity_top_k=top_k * settings.retrieval_oversampling_factor
+        )
 
         _use_auto_merging = (
             use_auto_merging
@@ -114,7 +116,7 @@ class SearchService:
                     merger = AutoMergingRetriever(
                         base_retriever,
                         index.storage_context,
-                        simple_ratio_thresh=0.25,
+                        simple_ratio_thresh=settings.auto_merging_simple_ratio_thresh,
                         verbose=False,
                     )
                     retriever = merger
@@ -150,6 +152,8 @@ class SearchService:
                 logger.info("SearchService: Reranker 已应用")
             except Exception as e:
                 logger.warning(f"SearchService Reranker 应用失败: {e}")
+
+        results = SearchService._downrank_references(results)
 
         return [
             {
@@ -203,6 +207,30 @@ class SearchService:
         return filtered
 
     @staticmethod
+    def _downrank_references(results: List) -> List:
+        if not results:
+            return results
+
+        strategy = get_settings().reference_strategy
+        if strategy == "none":
+            return results
+
+        for r in results:
+            node = getattr(r, "node", None)
+            if node is None:
+                continue
+            metadata = getattr(node, "metadata", {}) or {}
+            is_ref = metadata.get("is_reference", False)
+            if is_ref:
+                if strategy == "skip":
+                    r.score = 0.0
+                else:
+                    r.score *= 0.3
+
+        results.sort(key=lambda x: x.score or 0.0, reverse=True)
+        return results
+
+    @staticmethod
     def _create_hybrid_retriever(
         vector_retriever: Any,
         index: Any,
@@ -227,7 +255,7 @@ class SearchService:
 
         hybrid_retriever = VectorIndexRetriever(
             index,
-            similarity_top_k=top_k,
+            similarity_top_k=top_k * settings.retrieval_oversampling_factor,
             vector_store_query_mode=VectorStoreQueryMode.HYBRID,
             alpha=settings.hybrid_search_alpha,
         )
@@ -365,8 +393,10 @@ class SearchService:
             )
             response = query_engine.query(query)
             logger.info(
-                f"[SearchService.query] fallback response={str(response)[:100]}, source_nodes={len(response.source_nodes)}"
+                f"[SearchService.query] response={str(response)[:100]}, source_nodes={len(response.source_nodes)}"
             )
+
+        response.source_nodes = SearchService._downrank_references(list(response.source_nodes))
 
         return {
             "response": str(response),
