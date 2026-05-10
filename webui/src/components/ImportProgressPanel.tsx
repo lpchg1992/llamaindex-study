@@ -48,39 +48,52 @@ export function ImportProgressPanel({
       wsUrl = `${protocol}//${window.location.host}/ws/tasks`
     }
     const ws = new WebSocket(wsUrl)
-    
+
     ws.onmessage = (event) => {
       try {
         const message = JSON.parse(event.data)
         if (message.type === 'task_update' && message.task_id === taskId) {
           const data = message.data
-          
+
           if (data.status === 'completed' || data.status === 'failed') {
-            setLocalDocuments(prev => prev.map(doc => ({
-              ...doc,
-              status: data.status === 'completed' ? 'success' as const : 'failed' as const,
-              error: data.error
-            })))
             ws.close()
             return
           }
 
-          if (data.message) {
-            const match = data.message.match(/\[(\d+)\/(\d+)\]\s*处理:\s*(\w+)\s*-\s*(.+)/)
-            if (match) {
-              const current = parseInt(match[1], 10)
-              
-              setLocalDocuments(prev => prev.map((doc, index) => {
-                const isCurrentItem = index + 1 === current
-                const isProcessed = index + 1 < current
-                return {
-                  ...doc,
-                  status: isCurrentItem ? 'processing' as const : 
-                         isProcessed ? 'success' as const : 
-                         doc.status === 'failed' ? 'failed' as const : 'pending' as const
-                }
-              }))
+          // Use structured file_progress data — works for ALL import types
+          // (obsidian, generic, selective, zotero, revector)
+          const fileProgress: Array<{
+            file_id: string
+            file_name: string
+            status: string
+            total_chunks: number
+            processed_chunks: number
+            error?: string
+          }> = data.file_progress || []
+
+          if (fileProgress.length > 0) {
+            const statusMap: Record<string, DocumentProgress['status']> = {
+              completed: 'success',
+              failed: 'failed',
+              cancelled: 'failed',
+              processing: 'processing',
+              embedding: 'processing',
+              writing: 'processing',
             }
+            setLocalDocuments(prev => {
+              const prevMap = new Map(prev.map(d => [d.id, d]))
+              fileProgress.forEach(fp => {
+                prevMap.set(fp.file_id, {
+                  id: fp.file_id,
+                  name: fp.file_name,
+                  status: statusMap[fp.status] || 'pending',
+                  chunksTotal: fp.total_chunks,
+                  chunksProcessed: fp.processed_chunks,
+                  error: fp.error,
+                })
+              })
+              return Array.from(prevMap.values())
+            })
           }
         }
       } catch (e) {

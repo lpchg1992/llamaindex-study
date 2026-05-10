@@ -203,19 +203,6 @@ export interface VendorInfo {
   is_active: boolean
 }
 
-export interface EvaluateRequest {
-  questions: string[]
-  ground_truths: string[]
-  top_k?: number
-}
-
-export interface EvaluateResponse {
-  faithfulness: number
-  answer_relevancy: number
-  context_precision: number
-  context_recall: number
-}
-
 export interface TopicInfo {
   kb_id: string
   topics: string[]

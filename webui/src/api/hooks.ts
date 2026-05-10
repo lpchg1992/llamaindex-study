@@ -14,8 +14,6 @@ import type {
   ZoteroIngestRequest,
   ModelInfo,
   VendorInfo,
-  EvaluateRequest,
-  EvaluateResponse,
   TopicInfo,
   ZoteroCollectionsResponse,
   ZoteroCollectionStructure,
@@ -316,28 +314,6 @@ export function useKBTopics(kbId: string) {
       return data
     },
     enabled: !!kbId,
-  })
-}
-
-export function useEvaluate() {
-  return useMutation<EvaluateResponse, Error, { kbId: string; req: EvaluateRequest }>({
-    mutationFn: async ({ kbId, req }) => {
-      const { data } = await apiClient.post<EvaluateResponse>(
-        `${API_BASE}/evaluate/${kbId}`,
-        req
-      )
-      return data
-    },
-  })
-}
-
-export function useEvaluateMetrics() {
-  return useQuery({
-    queryKey: ['evaluate-metrics'],
-    queryFn: async () => {
-      const { data } = await apiClient.get(`${API_BASE}/evaluate/metrics`)
-      return data
-    },
   })
 }
 
