@@ -218,11 +218,21 @@ class LanceDBVectorStore:
         )
         nodes = node_parser.get_nodes_from_documents(documents)
 
-        print(f"   🔄 正在生成 {len(nodes)} 个节点的 embedding...")
-        for node in nodes:
+        filtered_nodes = [
+            n for n in nodes
+            if n.get_content() and n.get_content().strip()
+        ]
+        if len(filtered_nodes) < len(nodes):
+            logger.warning(
+                f"跳过 {len(nodes) - len(filtered_nodes)} 个空文本节点 "
+                f"（HierarchicalNodeParser 父节点常见，不影响检索质量）"
+            )
+
+        print(f"   🔄 正在生成 {len(filtered_nodes)} 个节点的 embedding...")
+        for node in filtered_nodes:
             node.embedding = embed_model.get_text_embedding(node.get_content())
 
-        vector_store.add(nodes)
+        vector_store.add(filtered_nodes)
 
         index = VectorStoreIndex.from_vector_store(
             vector_store=vector_store,

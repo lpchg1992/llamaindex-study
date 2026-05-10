@@ -154,6 +154,7 @@ class SearchService:
                 logger.warning(f"SearchService Reranker 应用失败: {e}")
 
         results = SearchService._downrank_references(results)
+        results = SearchService._filter_empty_text(results)
 
         return [
             {
@@ -165,17 +166,26 @@ class SearchService:
         ]
 
     @staticmethod
+    def _filter_empty_text(results: List) -> List:
+        """过滤空文本节点，防止 HierarchicalNodeParser 父节点污染检索结果"""
+        if not results:
+            return results
+        filtered = []
+        for r in results:
+            if isinstance(r, dict):
+                text = r.get("text", "")
+            else:
+                text = getattr(r, "text", None) or ""
+            if text and text.strip():
+                filtered.append(r)
+        return filtered
+
+    @staticmethod
     def _prefer_parent_nodes(results: List) -> List:
         """优先返回父节点而非子节点
         
         在 Auto-Merging 检索模式下，优先返回较大的父节点，
         减少冗余并提供更完整的上下文。
-        
-        Args:
-            results: 检索结果列表
-            
-        Returns:
-            去重排序后的结果
         """
         if not results:
             return results
@@ -397,6 +407,7 @@ class SearchService:
             )
 
         response.source_nodes = SearchService._downrank_references(list(response.source_nodes))
+        response.source_nodes = SearchService._filter_empty_text(response.source_nodes)
 
         return {
             "response": str(response),
