@@ -219,7 +219,6 @@ TaskScheduler.run()
 │  ├── node_parser.py        # 统一节点解析器               │
 │  ├── query_transform.py    # HyDE、多查询转换、Query Rewrite│
 │  ├── response_synthesizer.py # 答案生成模式配置            │
-│  └── rag_evaluator.py      # RAG 评估（Ragas 框架）       │
 └─────────────────────────────────────────────────────────────┘
 ```
 

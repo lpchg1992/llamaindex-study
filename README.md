@@ -21,9 +21,6 @@
 - 🏗️ **层级分块** — 父子节点结构（默认），支持 Auto-Merging
 - 🧩 **语义分块** — 基于 embedding 相似度的智能分块
 
-### 质量评估
-- 📊 **RAG 评估** — 基于 Ragas 框架评估 faithfulness、answer_relevancy、context_precision、context_recall
-
 ## 快速开始
 
 ### 环境要求
@@ -183,8 +180,7 @@ llamaindex-study/
 │   ├── query_engine.py       # 查询引擎
 │   ├── node_parser.py        # 节点解析器
 │   ├── embedding_service.py  # Embedding 服务
-│   ├── reranker.py           # 重排序
-│   └── rag_evaluator.py      # RAG 评估
+│   └── reranker.py           # 重排序
 ├── kb_core/                  # 核心服务（业务逻辑）
 │   ├── services/             # 服务层（拆分后）
 │   │   ├── vector_store.py   # 向量存储服务
