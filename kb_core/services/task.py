@@ -216,8 +216,8 @@ class TaskService:
                 "message": f"任务当前状态为 {task.status}，无法暂停",
             }
 
-        queue.update_status(task_id, TaskStatus.PAUSED.value, "已暂停")
         task_executor.pause_task(task_id)
+        queue.update_status(task_id, TaskStatus.PAUSED.value, "已暂停")
         return {
             "status": "paused",
             "task_id": task_id,
@@ -269,8 +269,8 @@ class TaskService:
 
         for task in tasks:
             if task.status == TaskStatus.RUNNING.value:
-                queue.update_status(task.task_id, TaskStatus.PAUSED.value, "已暂停")
                 task_executor.pause_task(task.task_id)
+                queue.update_status(task.task_id, TaskStatus.PAUSED.value, "已暂停")
                 paused.append(task.task_id)
             else:
                 failed.append(task.task_id)

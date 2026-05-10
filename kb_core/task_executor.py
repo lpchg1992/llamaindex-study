@@ -275,6 +275,13 @@ class TaskExecutor:
             if task and task.status == TaskStatus.PAUSED.value:
                 has_pause = True
 
+        # Retry: catch race where API wrote DB but command not yet in queue
+        if not has_pause:
+            await asyncio.sleep(0.05)
+            task = self.queue.get_task(task_id)
+            if task and task.status == TaskStatus.PAUSED.value:
+                has_pause = True
+
         if not has_pause:
             return False
 
@@ -592,6 +599,10 @@ class TaskExecutor:
                             task.task_id, obsidian_file_id,
                             processed_chunks=embedded_count,
                         )
+                        if embedded_count % 3 == 0:
+                            await self._notify_progress(task.task_id)
+                        if embedded_count % 5 == 0 and await self._check_cancelled(task.task_id):
+                            return
 
                     failed_ids = []
                     failed_errors: Dict[str, List[str]] = {}
@@ -914,13 +925,20 @@ class TaskExecutor:
 
                     def make_progress_callback(fid: str):
                         last_notified = [-1]
+                        status_transitioned = [False]
                         def cb(processed: int, total: int):
                             self.queue.update_file_progress(
                                 task_id, fid,
                                 total_chunks=total,
                                 processed_chunks=processed,
                             )
-                            if processed - last_notified[0] >= 10 or processed == total or processed == 0:
+                            if not status_transitioned[0] and total > 0:
+                                status_transitioned[0] = True
+                                self.queue.update_file_progress(
+                                    task_id, fid,
+                                    status=FileStatus.EMBEDDING.value,
+                                )
+                            if processed - last_notified[0] >= 3 or processed == total or processed == 0:
                                 last_notified[0] = processed
                                 all_processed, all_total = self.queue.compute_chunk_progress(task_id)
                                 if all_total > 0:
@@ -1266,14 +1284,55 @@ class TaskExecutor:
                         f"({len(text)} → {MAX_TEXT_LEN} chars)"
                     )
 
-            embedding_results = await processor.process_batch(texts)
+            # Streaming embedding — yields per-chunk for real-time progress
+            embedding_results: List = [None] * len(texts)
+            streamed_count = 0
+            async for idx, result in processor.process_batch_streaming(
+                texts, base_idx=0
+            ):
+                embedding_results[idx] = result
+                streamed_count += 1
+
+                current_processed = processed + streamed_count
+                self.queue.update_file_progress(
+                    task_id, file_id,
+                    processed_chunks=current_processed,
+                    total_chunks=total_chunks,
+                )
+
+                # Periodic cancellation check — allows interruption during embedding
+                if streamed_count % 5 == 0:
+                    if await self._check_cancelled(task_id):
+                        self.queue.complete_task(
+                            task_id,
+                            result={
+                                **stats,
+                                "processed": current_processed,
+                                "message": "任务已取消",
+                            },
+                            error="任务已取消",
+                        )
+                        return
+
+                # Periodic progress notification for real-time UI
+                if streamed_count % 5 == 0 or streamed_count == len(texts):
+                    await self._notify_progress(task_id)
 
             batch_failed_ids = []
             batch_failed_errors: Dict[str, List[str]] = {}
             batch_success_entries = []
 
-            for idx, (ep_name, embedding, error) in enumerate(embedding_results):
-                chunk_id = chunk_ids[idx]
+            for i, result_item in enumerate(embedding_results):
+                if result_item is None:
+                    chunk_id = chunk_ids[i]
+                    batch_failed_ids.append(chunk_id)
+                    batch_failed_errors.setdefault(
+                        "embedding failed: no result", []
+                    ).append(chunk_id)
+                    stats["skipped"] += 1
+                    continue
+                ep_name, embedding, error = result_item
+                chunk_id = chunk_ids[i]
                 try:
                     if error:
                         raise Exception(error)
@@ -1281,7 +1340,7 @@ class TaskExecutor:
                         raise Exception(f"zero vector from {ep_name}")
                     batch_success_entries.append({
                         "id": chunk_id,
-                        "doc_id": doc_ids[idx],
+                        "doc_id": doc_ids[i],
                         "vector": embedding,
                     })
                 except Exception as e:
@@ -1852,11 +1911,15 @@ class TaskExecutor:
                             texts = [node.get_content() for node in nodes]
 
                             results: List = [None] * len(texts)
+                            embedded_count = 0
                             async for (
                                 idx,
                                 result,
                             ) in embed_processor.process_batch_streaming(texts):
                                 results[idx] = result
+                                embedded_count += 1
+                                if embedded_count % 5 == 0 and await self._check_cancelled(task.task_id):
+                                    return
 
                             failed_node_ids = []
                             for j, (ep_name, embedding, error) in enumerate(results):
@@ -2066,7 +2129,13 @@ class TaskExecutor:
         t = threading.Thread(target=_wait)
         t.start()
         t.join(timeout=timeout + 1)
-        return asyncio_task.done()
+
+        done = asyncio_task.done()
+        if not done:
+            self.queue.update_status(
+                task_id, TaskStatus.CANCELLED.value, "强制取消（超时）"
+            )
+        return done
 
     def pause_task(self, task_id: str) -> bool:
         """Signal a running task to pause via command queue."""
