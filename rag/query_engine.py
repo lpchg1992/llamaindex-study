@@ -221,13 +221,29 @@ class MultiQueryFusionRetriever:
     """多查询变体融合检索器
 
     策略：用户查询 → LLM 生成 N 个查询变体 → 每个变体独立检索 → RRF 融合
+
+    优化：
+    - variant_score_threshold: 变体检索结果的向量相似度阈值，
+      低于此值的 chunk 不参与 RRF 融合，防止语义漂移变体引入低质 chunk
+    - original_query_weight: 原始查询结果的权重加成系数，
+      确保原始查询的精准匹配不会被变体的高相似度误匹配压过
     """
 
-    def __init__(self, base_retriever: Any, llm: Any, num_queries: int = 3, top_k: int = 5):
+    def __init__(
+        self,
+        base_retriever: Any,
+        llm: Any,
+        num_queries: int = 3,
+        top_k: int = 5,
+        variant_score_threshold: float = 0.5,
+        original_query_weight: float = 1.5,
+    ):
         self.base_retriever = base_retriever
         self.llm = llm
         self.num_queries = num_queries
         self.top_k = top_k
+        self.variant_score_threshold = variant_score_threshold
+        self.original_query_weight = original_query_weight
         self._query_variants: list[str] = []
         self._retrievers: list[Any] = []
 
@@ -273,13 +289,17 @@ class MultiQueryFusionRetriever:
         if not self._retrievers:
             self._generate_and_setup_retrievers(query_str)
         all_nodes_with_scores: list[tuple[Any, float, int]] = []
-        for retriever in self._retrievers:
+        for i, retriever in enumerate(self._retrievers):
             nodes = retriever.retrieve(query_str)
+            is_original = (i == 0)
             for rank, node_with_score in enumerate(nodes):
                 original_score = getattr(node_with_score, "score", 1.0)
                 if original_score is None:
                     original_score = 1.0
-                all_nodes_with_scores.append((node_with_score, original_score, rank + 1))
+                if not is_original and original_score < self.variant_score_threshold:
+                    continue
+                weight = original_score * (self.original_query_weight if is_original else 1.0)
+                all_nodes_with_scores.append((node_with_score, weight, rank + 1))
         return self._rrf_fusion(all_nodes_with_scores, self.top_k)
 
     def __call__(self, query_str: str) -> list[Any]:
@@ -501,6 +521,8 @@ class QueryEngineWrapper:
                     llm=self._get_llm(),
                     num_queries=self.num_multi_queries,
                     top_k=self.top_k,
+                    variant_score_threshold=self.settings.multi_query_variant_score_threshold,
+                    original_query_weight=self.settings.multi_query_original_weight,
                 )
                 retriever = multi_retriever
                 logger.info(

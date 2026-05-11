@@ -162,6 +162,12 @@ class Settings:
             os.getenv("USE_MULTI_QUERY", "false").lower() == "true"
         )
         self.num_multi_queries: int = int(os.getenv("MULTI_QUERY_NUM", "3"))
+        self.multi_query_variant_score_threshold: float = float(
+            os.getenv("MULTI_QUERY_VARIANT_SCORE_THRESHOLD", "0.5")
+        )
+        self.multi_query_original_weight: float = float(
+            os.getenv("MULTI_QUERY_ORIGINAL_WEIGHT", "1.5")
+        )
 
         # ========== Response Synthesizer 配置 ==========
         self.response_mode: str = os.getenv("RESPONSE_MODE", "compact")
@@ -239,6 +245,8 @@ class Settings:
             "use_hyde": self.use_hyde,
             "use_multi_query": self.use_multi_query,
             "num_multi_queries": self.num_multi_queries,
+            "multi_query_variant_score_threshold": self.multi_query_variant_score_threshold,
+            "multi_query_original_weight": self.multi_query_original_weight,
             "hybrid_search_alpha": self.hybrid_search_alpha,
             "hybrid_search_mode": self.hybrid_search_mode,
             "chunk_strategy": self.chunk_strategy,

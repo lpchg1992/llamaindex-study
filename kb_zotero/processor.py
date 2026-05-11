@@ -748,7 +748,22 @@ class ZoteroImporter:
 
                             batch_nodes = []
                             for future in as_completed(futures):
-                                idx, node, embedding, result_info = future.result()
+                                try:
+                                    idx, node, embedding, result_info = future.result()
+                                except Exception as e:
+                                    logger.warning(
+                                        f"[{item.title}] Embedding 线程异常 (node={nodes[list(futures.values())[0]].node_id[:8] if futures else '?'}): {type(e).__name__}: {e}"
+                                    )
+                                    for f in futures:
+                                        if not f.done():
+                                            f.cancel()
+                                    failed_ids.extend(
+                                        nodes[i].node_id for i in range(batch_start, batch_end)
+                                    )
+                                    processed_count[0] += batch_end - batch_start
+                                    if progress_callback:
+                                        progress_callback(processed_count[0], total)
+                                    break
                                 if embedding is None or all(v == 0.0 for v in embedding):
                                     logger.warning(
                                         f"[{item.title}] Embedding failed or zero vector (file={file_path.name}, node={node.node_id[:8]}, text_len={len(texts[idx])}): {result_info}"

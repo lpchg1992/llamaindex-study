@@ -938,7 +938,7 @@ class TaskExecutor:
                                     task_id, fid,
                                     status=FileStatus.EMBEDDING.value,
                                 )
-                            if processed - last_notified[0] >= 3 or processed == total or processed == 0:
+                            if processed - last_notified[0] >= 100 or processed == total or processed == 0:
                                 last_notified[0] = processed
                                 all_processed, all_total = self.queue.compute_chunk_progress(task_id)
                                 if all_total > 0:
@@ -946,11 +946,11 @@ class TaskExecutor:
                                         task_id,
                                         progress=int(all_processed / all_total * 100),
                                     )
-                                loop.call_soon_threadsafe(
-                                    lambda: asyncio.ensure_future(
-                                        self._notify_progress(task_id)
+                                    loop.call_soon_threadsafe(
+                                        lambda: asyncio.ensure_future(
+                                            self._notify_progress(task_id)
+                                        )
                                     )
-                                )
                         return cb
 
                     loop = asyncio.get_running_loop()
