@@ -1854,16 +1854,18 @@ def _start_api() -> bool:
             start_new_session=True,
         )
 
-    # 等待启动并做健康检查（最多等 15 秒）
-    for attempt in range(1, 4):
-        time.sleep(5)
+    # 等待启动并做健康检查（模型加载可能需要 30-60 秒）
+    max_wait = 60
+    check_interval = 5
+    max_attempts = max_wait // check_interval
+    for attempt in range(1, max_attempts + 1):
+        time.sleep(check_interval)
         try:
             result = subprocess.run(
                 ["curl", "-sf", f"http://localhost:{api_port}/health"],
                 capture_output=True, text=True, timeout=3,
             )
             if result.returncode == 0:
-                # 健康检查通过
                 pid_result = subprocess.run(
                     f"lsof -ti:{api_port} 2>/dev/null | head -1",
                     shell=True, capture_output=True, text=True,
@@ -1875,11 +1877,16 @@ def _start_api() -> bool:
                 return True
         except Exception:
             pass
-        print(f"   等待中... ({attempt * 5}s)")
+        elapsed = attempt * check_interval
+        if elapsed % 15 == 0:
+            print(f"   等待中... ({elapsed}s，模型加载可能需要较长时间)")
 
-    # 启动失败 —— 展示错误日志
-    print(f"\n❌ API 启动失败 (Port: {api_port})")
+    # 健康检查超时，但进程可能仍在启动中
+    print(f"\n⚠️  API 健康检查超时 ({max_wait}s)")
     _show_startup_errors(stderr_file)
+    print(f"\n💡 提示: API 进程可能仍在加载模型中，watchdog 会继续尝试。")
+    print(f"   运行 'uv run llamaindex-study service status' 检查当前状态。")
+    print(f"   日志: {log_dir / 'api_watchdog.log'}")
 
     return False
 
@@ -1995,7 +2002,8 @@ def handle_service_start(args: argparse.Namespace) -> int:
             print("⚠️  前端构建失败，API 将以无前端模式启动")
         api_ok = _start_api()
         if not api_ok:
-            print("⚠️  API 启动失败")
+            print("⚠️  API 健康检查未通过（可能仍在加载模型）")
+            print(f"   运行 'uv run llamaindex-study service status' 检查当前状态")
             return 1
 
     print(f"\n调度器随 API 一同管理")
@@ -2030,8 +2038,8 @@ def handle_service_restart(args: argparse.Namespace) -> int:
         print("✅ 所有服务重启完成")
         return 0
     else:
-        print("⚠️  API 启动失败，请检查上方错误信息")
-        print("   提示: 检查 Python 环境及 .env 配置")
+        print("⚠️  API 健康检查未通过（可能仍在加载模型）")
+        print(f"   运行 'uv run llamaindex-study service status' 检查当前状态")
         print(f"   日志: {PROJECT_ROOT}/logs/api_watchdog.log")
         return 1
 
