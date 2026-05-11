@@ -68,6 +68,14 @@ class LanceCRUDService:
     DEFAULT_LANCE_ROOT = Path.home() / ".llamaindex" / "storage"
 
     @staticmethod
+    def _live_row_count(table) -> int:
+        """获取活跃行数（排除 tombstoned 行，见 vector_store.py 同方法）"""
+        try:
+            return table.count_rows("text IS NOT NULL")
+        except Exception:
+            return table.count_rows()
+
+    @staticmethod
     def connect(kb_id: str) -> lancedb.LanceDBConnection:
         """连接到知识库的 LanceDB
 
@@ -145,7 +153,7 @@ class LanceCRUDService:
             )
 
         table = db.open_table(table_name)
-        count = table.count_rows()
+        count = LanceCRUDService._live_row_count(table)
 
         # 计算大小
         uri = str(db.uri)
