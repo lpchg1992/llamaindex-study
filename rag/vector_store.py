@@ -357,14 +357,29 @@ class LanceDBVectorStore:
                 return {"exists": False, "reason": f"表 {table_name} 不存在"}
 
             table = db.open_table(table_name)
+            row_count = self._live_row_count(table)
             return {
                 "exists": True,
                 "uri": uri,
                 "table_name": table_name,
-                "row_count": table.count_rows(),
+                "row_count": row_count,
             }
         except Exception as e:
             return {"exists": False, "error": str(e)}
+
+    @staticmethod
+    def _live_row_count(table) -> int:
+        """获取 LanceDB 活跃行数（排除 tombstoned 行）
+
+        count_rows() 在某些 LanceDB 版本中包含已标记删除
+        但尚未物理清除的 tombstoned 行，导致统计偏差。
+        使用 text IS NOT NULL 过滤，因为 tombstoned 行的
+        text 列在 to_arrow() 中为 NULL。
+        """
+        try:
+            return table.count_rows("text IS NOT NULL")
+        except Exception:
+            return table.count_rows()
 
 
 def get_default_vector_store(persist_dir: Optional[Path] = None) -> "LanceDBVectorStore":
