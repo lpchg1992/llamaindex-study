@@ -124,7 +124,23 @@ class ConsistencyService:
                 }
             )
         if orphan_count > 0:
-            if doc_stats_issues:
+            # 验证孤儿是否真实存在（可能是 tombstoned/duplicate 行）
+            verified_orphan = ConsistencyService._verify_orphans(
+                kb_id, chunk_count_actual
+            )
+            if verified_orphan <= 0:
+                vector_issues.append(
+                    {
+                        "type": "orphan_duplicate",
+                        "count": orphan_count,
+                        "description": (
+                            f"LanceDB 比 SQLite 多 {orphan_count} 行"
+                            "（可能是未压缩的重复/tombstoned 行，不影响搜索，"
+                            "运行 compact 可清除）"
+                        ),
+                    }
+                )
+            elif doc_stats_issues:
                 vector_issues.append(
                     {
                         "type": "orphan_stats_error",
@@ -159,13 +175,23 @@ class ConsistencyService:
                 }
             )
         if orphan_count > 0 and not doc_stats_issues:
-            recommendations.append(
-                {
-                    "action": "investigate",
-                    "priority": "medium",
-                    "description": f"存在 {orphan_count} 个无法匹配的 LanceDB 记录，需要人工确认",
-                }
-            )
+            # 根据验证结果给出不同建议
+            if verified_orphan <= 0:
+                recommendations.append(
+                    {
+                        "action": "compact",
+                        "priority": "low",
+                        "description": f"LanceDB 存在 {orphan_count} 个重复/tombstoned 行（不影响搜索），可运行 compact 清除",
+                    }
+                )
+            else:
+                recommendations.append(
+                    {
+                        "action": "investigate",
+                        "priority": "medium",
+                        "description": f"存在 {orphan_count} 个无法匹配的 LanceDB 记录，需要人工确认",
+                    }
+                )
 
         has_issues = len(doc_stats_issues) > 0 or missing_count > 0 or orphan_count > 0
 
@@ -580,6 +606,44 @@ class ConsistencyService:
         from ..database import init_chunk_db
 
         return init_chunk_db().get_doc_embedding_stats(kb_id)
+
+    @staticmethod
+    def _verify_orphans(kb_id: str, sqlite_chunk_count: int) -> int:
+        """验证 LanceDB 的 orphan 行是真实孤儿还是重复/tombstoned 行
+
+        当 count_rows() 大于 SQLite chunk 数时，抽样检查 LanceDB
+        中的 ID 是否都在 SQLite 中存在。如果所有抽样 ID 都能找到，
+        说明差异来自重复/tombstoned 行而非真实孤儿。
+
+        Returns:
+            真实孤儿数（0 表示全部为重复/tombstoned 行）
+        """
+        try:
+            from ..database import init_chunk_db
+            from .vector_store import VectorStoreService
+
+            vs = VectorStoreService.get_vector_store(kb_id)
+            table = vs._get_lance_vector_store().table
+            arrow = table.to_arrow()
+            id_col = arrow.column('id')
+
+            chunk_db = init_chunk_db()
+            sample_size = min(200, len(arrow))
+            step = max(1, len(arrow) // sample_size)
+            missing = 0
+            for i in range(0, len(arrow), step):
+                lid = str(id_col[i].as_py())
+                if chunk_db.get(lid) is None:
+                    missing += 1
+                if i // step >= sample_size:
+                    break
+
+            if missing == 0:
+                return 0  # 无真实孤儿
+            # 按抽样比例估算真实孤儿数
+            return max(1, int(missing / sample_size * len(arrow)))
+        except Exception:
+            return -1  # 无法验证，沿用原始计算
 
     @staticmethod
     def check_and_mark_failed(kb_id: str) -> Dict[str, Any]:
