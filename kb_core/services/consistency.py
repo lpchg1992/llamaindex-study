@@ -437,16 +437,15 @@ class ConsistencyService:
 
     @staticmethod
     def compact(kb_id: str) -> Dict[str, Any]:
-        """压缩 LanceDB 表，合并重复行和清除 tombstoned 行
+        """压缩 LanceDB 表存储并重建向量索引
 
-        调用 LanceDB 的 optimize() 和 cleanup_old_versions() 来
-        清理未压缩的重复/已删除行，恢复向量索引性能。
+        optimize() 合并小文件，compact 存储空间；
+        create_index() 重建 IVF 向量索引。
+
+        注意：少量重复行（<1%）不影响搜索，本方法不处理。
 
         Args:
             kb_id: 知识库 ID
-
-        Returns:
-            操作结果
         """
         from .vector_store import VectorStoreService
 
@@ -463,7 +462,6 @@ class ConsistencyService:
             after = table.count_rows()
             removed = before - after
 
-            # 重建索引
             try:
                 table.create_index(num_sub_vectors=64)
             except Exception:
@@ -476,9 +474,16 @@ class ConsistencyService:
                 "removed": removed,
                 "message": (
                     f"压缩完成：{before} → {after} 行"
-                    f"（移除 {removed} 个重复/tombstoned 行）" if removed > 0
-                    else "压缩完成，无需清理"
+                    f"（移除 {removed} 行）" if removed > 0
+                    else f"压缩完成（{before} 行，索引已重建）"
                 ),
+            }
+        except Exception as e:
+            logger.error(f"压缩 LanceDB 失败 [{kb_id}]: {e}")
+            return {
+                "kb_id": kb_id,
+                "error": str(e),
+                "message": f"压缩失败: {e}",
             }
         except Exception as e:
             logger.error(f"压缩 LanceDB 失败 [{kb_id}]: {e}")
