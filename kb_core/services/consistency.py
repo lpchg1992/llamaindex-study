@@ -437,45 +437,81 @@ class ConsistencyService:
 
     @staticmethod
     def compact(kb_id: str) -> Dict[str, Any]:
-        """压缩 LanceDB 表存储并重建向量索引
-
-        optimize() 合并小文件，compact 存储空间；
-        create_index() 重建 IVF 向量索引。
-
-        注意：少量重复行（<1%）不影响搜索，本方法不处理。
-
-        Args:
-            kb_id: 知识库 ID
-        """
+        """压缩 LanceDB 表：去重 + 存储优化 + 索引重建"""
         from .vector_store import VectorStoreService
+        from collections import Counter
+        import pyarrow as pa
 
         try:
             vs = VectorStoreService.get_vector_store(kb_id)
             table = vs._get_lance_vector_store().table
-
             before = table.count_rows()
-            table.optimize()
+            removed_dupes = 0
+
+            # Step 1: deduplicate — 查找重复 ID 并保留一份
             try:
+                arrow = table.to_arrow()
+                id_col = arrow.column('id')
+                id_list = [str(id_col[i].as_py()) for i in range(len(arrow))]
+                id_counts = Counter(id_list)
+                dupes = {sid for sid, cnt in id_counts.items() if cnt > 1}
+                if dupes:
+                    # 保存每个重复 ID 的第一份数据
+                    saved = {}
+                    for i in range(len(arrow)):
+                        sid = str(id_col[i].as_py())
+                        if sid in dupes and sid not in saved:
+                            saved[sid] = {
+                                'doc_id': str(arrow.column('doc_id')[i].as_py()),
+                                'text': str(arrow.column('text')[i].as_py() or ''),
+                                'vector': arrow.column('vector')[i].values.to_pylist(),
+                            }
+                    # 批量删除所有重复行
+                    dupes_list = list(dupes)
+                    for i in range(0, len(dupes_list), 50):
+                        batch = dupes_list[i:i+50]
+                        condition = " OR ".join([f"id = '{d}'" for d in batch])
+                        table.delete(condition)
+                    # 重新插入每个 ID 的一份
+                    entries = [{'id': sid, **data} for sid, data in saved.items()]
+                    for i in range(0, len(entries), 100):
+                        batch = entries[i:i+100]
+                        data = pa.table({
+                            'id': [e['id'] for e in batch],
+                            'doc_id': [e['doc_id'] for e in batch],
+                            'text': [e['text'] for e in batch],
+                            'vector': [e['vector'] for e in batch],
+                        })
+                        table.merge_insert('id').when_not_matched_insert_all().execute(data)
+                    removed_dupes = sum(cnt - 1 for cnt in id_counts.values() if cnt > 1)
+            except Exception as e:
+                logger.warning(f"去重失败: {e}")
+
+            # Step 2: storage optimize
+            try:
+                table.optimize()
                 table.cleanup_old_versions(older_than_micros=0)
             except Exception:
                 pass
-            after = table.count_rows()
-            removed = before - after
 
+            # Step 3: rebuild index
             try:
                 table.create_index(num_sub_vectors=64)
             except Exception:
                 pass
 
+            after = table.count_rows()
+
             return {
                 "kb_id": kb_id,
                 "before": before,
                 "after": after,
-                "removed": removed,
+                "removed": before - after,
+                "dupes_removed": removed_dupes,
                 "message": (
                     f"压缩完成：{before} → {after} 行"
-                    f"（移除 {removed} 行）" if removed > 0
-                    else f"压缩完成（{before} 行，索引已重建）"
+                    f"（去重 {removed_dupes} 个重复行）" if removed_dupes > 0
+                    else "压缩完成，无重复行"
                 ),
             }
         except Exception as e:
