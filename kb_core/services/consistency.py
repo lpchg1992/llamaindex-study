@@ -436,6 +436,59 @@ class ConsistencyService:
         return ConsistencyService.fix_doc_stats(kb_id)
 
     @staticmethod
+    def compact(kb_id: str) -> Dict[str, Any]:
+        """压缩 LanceDB 表，合并重复行和清除 tombstoned 行
+
+        调用 LanceDB 的 optimize() 和 cleanup_old_versions() 来
+        清理未压缩的重复/已删除行，恢复向量索引性能。
+
+        Args:
+            kb_id: 知识库 ID
+
+        Returns:
+            操作结果
+        """
+        from .vector_store import VectorStoreService
+
+        try:
+            vs = VectorStoreService.get_vector_store(kb_id)
+            table = vs._get_lance_vector_store().table
+
+            before = table.count_rows()
+            table.optimize()
+            try:
+                table.cleanup_old_versions(older_than_micros=0)
+            except Exception:
+                pass
+            after = table.count_rows()
+            removed = before - after
+
+            # 重建索引
+            try:
+                table.create_index(num_sub_vectors=64)
+            except Exception:
+                pass
+
+            return {
+                "kb_id": kb_id,
+                "before": before,
+                "after": after,
+                "removed": removed,
+                "message": (
+                    f"压缩完成：{before} → {after} 行"
+                    f"（移除 {removed} 个重复/tombstoned 行）" if removed > 0
+                    else "压缩完成，无需清理"
+                ),
+            }
+        except Exception as e:
+            logger.error(f"压缩 LanceDB 失败 [{kb_id}]: {e}")
+            return {
+                "kb_id": kb_id,
+                "error": str(e),
+                "message": f"压缩失败: {e}",
+            }
+
+    @staticmethod
     def get_embedding_stats(kb_id: str) -> Dict[str, Any]:
         """
         获取 chunk 向量化统计信息

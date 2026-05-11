@@ -140,6 +140,19 @@ def repair_consistency(kb_id: str):
     return result
 
 
+@router.post("/{kb_id}/consistency/compact")
+def compact_lancedb(kb_id: str):
+    """压缩 LanceDB 表，清除重复/tombstoned 行并重建索引"""
+    from kb_core.services import ConsistencyService, KnowledgeBaseService
+
+    info = KnowledgeBaseService.get_info(kb_id)
+    if not info:
+        raise HTTPException(status_code=404, detail=f"知识库不存在: {kb_id}")
+
+    result = ConsistencyService.compact(kb_id)
+    return result
+
+
 @router.post("/consistency/repair-all")
 def repair_all_consistency():
     from kb_core.services import ConsistencyService
