@@ -784,6 +784,7 @@ class LanceCRUDService:
                 "id": [e["id"] for e in entries],
                 "doc_id": [e["doc_id"] for e in entries],
                 "vector": [e["vector"] for e in entries],
+                "text": [e.get("text", "") for e in entries],
             }
         )
 

@@ -1342,6 +1342,7 @@ class TaskExecutor:
                         "id": chunk_id,
                         "doc_id": doc_ids[i],
                         "vector": embedding,
+                        "text": texts[i],
                     })
                 except Exception as e:
                     reason = str(e)[:500]
