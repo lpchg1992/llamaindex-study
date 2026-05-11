@@ -437,7 +437,13 @@ class ConsistencyService:
 
     @staticmethod
     def compact(kb_id: str) -> Dict[str, Any]:
-        """压缩 LanceDB 表：去重 + 存储优化 + 索引重建"""
+        """LanceDB 存储维护：去重 + 文件合并 + 索引重建
+
+        不处理 tombstoned 行（LanceDB 内部机制，count_rows() 偏差
+        通过 _verify_orphans 在一致性检查中识别）。
+
+        去重仅在检测到重复 ID 时执行（防御性，正常不应触发）。
+        """
         from .vector_store import VectorStoreService
         from collections import Counter
         import pyarrow as pa
