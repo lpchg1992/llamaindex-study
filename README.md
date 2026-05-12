@@ -16,10 +16,20 @@
 - 🔄 **Auto-Merging** — 检索时自动合并子节点为父节点
 - 💭 **HyDE 查询** — 假设文档嵌入，提升检索质量
 - 📝 **多查询转换** — 生成多个查询变体，减少遗漏
+- 🎯 **Reranker 重排序** — Cross-Encoder 二次排序，提升精度
+- 🔬 **Sub-Question 分解** — 复杂查询自动拆分为子问题
+- 📊 **声明式 QueryPipeline** — 可视化 DAG 检索链
 
 ### 智能分块
 - 🏗️ **层级分块** — 父子节点结构（默认），支持 Auto-Merging
 - 🧩 **语义分块** — 基于 embedding 相似度的智能分块
+- 🪟 **上下文窗口** — SentenceWindowNodeParser，精确检索场景
+- 📝 **Markdown 分块** — 按标题层级结构切分
+
+### 核心架构
+- 🔧 **IngestionPipeline** — 声明式文档处理管道（参考文献检测 + 文本清洗 + 缓存）
+- 🏷️ **元数据提取器** — Title/Summary/Question/Keyword 自动标注
+- ✅ **RAG 评估** — Faithfulness / Relevancy / Correctness 内置评估
 
 ## 快速开始
 

@@ -117,15 +117,23 @@ class Settings:
             int(x)
             for x in os.getenv("HIERARCHICAL_CHUNK_SIZES", "1024,512,256").split(",")
         ]
+        self.window_size: int = int(os.getenv("WINDOW_SIZE", "3"))
+        self.use_ingestion_pipeline: bool = (
+            os.getenv("USE_INGESTION_PIPELINE", "false").lower() == "true"
+        )
+        self.enable_context_enrichment: bool = (
+            os.getenv("ENABLE_CONTEXT_ENRICHMENT", "false").lower() == "true"
+        )
 
         # ========== 语义分块配置 ==========
         self.semantic_chunking_similarity_threshold: float = float(
             os.getenv("SEMANTIC_CHUNKING_SIMILARITY_THRESH", "0.5")
         )
         self.semantic_chunking_percentile_threshold: Optional[float] = None
-        if os.getenv("SEMANTIC_CHUNKING_PERCENTILE_THRESH"):
+        _percentile_env = os.getenv("SEMANTIC_CHUNKING_PERCENTILE_THRESH")
+        if _percentile_env:
             self.semantic_chunking_percentile_threshold = float(
-                os.getenv("SEMANTIC_CHUNKING_PERCENTILE_THRESH")
+                _percentile_env
             )
 
         # ========== 参考文献检测配置 ==========
@@ -174,6 +182,17 @@ class Settings:
 
         # ========== Reranker 配置 ==========
         self.use_reranker: bool = os.getenv("USE_RERANKER", "true").lower() == "true"
+
+        # ========== Node Postprocessor 配置 ==========
+        self.enable_similarity_filter: bool = (
+            os.getenv("ENABLE_SIMILARITY_FILTER", "false").lower() == "true"
+        )
+        self.similarity_filter_cutoff: float = float(
+            os.getenv("SIMILARITY_FILTER_CUTOFF", "0.3")
+        )
+        self.enable_long_context_reorder: bool = (
+            os.getenv("ENABLE_LONG_CONTEXT_REORDER", "false").lower() == "true"
+        )
 
         # ========== 参考文献过滤配置 ==========
         self.reference_strategy: str = os.getenv(
@@ -253,6 +272,9 @@ class Settings:
             "chunk_size": self.chunk_size,
             "chunk_overlap": self.chunk_overlap,
             "hierarchical_chunk_sizes": self.hierarchical_chunk_sizes,
+            "window_size": self.window_size,
+            "use_ingestion_pipeline": self.use_ingestion_pipeline,
+            "enable_context_enrichment": self.enable_context_enrichment,
             "use_reranker": self.use_reranker,
             "reference_strategy": self.reference_strategy,
             "semantic_chunking_similarity_threshold": self.semantic_chunking_similarity_threshold,

@@ -58,7 +58,48 @@ from rag.chat_engine import (
     get_chat_service,
 )
 
-__all__ = [
+# Optional new modules — import failures must not block application startup
+try:
+    from rag.ingestion import (
+        TextCleanerTransform,
+        ContextEnricherTransform,
+        ReferenceDetectorTransform,
+        create_ingestion_pipeline,
+        run_ingestion_pipeline,
+        build_nodes_with_pipeline,
+    )
+except ImportError:
+    TextCleanerTransform = None
+    ContextEnricherTransform = None  # type: ignore[assignment]
+    ReferenceDetectorTransform = None  # type: ignore[assignment]
+    create_ingestion_pipeline = None  # type: ignore[assignment]
+    run_ingestion_pipeline = None  # type: ignore[assignment]
+    build_nodes_with_pipeline = None  # type: ignore[assignment]
+
+try:
+    from rag.metadata_extractors import (
+        create_metadata_extractors,
+    )
+except ImportError:
+    create_metadata_extractors = None  # type: ignore[assignment]
+
+try:
+    from rag.evaluation import (
+        evaluate_faithfulness,
+        evaluate_relevancy,
+        evaluate_correctness,
+        evaluate_full,
+        run_batch_evaluation,
+    )
+except ImportError:
+    evaluate_faithfulness = None  # type: ignore[assignment]
+    evaluate_relevancy = None  # type: ignore[assignment]
+    evaluate_correctness = None  # type: ignore[assignment]
+    evaluate_full = None  # type: ignore[assignment]
+    run_batch_evaluation = None  # type: ignore[assignment]
+
+# Build __all__ dynamically, excluding any symbol that failed to import
+_core_exports = [
     "Settings",
     "get_settings",
     "get_logger",
@@ -89,3 +130,23 @@ __all__ = [
     "ChatStore",
     "get_chat_service",
 ]
+_optional_exports = [
+    "TextCleanerTransform",
+    "ContextEnricherTransform",
+    "ReferenceDetectorTransform",
+    "create_ingestion_pipeline",
+    "run_ingestion_pipeline",
+    "build_nodes_with_pipeline",
+    "create_metadata_extractors",
+    "evaluate_faithfulness",
+    "evaluate_relevancy",
+    "evaluate_correctness",
+    "evaluate_full",
+    "run_batch_evaluation",
+]
+__all__ = _core_exports + [
+    name for name in _optional_exports
+    if globals().get(name) is not None
+]
+
+

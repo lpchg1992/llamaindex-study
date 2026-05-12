@@ -98,6 +98,13 @@ class QueryRequest(BaseModel):
         None,
         description="答案生成模式: compact, refine, tree_summarize, simple, accumulate（None=使用配置默认值）",
     )
+    chat_mode: Optional[str] = Field(
+        None,
+        description="Chat模式: condense_question, context, condense_plus_context, simple, best（None=默认condense_question）",
+    )
+    use_sub_question: Optional[bool] = Field(
+        None, description="启用 Sub-Question 分解（复杂查询自动拆分为子问题）"
+    )
 
 
 class QueryResponse(BaseModel):
@@ -482,10 +489,11 @@ class SystemSettings(BaseModel):
 
     # Chunk
     chunk_strategy: str = Field(
-        "hierarchical", description="分块策略: hierarchical/sentence/semantic"
+        "hierarchical", description="分块策略: hierarchical/sentence/semantic/markdown/window"
     )
     chunk_size: int = Field(1024, ge=100, le=4096, description="分块大小")
     chunk_overlap: int = Field(100, ge=0, le=500, description="分块重叠")
+    window_size: int = Field(3, ge=1, le=10, description="SentenceWindowNodeParser窗口大小")
     hierarchical_chunk_sizes: List[int] = Field(
         [1024, 512, 256], description="分层分块大小 [parent, child, leaf]"
     )
@@ -527,6 +535,17 @@ class SystemSettings(BaseModel):
     # Reranker
     use_reranker: bool = Field(True, description="启用Reranker")
 
+    # Node Postprocessors (Phase 1-2)
+    enable_similarity_filter: bool = Field(
+        False, description="启用相似度过滤（rerank 前过滤低分节点）"
+    )
+    similarity_filter_cutoff: float = Field(
+        0.3, ge=0.0, le=1.0, description="相似度过滤阈值"
+    )
+    enable_long_context_reorder: bool = Field(
+        False, description="启用长上下文重排序"
+    )
+
     # Reference filtering
     reference_strategy: Literal["flag", "skip", "none"] = Field(
         "flag", description="参考文献处理策略: flag/skip/none"
@@ -534,6 +553,14 @@ class SystemSettings(BaseModel):
 
     # Response
     response_mode: str = Field("compact", description="答案生成模式")
+
+    # Ingestion
+    use_ingestion_pipeline: bool = Field(
+        False, description="启用 IngestionPipeline (文献检测+文本清洗+缓存)"
+    )
+    enable_context_enrichment: bool = Field(
+        False, description="嵌入上下文增强（embedding前追加文档来源/分类/页码）"
+    )
 
     # Task
     progress_update_interval: int = Field(10, ge=1, description="进度更新间隔")
@@ -596,10 +623,11 @@ class SettingsUpdateRequest(BaseModel):
 
     # Chunk
     chunk_strategy: Optional[str] = Field(
-        None, description="分块策略: hierarchical/sentence/semantic"
+        None, description="分块策略: hierarchical/sentence/semantic/markdown/window"
     )
     chunk_size: Optional[int] = Field(None, ge=100, le=4096, description="分块大小")
     chunk_overlap: Optional[int] = Field(None, ge=0, le=500, description="分块重叠")
+    window_size: Optional[int] = Field(None, ge=1, le=10, description="SentenceWindow窗口大小")
     hierarchical_chunk_sizes: Optional[List[int]] = Field(
         None, description="分层分块大小 [parent, child, leaf]"
     )
@@ -641,6 +669,11 @@ class SettingsUpdateRequest(BaseModel):
     # Reranker
     use_reranker: Optional[bool] = Field(None, description="启用Reranker")
 
+    # Node Postprocessors
+    enable_similarity_filter: Optional[bool] = Field(None, description="启用相似度过滤")
+    similarity_filter_cutoff: Optional[float] = Field(None, ge=0, le=1, description="相似度过滤阈值")
+    enable_long_context_reorder: Optional[bool] = Field(None, description="启用长上下文重排序")
+
     # Reference filtering
     reference_strategy: Optional[str] = Field(
         None, description="参考文献处理策略: flag/skip/none"
@@ -648,6 +681,10 @@ class SettingsUpdateRequest(BaseModel):
 
     # Response
     response_mode: Optional[str] = Field(None, description="答案生成模式")
+
+    # Ingestion
+    use_ingestion_pipeline: Optional[bool] = Field(None, description="启用IngestionPipeline")
+    enable_context_enrichment: Optional[bool] = Field(None, description="嵌入上下文增强")
 
     # Task
     progress_update_interval: Optional[int] = Field(None, ge=1, description="进度更新间隔")
