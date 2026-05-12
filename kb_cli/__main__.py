@@ -2390,6 +2390,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="启用 Auto-Merging（需知识库使用层级分块）",
     )
+    search_parser.add_argument(
+        "--reranker",
+        dest="use_reranker",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="启用 Reranker 重排序",
+    )
     search_parser.set_defaults(handler=handle_search)
 
     query_parser = subparsers.add_parser("query", help="知识库问答")
@@ -2449,6 +2456,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="答案生成模式（compact=默认）",
     )
     query_parser.add_argument(
+        "--reranker",
+        dest="use_reranker",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="启用 Reranker 重排序",
+    )
+    query_parser.add_argument(
+        "--chat-mode",
+        choices=["condense_question", "context", "condense_plus_context", "simple", "best"],
+        default=None,
+        help="Chat 模式（默认 condense_question）",
+    )
+    query_parser.add_argument(
+        "--sub-question",
+        dest="use_sub_question",
+        action="store_true",
+        default=False,
+        help="启用 Sub-Question 分解（复杂查询自动拆分为子问题）",
+    )
+    query_parser.add_argument(
         "--retrieval-mode",
         choices=["vector", "hybrid"],
         default="vector",
@@ -2504,7 +2531,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ingest_zotero.add_argument(
         "--chunk-strategy",
-        choices=["hierarchical", "sentence", "semantic"],
+        choices=["hierarchical", "sentence", "semantic", "window", "markdown"],
         help="分块策略 (默认: hierarchical)",
     )
     ingest_zotero.add_argument(
