@@ -109,6 +109,14 @@ def get_node_parser(
             include_metadata=True,
             include_prev_next_rel=True,
         )
+    elif strategy == "window":
+        from llama_index.core.node_parser import SentenceWindowNodeParser
+
+        return SentenceWindowNodeParser.from_defaults(
+            window_size=3,
+            window_metadata_key="window",
+            original_text_metadata_key="original_text",
+        )
     else:
         return HierarchicalNodeParser.from_defaults(
             chunk_sizes=hierarchical_chunk_sizes,

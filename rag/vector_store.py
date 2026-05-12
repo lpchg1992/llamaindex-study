@@ -196,27 +196,51 @@ class LanceDBVectorStore:
     def build_index(
         self,
         documents: List[LlamaDocument],
+        *,
+        use_ingestion_pipeline: bool = False,
     ) -> Any:
-        """从文档构建索引"""
+        """Build a VectorStoreIndex from documents.
+
+        Args:
+            documents: LlamaIndex Documents to index.
+            use_ingestion_pipeline: Route through IngestionPipeline for
+                extra transformations (reference detection, text cleaning,
+                ingestion cache). Default False for backward compatibility.
+        """
         from llama_index.core import VectorStoreIndex, Settings as LlamaSettings
 
         from rag.config import get_settings
-        from kb_processing.document_processor import get_node_parser
 
         embed_model = self._get_embed_model()
         LlamaSettings.embed_model = embed_model
 
         vector_store = self._get_lance_vector_store()
-
         settings = get_settings()
-        node_parser = get_node_parser(
-            strategy=settings.chunk_strategy,
-            chunk_size=settings.chunk_size,
-            chunk_overlap=settings.chunk_overlap,
-            hierarchical_chunk_sizes=settings.hierarchical_chunk_sizes,
-            embed_model=embed_model,
-        )
-        nodes = node_parser.get_nodes_from_documents(documents)
+
+        if use_ingestion_pipeline:
+            from rag.ingestion import build_nodes_with_pipeline
+
+            nodes = build_nodes_with_pipeline(
+                kb_id=self.table_name,
+                documents=documents,
+                embed_model=embed_model,
+                strategy=settings.chunk_strategy,
+                chunk_size=settings.chunk_size,
+                chunk_overlap=settings.chunk_overlap,
+                hierarchical_chunk_sizes=settings.hierarchical_chunk_sizes,
+                enable_cache=True,
+            )
+        else:
+            from kb_processing.document_processor import get_node_parser
+
+            node_parser = get_node_parser(
+                strategy=settings.chunk_strategy,
+                chunk_size=settings.chunk_size,
+                chunk_overlap=settings.chunk_overlap,
+                hierarchical_chunk_sizes=settings.hierarchical_chunk_sizes,
+                embed_model=embed_model,
+            )
+            nodes = node_parser.get_nodes_from_documents(documents)
 
         filtered_nodes = [
             n for n in nodes
@@ -242,9 +266,6 @@ class LanceDBVectorStore:
         self._index = index
         self._vector_store = vector_store
 
-        from rag.config import get_settings
-
-        settings = get_settings()
         self.set_chunk_strategy(settings.chunk_strategy)
 
         return index
