@@ -332,6 +332,7 @@ class QueryEngineWrapper:
         rerank_model: Optional[str] = None,
         rerank_api_key: Optional[str] = None,
         rerank_base_url: Optional[str] = None,
+        chat_mode: str = "condense_question",
     ):
         """
         初始化查询引擎
@@ -352,6 +353,9 @@ class QueryEngineWrapper:
             rerank_model: Reranker 模型名称 (None=从注册表获取)
             rerank_api_key: Reranker API Key (None=从注册表获取)
             rerank_base_url: Reranker API Base URL (None=从注册表获取)
+            chat_mode: LlamaIndex chat engine mode. One of:
+                "condense_question" (default), "context",
+                "condense_plus_context", "simple", "best".
         """
         self.index = index
         self.vector_store = vector_store
@@ -369,6 +373,7 @@ class QueryEngineWrapper:
         self.num_multi_queries = num_multi_queries or self.settings.num_multi_queries
         self.response_mode = response_mode or self.settings.response_mode
         self.model_id = model_id
+        self.chat_mode = chat_mode
 
         self._rerank_vendor_id: Optional[str] = None
         self._rerank_model_id: Optional[str] = None
@@ -537,6 +542,20 @@ class QueryEngineWrapper:
             "response_mode": self.response_mode,
         }
 
+        postprocessors: list[BaseNodePostprocessor] = []
+
+        if self.settings.enable_similarity_filter:
+            from llama_index.core.postprocessor import SimilarityPostprocessor
+
+            postprocessors.append(
+                SimilarityPostprocessor(
+                    similarity_cutoff=self.settings.similarity_filter_cutoff,
+                )
+            )
+            logger.info(
+                f"启用 SimilarityPostprocessor: cutoff={self.settings.similarity_filter_cutoff}"
+            )
+
         if self.use_reranker:
             reranker = SiliconFlowReranker(
                 api_key=self._rerank_api_key,
@@ -546,8 +565,17 @@ class QueryEngineWrapper:
             )
             reranker._vendor_id = self._rerank_vendor_id or "siliconflow"
             reranker._model_id = self._rerank_model_id or f"siliconflow/{self._rerank_model}"
-            kwargs["node_postprocessors"] = [reranker]
+            postprocessors.append(reranker)
             logger.info(f"启用 SiliconFlow Reranker: {self._rerank_model}")
+
+        if self.settings.enable_long_context_reorder:
+            from llama_index.core.postprocessor import LongContextReorder
+
+            postprocessors.append(LongContextReorder())
+            logger.info("启用 LongContextReorder")
+
+        if postprocessors:
+            kwargs["node_postprocessors"] = postprocessors
 
         from llama_index.core.query_engine import RetrieverQueryEngine
 
@@ -617,17 +645,14 @@ class QueryEngineWrapper:
         return full_response
 
     def chat(self, message: str) -> str:
-        """
-        对话模式查询
+        """对话模式查询
 
-        Args:
-            message: 用户消息
-
-        Returns:
-            str: AI 回复
+        Uses the configured chat_mode (default: "condense_question").
+        Available modes: "condense_question", "context",
+        "condense_plus_context", "simple", "best".
         """
         chat_engine = self.index.as_chat_engine(
-            chat_mode="condense_question",
+            chat_mode=self.chat_mode,
             llm=self._get_llm(),
         )
         response = chat_engine.chat(message)
@@ -708,3 +733,67 @@ def create_query_engine(
     )
 
     return wrapper._query_engine
+
+
+def create_sub_question_engine(
+    kb_id: str,
+    *,
+    mode: str = "vector",
+    top_k: int = 5,
+    use_reranker: Optional[bool] = None,
+    use_auto_merging: Optional[bool] = None,
+    model_id: Optional[str] = None,
+) -> Any:
+    """Build a SubQuestionQueryEngine that decomposes complex queries.
+
+    For multi-hop or multi-aspect questions, the engine:
+    1. Uses LLM to break the query into sub-questions
+    2. Executes each sub-question against the base query engine
+    3. Synthesizes a final answer from all sub-answers
+
+    This multiplies LLM calls (1 decomposition + N sub-queries + 1 synthesis),
+    so it is only appropriate for genuinely complex questions.
+
+    Args:
+        kb_id: Knowledge base identifier.
+        mode: Retrieval mode ("vector", "hybrid").
+        top_k: Nodes per sub-query.
+        use_reranker: Enable reranking.
+        use_auto_merging: Enable auto-merging.
+        model_id: LLM model for the sub-question engine.
+
+    Returns:
+        A SubQuestionQueryEngine ready for ``engine.query("...")``.
+    """
+    from llama_index.core.query_engine import SubQuestionQueryEngine
+    from llama_index.core.tools import QueryEngineTool, ToolMetadata
+    from rag.config import get_settings
+
+    settings = get_settings()
+    base_engine = create_query_engine(
+        kb_id=kb_id,
+        mode=mode,
+        top_k=top_k,
+        use_reranker=use_reranker if use_reranker is not None else settings.use_reranker,
+        use_auto_merging=use_auto_merging if use_auto_merging is not None else settings.use_auto_merging,
+        model_id=model_id,
+    )
+
+    from rag.ollama_utils import create_llm
+    llm = create_llm(model_id=model_id)
+
+    query_tool = QueryEngineTool(
+        query_engine=base_engine,
+        metadata=ToolMetadata(
+            name=f"kb_{kb_id}",
+            description=f"Search knowledge base '{kb_id}' for relevant information",
+        ),
+    )
+
+    sub_engine = SubQuestionQueryEngine.from_defaults(
+        query_engine_tools=[query_tool],
+        llm=llm,
+        verbose=True,
+    )
+
+    return sub_engine

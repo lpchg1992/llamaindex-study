@@ -342,11 +342,12 @@ class SearchService:
         num_multi_queries: Optional[int] = None,
         use_auto_merging: Optional[bool] = None,
         use_reranker: Optional[bool] = None,
+        use_sub_question: Optional[bool] = None,
         response_mode: Optional[str] = None,
         model_id: Optional[str] = None,
         embed_model_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        from rag.query_engine import create_query_engine
+        from rag.query_engine import create_query_engine, create_sub_question_engine
 
         if not embed_model_id:
             embed_model_id = _resolve_kb_embed_model(kb_id, mode)
@@ -361,6 +362,23 @@ class SearchService:
         else:
             configure_global_embed_model()
         settings = get_settings()
+
+        if use_sub_question:
+            engine = create_sub_question_engine(
+                kb_id,
+                mode=mode,
+                top_k=top_k,
+                use_reranker=use_reranker,
+                use_auto_merging=use_auto_merging,
+                model_id=model_id,
+            )
+            response = engine.query(query)
+            return {
+                "response": str(response),
+                "sources": [
+                    {"text": r.text, "score": r.score} for r in (response.source_nodes or [])
+                ],
+            }
 
         query_engine = create_query_engine(
             kb_id,
