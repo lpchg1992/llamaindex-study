@@ -644,16 +644,54 @@ class QueryEngineWrapper:
         print()  # 换行
         return full_response
 
-    def chat(self, message: str) -> str:
-        """对话模式查询
+    def chat(
+        self,
+        message: str,
+        chat_history: Optional[List] = None,
+    ) -> str:
+        """对话模式查询 — 利用 LlamaIndex CondenseQuestionChatEngine。
 
-        Uses the configured chat_mode (default: "condense_question").
-        Available modes: "condense_question", "context",
-        "condense_plus_context", "simple", "best".
+        每次调用时传入完整的 chat_history（来自会话存储），
+        引擎会将历史上下文 + 新消息压缩为独立查询，再交给定制的
+        RetrieverQueryEngine（含 reranker / postprocessor 链）执行。
+
+        Args:
+            message: 用户最新消息
+            chat_history: 历史消息列表，每项为 dict（{role, content}）或
+                          LlamaIndex ChatMessage 对象
+
+        Available chat modes (set via wrapper.chat_mode):
+            - ``condense_question``: 将历史上下文压缩为独立查询（推荐）
+            - ``context``: 仅用检索到的 context 回复
+            - ``condense_plus_context``: 历史压缩 + context 检索引擎
+            - ``simple``: 无检索，直接 LLM 对话
+            - ``best``: 自动选择最优模式
         """
-        chat_engine = self.index.as_chat_engine(
-            chat_mode=self.chat_mode,
+        from llama_index.core.chat_engine import CondenseQuestionChatEngine
+        from llama_index.core.llms import ChatMessage as LCMessage
+
+        lc_history: Optional[List[LCMessage]] = None
+        if chat_history:
+            lc_history = []
+            for m in chat_history:
+                if isinstance(m, LCMessage):
+                    lc_history.append(m)
+                elif isinstance(m, dict):
+                    lc_history.append(
+                        LCMessage(
+                            role=m.get("role", "user"),
+                            content=m.get("content", ""),
+                        )
+                    )
+                elif hasattr(m, "role") and hasattr(m, "content"):
+                    lc_history.append(
+                        LCMessage(role=m.role, content=m.content)
+                    )
+
+        chat_engine = CondenseQuestionChatEngine.from_defaults(
+            query_engine=self._query_engine,
             llm=self._get_llm(),
+            chat_history=lc_history,
         )
         response = chat_engine.chat(message)
         return str(response)
@@ -797,3 +835,82 @@ def create_sub_question_engine(
     )
 
     return sub_engine
+
+
+def create_chat_engine(
+    kb_id: str,
+    *,
+    chat_mode: str = "condense_question",
+    chat_history: Optional[List] = None,
+    mode: str = "vector",
+    top_k: int = 5,
+    use_reranker: Optional[bool] = None,
+    use_auto_merging: bool = False,
+    use_hyde: bool = False,
+    use_multi_query: bool = False,
+    num_multi_queries: Optional[int] = None,
+    response_mode: str = "compact",
+    model_id: Optional[str] = None,
+) -> Any:
+    """创建 CondenseQuestionChatEngine，包裹定制的查询引擎。
+
+    与 ``create_query_engine`` 共享相同的查询引擎配置（reranker / postprocessor / chunk 策略），
+    但返回的是 LlamaIndex 原生 chat engine，支持基于历史上下文的对话压缩。
+
+    每次调用时需传入完整的 chat_history（从 ChatStore 获取），
+    chat engine 会自动将历史 + 最新消息压缩为独立查询再执行检索。
+
+    Args:
+        kb_id: 知识库标识。
+        chat_mode: 对话模式（``condense_question`` / ``context`` /
+                   ``condense_plus_context`` / ``simple`` / ``best``）。
+        chat_history: 历史消息列表，dict（{role, content}）或 LlamaIndex ChatMessage。
+
+    Returns:
+        CondenseQuestionChatEngine 实例，调用 ``.chat(message)`` 即可获取回复。
+    """
+    from kb_core.services import VectorStoreService
+    from rag.config import get_settings
+    from llama_index.core.chat_engine import CondenseQuestionChatEngine
+    from llama_index.core.llms import ChatMessage as LCMessage
+
+    settings = get_settings()
+    vector_store = VectorStoreService.get_vector_store(kb_id)
+    index = vector_store.load_index()
+    if index is None:
+        raise ValueError(f"知识库 {kb_id} 不存在或未建立索引")
+
+    wrapper = QueryEngineWrapper(
+        index=index,
+        top_k=top_k,
+        use_reranker=use_reranker,
+        use_auto_merging=use_auto_merging,
+        auto_merging_threshold=settings.auto_merging_simple_ratio_thresh,
+        mode=mode,
+        use_hyde=use_hyde,
+        use_multi_query=use_multi_query,
+        num_multi_queries=num_multi_queries,
+        response_mode=response_mode,
+        vector_store=vector_store,
+        model_id=model_id,
+        chat_mode=chat_mode,
+    )
+
+    lc_history: Optional[List[LCMessage]] = None
+    if chat_history:
+        lc_history = []
+        for m in chat_history:
+            if isinstance(m, LCMessage):
+                lc_history.append(m)
+            elif isinstance(m, dict):
+                lc_history.append(
+                    LCMessage(role=m.get("role", "user"), content=m.get("content", ""))
+                )
+            elif hasattr(m, "role") and hasattr(m, "content"):
+                lc_history.append(LCMessage(role=m.role, content=m.content))
+
+    return CondenseQuestionChatEngine.from_defaults(
+        query_engine=wrapper._query_engine,
+        llm=wrapper._get_llm(),
+        chat_history=lc_history,
+    )

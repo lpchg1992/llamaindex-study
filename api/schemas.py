@@ -441,6 +441,10 @@ class RefreshTopicsRequest(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     session_id: Optional[str] = None
+    chat_mode: Optional[str] = Field(
+        None,
+        description="chat engine mode: condense_question, context, condense_plus_context, simple, best",
+    )
 
 
 class ChatResponse(BaseModel):

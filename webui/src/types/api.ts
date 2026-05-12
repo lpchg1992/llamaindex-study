@@ -101,8 +101,13 @@ export interface QueryRequest {
   use_auto_merging?: boolean
   use_reranker?: boolean
   response_mode?: string
-  chat_mode?: string
   use_sub_question?: boolean
+}
+
+export interface ChatRequest {
+  message: string
+  session_id?: string
+  chat_mode?: string
 }
 
 export interface QueryResponse {

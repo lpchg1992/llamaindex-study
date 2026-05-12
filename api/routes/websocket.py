@@ -46,19 +46,22 @@ async def ws_tasks(websocket: WebSocket):
 @router.post("/chat/{kb_id}", response_model=ChatResponse)
 def chat(kb_id: str, req: ChatRequest):
     from rag.chat_engine import get_chat_service
-    from kb_core.services import SearchService
+    from rag.query_engine import create_chat_engine
 
     chat_service = get_chat_service()
+    session_id = req.session_id or f"chat_{kb_id}"
 
     def query_func(query: str) -> str:
-        result = SearchService.query(
-            kb_id=kb_id,
-            query=query,
-            top_k=5,
-        )
-        return result.get("response", "")
+        history = chat_service.get_session_history(session_id)
+        if history and history[-1].get("role") == "user" and history[-1].get("content") == query:
+            history = history[:-1]
 
-    session_id = req.session_id or f"chat_{kb_id}"
+        chat_engine = create_chat_engine(
+            kb_id=kb_id,
+            chat_mode=req.chat_mode or "condense_question",
+            chat_history=history,
+        )
+        return str(chat_engine.chat(query))
 
     result = chat_service.chat(
         session_id=session_id,

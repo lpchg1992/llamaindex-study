@@ -57,7 +57,6 @@ interface QueryConfig {
   useAutoMerging: boolean
   useReranker: boolean
   responseMode: string
-  chatMode: string
   useSubQuestion: boolean
   topK: number
 }
@@ -80,7 +79,6 @@ export function QueryPage() {
     useAutoMerging: false,
     useReranker: true,
     responseMode: 'compact',
-    chatMode: 'condense_question',
     useSubQuestion: false,
     topK: 5,
   })
@@ -170,7 +168,6 @@ export function QueryPage() {
         use_auto_merging: config.useAutoMerging,
         use_reranker: config.useReranker,
         response_mode: config.responseMode,
-        chat_mode: config.chatMode !== 'condense_question' ? config.chatMode : undefined,
         use_sub_question: config.useSubQuestion,
         top_k: config.topK,
       })
@@ -317,14 +314,14 @@ export function QueryPage() {
                 id="topK"
                 type="range"
                 min={1}
-                max={20}
+                max={50}
                 value={config.topK}
                 onChange={(e) => updateConfig('topK', parseInt(e.target.value) || 5)}
                 className="w-full"
               />
               <div className="flex justify-between text-xs text-muted-foreground">
                 <span>1</span>
-                <span>20</span>
+                <span>50</span>
               </div>
             </div>
 
@@ -359,23 +356,6 @@ export function QueryPage() {
                   <SelectItem value="compact_accumulate">Compact Accumulate</SelectItem>
                 </SelectContent>
               </Select>
-            </div>
-
-            <div className="space-y-2">
-              <Label>Chat Mode</Label>
-              <Select value={config.chatMode} onValueChange={(v) => updateConfig('chatMode', v)}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="condense_question">Condense Question</SelectItem>
-                  <SelectItem value="context">Context</SelectItem>
-                  <SelectItem value="condense_plus_context">Condense + Context</SelectItem>
-                  <SelectItem value="simple">Simple</SelectItem>
-                  <SelectItem value="best">Best</SelectItem>
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">Only affects chat mode (conversation history)</p>
             </div>
 
             <div className="space-y-3">

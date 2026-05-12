@@ -26,6 +26,7 @@ export function Chat() {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [inputMessage, setInputMessage] = useState('')
   const [currentSessionId, setCurrentSessionId] = useState<string>('')
+  const [chatMode, setChatMode] = useState<string>('condense_question')
   const scrollRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -65,7 +66,8 @@ export function Chat() {
     try {
       const result = await chatMutation.mutateAsync({
         message: inputMessage,
-        sessionId: currentSessionId || undefined,
+        session_id: currentSessionId || undefined,
+        chat_mode: chatMode,
       })
       const assistantMessage: ChatMessage = { role: 'assistant', content: result.response }
       setMessages(prev => [...prev, assistantMessage])
@@ -113,6 +115,21 @@ export function Chat() {
               ))}
             </SelectContent>
           </Select>
+        </div>
+
+        <div className="mb-4 space-y-2">
+          <Label>Chat Mode</Label>
+          <Select value={chatMode} onValueChange={setChatMode}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="condense_question">Condense Question</SelectItem>
+              <SelectItem value="context">Context</SelectItem>
+              <SelectItem value="condense_plus_context">Condense + Context</SelectItem>
+              <SelectItem value="simple">Simple</SelectItem>
+              <SelectItem value="best">Best</SelectItem>
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">How the chat engine uses conversation history</p>
         </div>
 
         <div className="flex items-center justify-between mb-2">

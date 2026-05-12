@@ -35,6 +35,7 @@ import type {
   ChatResponse,
   ChatHistoryResponse,
   ChatSessionsResponse,
+  ChatRequest,
   ObservabilityStats,
   ObservabilityDatesResponse,
   TracesResponse,
@@ -604,11 +605,11 @@ export function useLanceDuplicates(kbId: string, tableName?: string) {
 }
 
 export function useChat(kbId: string) {
-  return useMutation<ChatResponse, Error, { message: string; sessionId?: string }>({
-    mutationFn: async ({ message, sessionId }) => {
+  return useMutation<ChatResponse, Error, ChatRequest>({
+    mutationFn: async (req: ChatRequest) => {
       const { data } = await apiClient.post<ChatResponse>(
         `${API_BASE}/chat/${kbId}`,
-        { message, session_id: sessionId }
+        { message: req.message, session_id: req.session_id, chat_mode: req.chat_mode }
       )
       return data
     },
