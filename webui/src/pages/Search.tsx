@@ -30,14 +30,15 @@ export function SearchPage() {
   const [hasSearched, setHasSearched] = useState(false)
   const [retrievalMode, setRetrievalMode] = useState<'vector' | 'hybrid'>('vector')
   const [useAutoMerging, setUseAutoMerging] = useState(false)
+  const [useReranker, setUseReranker] = useState(true)
   const [kbSearch, setKbSearch] = useState('')
   const [topK, setTopK] = useState(5)
 
-  // Sync with settings when settings load
   useEffect(() => {
     if (settings) {
       setRetrievalMode(settings.use_hybrid_search ? 'hybrid' : 'vector')
       setUseAutoMerging(settings.use_auto_merging ?? false)
+      setUseReranker(settings.use_reranker ?? true)
       setTopK(settings.top_k ?? 5)
     }
   }, [settings])
@@ -63,6 +64,7 @@ export function SearchPage() {
         route_mode: 'general',
         retrieval_mode: retrievalMode,
         use_auto_merging: useAutoMerging || undefined,
+        use_reranker: useReranker || undefined,
       })
       setResults(response)
     } catch (error) {
@@ -126,6 +128,18 @@ export function SearchPage() {
               id="auto-merging"
               checked={useAutoMerging}
               onCheckedChange={setUseAutoMerging}
+            />
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div className="space-y-0.5">
+              <Label htmlFor="reranker" className="text-sm">Reranker</Label>
+              <p className="text-xs text-muted-foreground">Re-rank for better relevance</p>
+            </div>
+            <Switch
+              id="reranker"
+              checked={useReranker}
+              onCheckedChange={setUseReranker}
             />
           </div>
 

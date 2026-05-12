@@ -55,7 +55,10 @@ interface QueryConfig {
   useMultiQuery: boolean
   numMultiQueries: number
   useAutoMerging: boolean
+  useReranker: boolean
   responseMode: string
+  chatMode: string
+  useSubQuestion: boolean
   topK: number
 }
 
@@ -75,7 +78,10 @@ export function QueryPage() {
     useMultiQuery: false,
     numMultiQueries: 3,
     useAutoMerging: false,
+    useReranker: true,
     responseMode: 'compact',
+    chatMode: 'condense_question',
+    useSubQuestion: false,
     topK: 5,
   })
 
@@ -89,6 +95,7 @@ export function QueryPage() {
         useHyde: settings.use_hyde ?? prev.useHyde,
         useMultiQuery: settings.use_multi_query ?? prev.useMultiQuery,
         numMultiQueries: settings.num_multi_queries ?? prev.numMultiQueries,
+        useReranker: settings.use_reranker ?? prev.useReranker,
         retrieval_mode: settings.use_hybrid_search ? 'hybrid' : 'vector',
         responseMode: settings.response_mode ?? prev.responseMode,
       }))
@@ -161,7 +168,10 @@ export function QueryPage() {
         use_multi_query: config.useMultiQuery,
         num_multi_queries: config.useMultiQuery ? config.numMultiQueries : undefined,
         use_auto_merging: config.useAutoMerging,
+        use_reranker: config.useReranker,
         response_mode: config.responseMode,
+        chat_mode: config.chatMode !== 'condense_question' ? config.chatMode : undefined,
+        use_sub_question: config.useSubQuestion,
         top_k: config.topK,
       })
       setResponse(result)
@@ -351,8 +361,32 @@ export function QueryPage() {
               </Select>
             </div>
 
+            <div className="space-y-2">
+              <Label>Chat Mode</Label>
+              <Select value={config.chatMode} onValueChange={(v) => updateConfig('chatMode', v)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="condense_question">Condense Question</SelectItem>
+                  <SelectItem value="context">Context</SelectItem>
+                  <SelectItem value="condense_plus_context">Condense + Context</SelectItem>
+                  <SelectItem value="simple">Simple</SelectItem>
+                  <SelectItem value="best">Best</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">Only affects chat mode (conversation history)</p>
+            </div>
+
             <div className="space-y-3">
               <Label>Enhancements</Label>
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label htmlFor="reranker" className="text-sm">Reranker</Label>
+                  <p className="text-xs text-muted-foreground">Re-rank results for better relevance</p>
+                </div>
+                <Switch id="reranker" checked={config.useReranker} onCheckedChange={(v) => updateConfig('useReranker', v)} />
+              </div>
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
                   <Label htmlFor="hyde" className="text-sm">HyDE Query</Label>
@@ -387,6 +421,13 @@ export function QueryPage() {
                   <p className="text-xs text-muted-foreground">Merge child nodes (hierarchical)</p>
                 </div>
                 <Switch id="merging" checked={config.useAutoMerging} onCheckedChange={(v) => updateConfig('useAutoMerging', v)} />
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label htmlFor="subq" className="text-sm">Sub-Question Decomposition</Label>
+                  <p className="text-xs text-muted-foreground">Break complex queries into sub-questions</p>
+                </div>
+                <Switch id="subq" checked={config.useSubQuestion} onCheckedChange={(v) => updateConfig('useSubQuestion', v)} />
               </div>
             </div>
           </div>

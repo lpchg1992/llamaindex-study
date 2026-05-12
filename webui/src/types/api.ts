@@ -81,6 +81,7 @@ export interface SearchRequest {
   kb_ids?: string
   exclude?: string[]
   use_auto_merging?: boolean
+  use_reranker?: boolean
   retrieval_mode?: 'vector' | 'hybrid'
 }
 
@@ -98,7 +99,10 @@ export interface QueryRequest {
   use_multi_query?: boolean
   num_multi_queries?: number
   use_auto_merging?: boolean
+  use_reranker?: boolean
   response_mode?: string
+  chat_mode?: string
+  use_sub_question?: boolean
 }
 
 export interface QueryResponse {
@@ -666,6 +670,7 @@ export interface SystemSettings {
   chunk_strategy: string
   chunk_size: number
   chunk_overlap: number
+  window_size: number
   hierarchical_chunk_sizes: number[]
   semantic_chunking_similarity_threshold: number
   semantic_chunking_percentile_threshold: number | null
@@ -678,8 +683,13 @@ export interface SystemSettings {
   pdf_scan_threshold: number
   pdf_image_ratio_threshold: number
   use_reranker: boolean
+  enable_similarity_filter: boolean
+  similarity_filter_cutoff: number
+  enable_long_context_reorder: boolean
   reference_strategy: string
   response_mode: string
+  use_ingestion_pipeline: boolean
+  enable_context_enrichment: boolean
   progress_update_interval: number
   max_concurrent_tasks: number
   embed_concurrent_pool_size: number
@@ -713,6 +723,7 @@ export interface SettingsUpdateRequest {
   chunk_strategy?: string
   chunk_size?: number
   chunk_overlap?: number
+  window_size?: number
   hierarchical_chunk_sizes?: number[]
   semantic_chunking_similarity_threshold?: number
   semantic_chunking_percentile_threshold?: number | null
@@ -725,8 +736,13 @@ export interface SettingsUpdateRequest {
   pdf_scan_threshold?: number
   pdf_image_ratio_threshold?: number
   use_reranker?: boolean
+  enable_similarity_filter?: boolean
+  similarity_filter_cutoff?: number
+  enable_long_context_reorder?: boolean
   reference_strategy?: string
   response_mode?: string
+  use_ingestion_pipeline?: boolean
+  enable_context_enrichment?: boolean
   progress_update_interval?: number
   max_concurrent_tasks?: number
   embed_concurrent_pool_size?: number

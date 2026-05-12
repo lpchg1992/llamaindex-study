@@ -562,6 +562,52 @@ export function SettingsPage() {
 
                 <div className="flex items-center justify-between">
                   <div className="space-y-0.5">
+                    <Label htmlFor="similarity-filter">Similarity Filter</Label>
+                    <p className="text-sm text-muted-foreground">
+                      Filter low-score nodes before reranking
+                    </p>
+                  </div>
+                  <Switch
+                    id="similarity-filter"
+                    checked={localSettings.enable_similarity_filter}
+                    onCheckedChange={(checked) => updateField('enable_similarity_filter', checked)}
+                  />
+                </div>
+
+                {localSettings.enable_similarity_filter && (
+                  <div className="space-y-2 pl-6 border-l-2">
+                    <Label htmlFor="similarity-cutoff">Cutoff Threshold</Label>
+                    <div className="flex items-center gap-4">
+                      <Input
+                        id="similarity-cutoff"
+                        type="number" min={0} max={1} step={0.05}
+                        value={localSettings.similarity_filter_cutoff}
+                        onChange={(e) => updateField('similarity_filter_cutoff', parseFloat(e.target.value) || 0.3)}
+                        className="w-24"
+                      />
+                      <span className="text-sm text-muted-foreground">
+                        Score &lt; {localSettings.similarity_filter_cutoff} → dropped
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label htmlFor="long-context-reorder">Long Context Reorder</Label>
+                    <p className="text-sm text-muted-foreground">
+                      Reorder nodes for better attention distribution
+                    </p>
+                  </div>
+                  <Switch
+                    id="long-context-reorder"
+                    checked={localSettings.enable_long_context_reorder}
+                    onCheckedChange={(checked) => updateField('enable_long_context_reorder', checked)}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
                     <Label htmlFor="semantic-chunking">Semantic Chunking</Label>
                     <p className="text-sm text-muted-foreground">
                       Split documents by semantic similarity
@@ -605,6 +651,41 @@ export function SettingsPage() {
                     <div><Badge variant="outline">refine</Badge> Iteratively refine answer</div>
                     <div><Badge variant="outline">tree_summarize</Badge> Summarize from multiple sources</div>
                   </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Ingestion Pipeline</CardTitle>
+                <CardDescription>Reference detection, text normalization &amp; caching during document embedding</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label htmlFor="ingestion-pipeline">Enable IngestionPipeline</Label>
+                    <p className="text-sm text-muted-foreground">
+                      Apply reference detection, text cleaning, and caching during import
+                    </p>
+                  </div>
+                  <Switch
+                    id="ingestion-pipeline"
+                    checked={localSettings.use_ingestion_pipeline}
+                    onCheckedChange={(checked) => updateField('use_ingestion_pipeline', checked)}
+                  />
+                </div>
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label htmlFor="context-enrich">Context Enrichment</Label>
+                    <p className="text-sm text-muted-foreground">
+                      Prepend doc name, source, and category to chunk text before embedding
+                    </p>
+                  </div>
+                  <Switch
+                    id="context-enrich"
+                    checked={localSettings.enable_context_enrichment}
+                    onCheckedChange={(checked) => updateField('enable_context_enrichment', checked)}
+                  />
                 </div>
               </CardContent>
             </Card>
@@ -751,7 +832,9 @@ export function SettingsPage() {
                   <SelectContent>
                     <SelectItem value="hierarchical">Hierarchical (Parent-Child)</SelectItem>
                     <SelectItem value="sentence">Sentence (Fixed Size)</SelectItem>
+                    <SelectItem value="window">Window (Context-Aware)</SelectItem>
                     <SelectItem value="semantic">Semantic (Embedding-based)</SelectItem>
+                    <SelectItem value="markdown">Markdown (Heading-based)</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -831,6 +914,19 @@ export function SettingsPage() {
                     </p>
                   </div>
                 </>
+              ) : localSettings.chunk_strategy === 'window' ? (
+                <div className="space-y-2 p-4 bg-muted/50 rounded-lg">
+                  <Label htmlFor="window-size">Window Size (sentences)</Label>
+                  <Input
+                    id="window-size"
+                    type="number" min={1} max={10}
+                    value={localSettings.window_size}
+                    onChange={(e) => updateField('window_size', parseInt(e.target.value) || 3)}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Surrounding sentences per chunk for context-aware retrieval
+                  </p>
+                </div>
               ) : (
                 <div className="space-y-4">
                   <div className="grid grid-cols-2 gap-4">
