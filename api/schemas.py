@@ -15,9 +15,9 @@ from pydantic import BaseModel, Field
 class SearchRequest(BaseModel):
     query: str = Field(..., description="搜索查询")
     top_k: int = Field(5, ge=1, le=100)
-    route_mode: Literal["general", "auto", "all"] = Field(
+    route_mode: Literal["general", "auto", "all", "agent"] = Field(
         "general",
-        description="路由模式: general(用户选择知识库), auto(自动路由), all(所有知识库)",
+        description="路由模式: general(用户选择知识库), auto(自动路由), all(所有知识库), agent(ReAct Agent模式)",
     )
     model_id: Optional[str] = Field(
         None,
@@ -54,9 +54,9 @@ class SearchResult(BaseModel):
 class QueryRequest(BaseModel):
     query: str = Field(..., description="查询")
     top_k: int = Field(5, ge=1, le=100)
-    route_mode: Literal["general", "auto", "all"] = Field(
+    route_mode: Literal["general", "auto", "all", "agent"] = Field(
         "general",
-        description="路由模式: general(用户选择知识库), auto(自动路由), all(所有知识库)",
+        description="路由模式: general(用户选择知识库), auto(自动路由), all(所有知识库), agent(ReAct Agent模式)",
     )
     retrieval_mode: Literal["vector", "hybrid"] = Field(
         "vector", description="检索模式: vector(向量检索), hybrid(混合搜索)"
@@ -111,6 +111,27 @@ class QueryResponse(BaseModel):
     response: str
     sources: List[dict] = []
 
+
+class ChatRequest(BaseModel):
+    message: str = Field(..., description="用户消息")
+    session_id: Optional[str] = Field(None, description="会话 ID（用于多轮对话）")
+    chat_mode: Optional[str] = Field(
+        "condense_question",
+        description="聊天模式: condense_question, context, condense_plus_context, simple, best",
+    )
+    model_id: Optional[str] = Field(None, description="使用的 LLM 模型 ID")
+    temperature: Optional[float] = Field(None, ge=0.0, le=2.0, description="生成随机性 (0-2)")
+    max_tokens: Optional[int] = Field(None, ge=1, description="最大生成 token 数")
+    top_k: Optional[int] = Field(None, ge=1, le=100, description="检索返回的节点数量")
+    system_prompt: Optional[str] = Field(None, description="系统提示词")
+    streaming: Optional[bool] = Field(False, description="是否启用流式输出")
+
+
+class ChatResponse(BaseModel):
+    response: str = Field(..., description="助手回复")
+    session_id: str = Field(..., description="会话 ID")
+    kb_id: str = Field(..., description="知识库 ID")
+    history: List[Dict[str, str]] = Field(default_factory=list, description="对话历史")
 
 
 class IngestRequest(BaseModel):
@@ -427,15 +448,6 @@ class ChunkResponse(BaseModel):
 
 
 # ============== Chat/WebSocket Models ==============
-
-
-class ChatRequest(BaseModel):
-    message: str
-    session_id: Optional[str] = None
-    chat_mode: Optional[str] = Field(
-        None,
-        description="chat engine mode: condense_question, context, condense_plus_context, simple, best",
-    )
 
 
 class ChatResponse(BaseModel):
@@ -775,3 +787,39 @@ def _update_env_file(updates: Dict[str, str]) -> None:
         env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
     except Exception as e:
         logger.error(f"更新 .env 文件失败: {e}")
+
+
+class TestQuestionItem(BaseModel):
+    query: str = Field(..., description="测试问题")
+    reference_answer: Optional[str] = Field(None, description="参考答案（用于 correctness/context_recall 评估）")
+
+
+class EvalRunRequest(BaseModel):
+    kb_id: str = Field(..., description="知识库 ID")
+    test_questions: List[TestQuestionItem] = Field(..., description="测试问题列表")
+    metrics: List[str] = Field(
+        default=["faithfulness", "answer_relevancy"],
+        description="评估指标列表: context_precision, context_recall, faithfulness, answer_relevancy",
+    )
+
+
+class EvalRunResponse(BaseModel):
+    run_id: str = Field(..., description="评估运行 ID")
+    kb_id: str = Field(..., description="知识库 ID")
+    status: str = Field(..., description="运行状态: pending, running, completed, failed")
+    summary: Dict[str, Any] = Field(default_factory=dict, description="汇总分数")
+    per_question: List[Dict[str, Any]] = Field(default_factory=list, description="每个问题的详细分数")
+    created_at: float = Field(..., description="创建时间戳")
+    completed_at: Optional[float] = Field(None, description="完成时间戳")
+    error: Optional[str] = Field(None, description="错误信息")
+
+
+class EvalCompareRequest(BaseModel):
+    run_ids: List[str] = Field(..., description="要比较的评估运行 ID 列表（至少2个）")
+    metric: str = Field(..., description="要比较的指标名: context_precision, context_recall, faithfulness, answer_relevancy")
+
+
+class EvalCompareResponse(BaseModel):
+    metric: str = Field(..., description="比较的指标名")
+    runs: List[Dict[str, Any]] = Field(..., description="各运行的汇总信息")
+    comparison: Dict[str, Any] = Field(..., description="对比结果")

@@ -54,7 +54,7 @@ async def lifespan(app: FastAPI):
     logger = get_logger(__name__)
     logger.info("应用启动中...")
 
-    from rag.callbacks import setup_callbacks
+    from rag.callbacks import setup_callbacks, get_callback_manager
     from rag.token_stats_db import init_token_stats_db
 
     setup_callbacks()
@@ -76,6 +76,9 @@ async def lifespan(app: FastAPI):
         await scheduler_task
     except asyncio.CancelledError:
         pass
+    manager = get_callback_manager()
+    if manager:
+        manager._langfuse_handler.flush()
     from kb_processing.parallel_embedding import get_parallel_processor
     processor = get_parallel_processor()
     if processor._health_check_task is not None:

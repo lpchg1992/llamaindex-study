@@ -804,6 +804,7 @@ def create_sub_question_engine(
         A SubQuestionQueryEngine ready for ``engine.query("...")``.
     """
     from llama_index.core.query_engine import SubQuestionQueryEngine
+    from llama_index.core.question_gen import LLMQuestionGenerator
     from llama_index.core.tools import QueryEngineTool, ToolMetadata
     from rag.config import get_settings
 
@@ -828,9 +829,11 @@ def create_sub_question_engine(
         ),
     )
 
+    question_gen = LLMQuestionGenerator.from_defaults(llm=llm)
     sub_engine = SubQuestionQueryEngine.from_defaults(
         query_engine_tools=[query_tool],
         llm=llm,
+        question_gen=question_gen,
         verbose=True,
     )
 
@@ -851,30 +854,50 @@ def create_chat_engine(
     num_multi_queries: Optional[int] = None,
     response_mode: str = "compact",
     model_id: Optional[str] = None,
+    temperature: Optional[float] = None,
+    max_tokens: Optional[int] = None,
+    system_prompt: Optional[str] = None,
 ) -> Any:
-    """创建 CondenseQuestionChatEngine，包裹定制的查询引擎。
+    """创建 LlamaIndex 原生 chat engine，支持多种对话模式。
 
     与 ``create_query_engine`` 共享相同的查询引擎配置（reranker / postprocessor / chunk 策略），
-    但返回的是 LlamaIndex 原生 chat engine，支持基于历史上下文的对话压缩。
+    但返回的是 LlamaIndex 原生 chat engine，支持基于历史上下文的对话。
+
+    Chat modes (ref: https://docs.llamaindex.ai/en/stable/module_guides/deploying/chat_engines/):
+        - ``condense_question``: 将历史 + 新消息压缩为独立查询再执行 RAG（默认，推荐）
+        - ``context``: 仅用检索到的 context 回复，适合简单知识问答
+        - ``condense_plus_context`` / ``best``: 历史压缩 + context 双重上下文
+        - ``simple``: 无检索，直接 LLM 对话
 
     每次调用时需传入完整的 chat_history（从 ChatStore 获取），
     chat engine 会自动将历史 + 最新消息压缩为独立查询再执行检索。
 
     Args:
         kb_id: 知识库标识。
-        chat_mode: 对话模式（``condense_question`` / ``context`` /
-                   ``condense_plus_context`` / ``simple`` / ``best``）。
+        chat_mode: 对话模式。
         chat_history: 历史消息列表，dict（{role, content}）或 LlamaIndex ChatMessage。
+        model_id: 使用的 LLM 模型 ID。
+        temperature: 生成随机性 (0.0-2.0)，None 则使用默认值。
+        max_tokens: 最大生成 token 数，None 则不限制。
+        system_prompt: 系统提示词，None 则使用默认。
 
     Returns:
-        CondenseQuestionChatEngine 实例，调用 ``.chat(message)`` 即可获取回复。
+        LlamaIndex BaseChatEngine 实例，调用 ``.chat(message)`` 即可获取回复。
     """
     from kb_core.services import VectorStoreService
     from rag.config import get_settings
-    from llama_index.core.chat_engine import CondenseQuestionChatEngine
     from llama_index.core.llms import ChatMessage as LCMessage
 
     settings = get_settings()
+
+    from rag.config import get_model_registry
+    from rag.ollama_utils import configure_embed_model_by_model_id
+
+    registry = get_model_registry()
+    default_embed = registry.get_default("embedding")
+    if default_embed:
+        configure_embed_model_by_model_id(default_embed["id"])
+
     vector_store = VectorStoreService.get_vector_store(kb_id)
     index = vector_store.load_index()
     if index is None:
@@ -896,6 +919,12 @@ def create_chat_engine(
         chat_mode=chat_mode,
     )
 
+    llm = wrapper._get_llm()
+    if temperature is not None:
+        llm.temperature = temperature
+    if max_tokens is not None:
+        llm.max_tokens = max_tokens
+
     lc_history: Optional[List[LCMessage]] = None
     if chat_history:
         lc_history = []
@@ -909,8 +938,37 @@ def create_chat_engine(
             elif hasattr(m, "role") and hasattr(m, "content"):
                 lc_history.append(LCMessage(role=m.role, content=m.content))
 
+    if chat_mode == "simple":
+        from llama_index.core.chat_engine import SimpleChatEngine
+        return SimpleChatEngine.from_defaults(
+            llm=llm,
+            chat_history=lc_history,
+            system_prompt=system_prompt,
+        )
+
+    if chat_mode in ("context", "condense_plus_context", "best"):
+        retriever = wrapper.get_retriever()
+        if chat_mode == "context":
+            from llama_index.core.chat_engine import ContextChatEngine
+            return ContextChatEngine.from_defaults(
+                retriever=retriever,
+                llm=llm,
+                chat_history=lc_history,
+                system_prompt=system_prompt,
+            )
+        else:
+            from llama_index.core.chat_engine import CondensePlusContextChatEngine
+            return CondensePlusContextChatEngine.from_defaults(
+                retriever=retriever,
+                llm=llm,
+                chat_history=lc_history,
+                system_prompt=system_prompt,
+            )
+
+    from llama_index.core.chat_engine import CondenseQuestionChatEngine
     return CondenseQuestionChatEngine.from_defaults(
         query_engine=wrapper._query_engine,
-        llm=wrapper._get_llm(),
+        llm=llm,
         chat_history=lc_history,
+        system_prompt=system_prompt,
     )

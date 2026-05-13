@@ -3,6 +3,7 @@ WebSocket and chat endpoints.
 """
 
 from fastapi import APIRouter, WebSocket
+from fastapi.responses import StreamingResponse
 
 from api.schemas import ChatRequest, ChatResponse
 from rag.logger import get_logger
@@ -51,25 +52,41 @@ def chat(kb_id: str, req: ChatRequest):
     chat_service = get_chat_service()
     session_id = req.session_id or f"chat_{kb_id}"
 
-    def query_func(query: str) -> str:
-        history = chat_service.get_session_history(session_id)
-        if history and history[-1].get("role") == "user" and history[-1].get("content") == query:
-            history = history[:-1]
+    history = chat_service.get_session_history(session_id)
+    if history and history[-1].get("role") == "user" and history[-1].get("content") == req.message:
+        history = history[:-1]
 
-        chat_engine = create_chat_engine(
-            kb_id=kb_id,
-            chat_mode=req.chat_mode or "condense_question",
-            chat_history=history,
-        )
-        return str(chat_engine.chat(query))
+    chat_engine = create_chat_engine(
+        kb_id=kb_id,
+        chat_mode=req.chat_mode or "condense_question",
+        chat_history=history,
+        model_id=req.model_id,
+        temperature=req.temperature,
+        max_tokens=req.max_tokens,
+        top_k=req.top_k,
+        system_prompt=req.system_prompt,
+    )
 
+    if req.streaming:
+
+        def generate():
+            response = chat_engine.stream_chat(req.message)
+            full_response = ""
+            for token in response.response_gen:
+                full_response += token
+                yield token
+            chat_service._chat_store.add_message(session_id, "user", req.message)
+            chat_service._chat_store.add_message(session_id, "assistant", full_response)
+
+        return StreamingResponse(generate(), media_type="text/plain; charset=utf-8")
+
+    response = str(chat_engine.chat(req.message))
     result = chat_service.chat(
         session_id=session_id,
         message=req.message,
         kb_id=kb_id,
-        query_func=query_func,
+        query_func=lambda msg: str(chat_engine.chat(msg)),
     )
-
     return ChatResponse(**result)
 
 
