@@ -381,8 +381,10 @@ class SearchService:
                 logger.info(
                     f"[SearchService.query] SubQuestion response_len={len(response_str)}, sources={len(sources)}"
                 )
-                if not response_str or response_str.strip() == "":
+                if not response_str or response_str.strip() == "" or response_str.strip() == "Empty Response":
                     logger.warning("Sub-Question returned empty response, falling back to standard query engine")
+                elif not sources:
+                    logger.warning("Sub-Question returned response but no source nodes, falling back to standard query engine")
                 else:
                     return {
                         "response": response_str,
