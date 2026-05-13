@@ -52,11 +52,6 @@ import type {
   ChunkInfo,
   SelectiveImportRequest,
   FilesImportRequest,
-  EvalRunRequest,
-  EvalRunResponse,
-  EvalCompareRequest,
-  EvalCompareResponse,
-  TestQuestionItem,
 } from '@/types/api'
 
 const API_BASE = ''

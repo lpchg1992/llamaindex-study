@@ -13,6 +13,7 @@ from .lance import router as lance_router
 from .websocket import router as websocket_router
 from .observability import router as observability_router
 from .settings import router as settings_router
+from .evaluation import router as evaluation_router
 
 __all__ = [
     "health_router",
@@ -29,4 +30,5 @@ __all__ = [
     "websocket_router",
     "observability_router",
     "settings_router",
+    "evaluation_router",
 ]

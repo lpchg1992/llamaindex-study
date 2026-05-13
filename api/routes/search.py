@@ -131,6 +131,23 @@ def query(req: QueryRequest):
             )
             return QueryResponse(**result)
 
+        if req.route_mode == "agent":
+            result = QueryRouter.query(
+                req.query,
+                top_k=req.top_k,
+                mode="agent",
+                use_hyde=req.use_hyde,
+                use_multi_query=req.use_multi_query,
+                num_multi_queries=req.num_multi_queries,
+                use_auto_merging=req.use_auto_merging,
+                use_reranker=req.use_reranker,
+                response_mode=req.response_mode,
+                retrieval_mode=req.retrieval_mode,
+                model_id=model_id,
+                embed_model_id=req.embed_model_id,
+            )
+            return QueryResponse(**result)
+
         kb_id_list = _parse_kb_ids_or_raise(req.kb_ids, req.route_mode)
 
         result = QueryRouter.query_multi(

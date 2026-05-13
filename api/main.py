@@ -47,6 +47,7 @@ from api.routes import (
     websocket_router,
     observability_router,
     settings_router,
+    evaluation_router,
 )
 from rag.logger import get_logger
 
@@ -132,6 +133,7 @@ RAG 检索增强生成 API，支持任务队列异步处理。
     app.include_router(websocket_router)
     app.include_router(observability_router)
     app.include_router(settings_router)
+    app.include_router(evaluation_router)
 
     # 挂载前端静态文件（如果 dist 目录存在）
     _mount_frontend(app)
