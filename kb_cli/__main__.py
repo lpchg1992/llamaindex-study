@@ -2130,9 +2130,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--force-delete", action=argparse.BooleanOptionalAction, default=True
     )
     ingest_obsidian.add_argument("--persist-dir")
-    ingest_obsidian.add_argument(        action=argparse.BooleanOptionalAction,
-        default=True,
-    )
     ingest_obsidian.set_defaults(handler=handle_ingest_obsidian)
 
     ingest_zotero = ingest_sub.add_parser("zotero", help="导入 Zotero 收藏夹")
@@ -2140,9 +2137,6 @@ def build_parser() -> argparse.ArgumentParser:
     ingest_zotero.add_argument("--collection-id")
     ingest_zotero.add_argument("--collection-name")
     ingest_zotero.add_argument("--rebuild", action="store_true")
-    ingest_zotero.add_argument(        action=argparse.BooleanOptionalAction,
-        default=True,
-    )
     ingest_zotero.add_argument(
         "--chunk-strategy",
         choices=["hierarchical", "sentence", "semantic", "window", "markdown"],
@@ -2162,9 +2156,6 @@ def build_parser() -> argparse.ArgumentParser:
     ingest_file = ingest_sub.add_parser("file", help="导入单个文件或目录")
     ingest_file.add_argument("kb_id")
     ingest_file.add_argument("path")
-    ingest_file.add_argument(        action=argparse.BooleanOptionalAction,
-        default=True,
-    )
     ingest_file.set_defaults(handler=handle_ingest_file)
 
     ingest_batch = ingest_sub.add_parser("batch", help="批量导入多个路径")
@@ -2178,18 +2169,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--exclude",
         help="从默认格式中排除指定的文件格式 (如: xlsx,png)，逗号分隔",
     )
-    ingest_batch.add_argument(        action=argparse.BooleanOptionalAction,
-        default=True,
-    )
     ingest_batch.set_defaults(handler=handle_ingest_batch)
 
     ingest_rebuild = ingest_sub.add_parser(
         "rebuild", help="重建知识库（清空后重新导入）"
     )
     ingest_rebuild.add_argument("kb_id")
-    ingest_rebuild.add_argument(        action=argparse.BooleanOptionalAction,
-        default=True,
-    )
     ingest_rebuild.set_defaults(handler=handle_ingest_rebuild)
 
     obsidian_parser = subparsers.add_parser("obsidian", help="Obsidian 辅助命令")
