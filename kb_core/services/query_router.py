@@ -369,6 +369,7 @@ class QueryRouter:
             use_hyde=use_hyde,
             use_multi_query=use_multi_query,
             num_multi_queries=num_multi_queries,
+            use_sub_question=use_sub_question,
             response_mode=response_mode,
             retrieval_mode=retrieval_mode,
             model_id=model_id,

@@ -834,7 +834,6 @@ def create_sub_question_engine(
         query_engine_tools=[query_tool],
         llm=llm,
         question_gen=question_gen,
-        verbose=True,
     )
 
     return sub_engine
