@@ -211,6 +211,7 @@ class QueryRouter:
         use_hyde: Optional[bool] = None,
         use_multi_query: Optional[bool] = None,
         num_multi_queries: Optional[int] = None,
+        use_sub_question: Optional[bool] = None,
         response_mode: Optional[str] = None,
         retrieval_mode: str = "vector",
         model_id: Optional[str] = None,
@@ -231,6 +232,7 @@ class QueryRouter:
                     num_multi_queries=num_multi_queries,
                     use_auto_merging=use_auto_merging,
                     use_reranker=use_reranker,
+                    use_sub_question=use_sub_question,
                     response_mode=response_mode,
                     model_id=model_id,
                     embed_model_id=embed_model_id,
@@ -293,7 +295,7 @@ class QueryRouter:
         Args:
             query: 用户查询
             top_k: 每个知识库检索的数量
-            mode: 路由模式 (auto=自动路由, all=所有知识库)
+            mode: 路由模式 (auto=自动路由, all=所有知识库, agent=ReAct Agent模式)
             exclude: 排除的知识库 ID 列表
             use_hyde: 启用 HyDE（None=使用配置默认值）
             use_multi_query: 启用多查询转换（None=使用配置默认值）
@@ -332,6 +334,14 @@ class QueryRouter:
                 "sources": [],
                 "kbs_queried": [],
             }
+
+        if mode == "agent":
+            return QueryRouter._query_with_agent(
+                kb_ids=kb_ids,
+                query=query,
+                top_k=top_k,
+                model_id=model_id,
+            )
 
         if len(kb_ids) == 1:
             return SearchService.query(
@@ -375,10 +385,12 @@ class QueryRouter:
         num_multi_queries: Optional[int] = None,
         use_auto_merging: Optional[bool] = None,
         use_reranker: Optional[bool] = None,
+        use_sub_question: Optional[bool] = None,
         response_mode: Optional[str] = None,
         retrieval_mode: str = "vector",
         model_id: Optional[str] = None,
         embed_model_id: Optional[str] = None,
+        use_agent: bool = False,
     ) -> Dict[str, Any]:
         from rag.config import get_model_registry
 
@@ -421,6 +433,14 @@ class QueryRouter:
                 "kbs_queried": [],
             }
 
+        if use_agent:
+            return QueryRouter._query_with_agent(
+                kb_ids=kb_ids,
+                query=query,
+                top_k=top_k,
+                model_id=model_id,
+            )
+
         if len(kb_ids) == 1:
             return SearchService.query(
                 kb_ids[0],
@@ -432,6 +452,7 @@ class QueryRouter:
                 num_multi_queries=num_multi_queries,
                 use_auto_merging=use_auto_merging,
                 use_reranker=use_reranker,
+                use_sub_question=use_sub_question,
                 response_mode=response_mode,
                 model_id=model_id,
                 embed_model_id=embed_model_id,
@@ -446,11 +467,71 @@ class QueryRouter:
             use_hyde=use_hyde,
             use_multi_query=use_multi_query,
             num_multi_queries=num_multi_queries,
+            use_sub_question=use_sub_question,
             response_mode=response_mode,
             retrieval_mode=retrieval_mode,
             model_id=model_id,
             embed_model_id=embed_model_id,
         )
+
+    @staticmethod
+    def _query_with_agent(
+        kb_ids: List[str],
+        query: str,
+        top_k: int = 5,
+        model_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        from rag.agent import query_with_agent
+        from rag.query_engine import create_query_engine
+        from llama_index.core.tools import QueryEngineTool, ToolMetadata
+
+        if len(kb_ids) == 1:
+            return query_with_agent(
+                kb_id=kb_ids[0],
+                query=query,
+                model_id=model_id,
+            )
+
+        tools = []
+        for kb_id in kb_ids:
+            try:
+                engine = create_query_engine(kb_id=kb_id, mode="vector", top_k=top_k)
+                tool = QueryEngineTool(
+                    query_engine=engine,
+                    metadata=ToolMetadata(
+                        name=f"kb_{kb_id}",
+                        description=f"Search knowledge base '{kb_id}' for relevant information",
+                    ),
+                )
+                tools.append(tool)
+            except Exception as e:
+                logger.warning(f"Failed to create engine for KB {kb_id}: {e}")
+                continue
+
+        if not tools:
+            return {
+                "response": "No knowledge bases available for agent query",
+                "sources": [],
+                "kbs_queried": kb_ids,
+            }
+
+        from rag.agent import create_react_agent
+
+        try:
+            agent = create_react_agent(kb_id=kb_ids[0], tools=tools, model_id=model_id)
+            response = agent.chat(query)
+            return {
+                "response": str(response),
+                "sources": [],
+                "kbs_queried": kb_ids,
+            }
+        except Exception as e:
+            logger.error(f"Agent query failed: {type(e).__name__}: {e}")
+            return {
+                "response": f"Agent query failed: {type(e).__name__}: {str(e)}",
+                "sources": [],
+                "kbs_queried": kb_ids,
+            }
 
 # =============================================================================
 

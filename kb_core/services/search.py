@@ -364,21 +364,26 @@ class SearchService:
         settings = get_settings()
 
         if use_sub_question:
-            engine = create_sub_question_engine(
-                kb_id,
-                mode=mode,
-                top_k=top_k,
-                use_reranker=use_reranker,
-                use_auto_merging=use_auto_merging,
-                model_id=model_id,
-            )
-            response = engine.query(query)
-            return {
-                "response": str(response),
-                "sources": [
-                    {"text": r.text, "score": r.score} for r in (response.source_nodes or [])
-                ],
-            }
+            try:
+                engine = create_sub_question_engine(
+                    kb_id,
+                    mode=mode,
+                    top_k=top_k,
+                    use_reranker=use_reranker,
+                    use_auto_merging=use_auto_merging,
+                    model_id=model_id,
+                )
+                response = engine.query(query)
+                return {
+                    "response": str(response),
+                    "sources": [
+                        {"text": r.text, "score": r.score} for r in (response.source_nodes or [])
+                    ],
+                }
+            except ImportError as e:
+                logger.warning(
+                    f"Sub-question engine unavailable ({e}), using standard query engine"
+                )
 
         query_engine = create_query_engine(
             kb_id,

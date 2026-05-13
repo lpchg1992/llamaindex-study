@@ -443,16 +443,177 @@ class RAGCallbackHandler(BaseCallbackHandler):
             self._trace_file.unlink()
 
 
+class LangFuseCallbackHandler(BaseCallbackHandler):
+    """LangFuse 可观测性回调处理器
+
+    当环境变量 LANGFUSE_SECRET_KEY 和 LANGFUSE_PUBLIC_KEY 配置时，
+    自动将每次 RAG 查询的完整链路发送到 LangFuse 平台。
+
+    追踪的 Span 层级：
+        Query Trace
+        ├── Retrieval Span (检索耗时 + 结果数量)
+        ├── Rerank Span (重排序耗时 + Top-N)
+        └── LLM Generation Span (模型 + Token 用量)
+    """
+
+    def __init__(self):
+        super().__init__(event_starts_to_ignore=[], event_ends_to_ignore=[])
+        import os
+        try:
+            import langfuse
+            self._client = langfuse.Langfuse(
+                secret_key=os.environ["LANGFUSE_SECRET_KEY"],
+                public_key=os.environ["LANGFUSE_PUBLIC_KEY"],
+                host=os.environ.get("LANGFUSE_HOST", "https://cloud.langfuse.com"),
+            )
+            self._enabled = True
+            logger.info("LangFuse 可观测性已启用: %s", os.environ.get("LANGFUSE_HOST", "https://cloud.langfuse.com"))
+        except (KeyError, ImportError) as e:
+            self._client = None
+            self._enabled = False
+            logger.debug("LangFuse 未配置，跳过: %s", e)
+
+        self._active_trace = None
+        self._active_span = None
+
+    def start_trace(self, trace_id: Optional[str] = None) -> None:
+        pass
+
+    def end_trace(
+        self,
+        trace_id: Optional[str] = None,
+        trace_map: Optional[Dict] = None,
+    ) -> None:
+        pass
+
+    def on_event_start(
+        self,
+        event_type: CBEventType,
+        payload: Optional[Dict[str, Any]] = None,
+        event_id: str = "",
+        parent_id: Optional[str] = None,
+    ) -> str:
+        if not self._enabled or not self._client:
+            return event_id
+
+        try:
+            if event_type == CBEventType.QUERY:
+                query = payload.get("query", "") if payload else ""
+                self._active_trace = self._client.trace(
+                    name="rag-query",
+                    input=query[:500] if query else "",
+                    metadata={"event_id": event_id},
+                )
+
+            elif event_type == CBEventType.RETRIEVE and self._active_trace:
+                self._active_span = self._active_trace.span(
+                    name="retrieval",
+                    input=payload.get("query_str", "")[:200] if payload else "",
+                )
+
+            elif event_type == CBEventType.RERANKING and self._active_trace:
+                self._active_span = self._active_trace.span(
+                    name="rerank",
+                )
+
+            elif event_type == CBEventType.SYNTHESIZE and self._active_trace:
+                self._active_span = self._active_trace.span(
+                    name="llm-generation",
+                )
+
+            elif event_type == CBEventType.LLM and self._active_trace:
+                self._active_span = self._active_trace.span(
+                    name="llm-call",
+                )
+
+        except Exception as e:
+            logger.debug("LangFuse on_event_start 异常: %s", e)
+
+        return event_id
+
+    def on_event_end(
+        self,
+        event_type: CBEventType,
+        payload: Optional[Dict[str, Any]] = None,
+        event_id: str = "",
+    ) -> None:
+        if not self._enabled or not self._client:
+            return
+
+        try:
+            if event_type == CBEventType.RETRIEVE and self._active_span:
+                nodes = payload.get("nodes", []) if payload else []
+                scores = []
+                for n in nodes:
+                    s = n.get("score", 0.0) if isinstance(n, dict) else getattr(n, "score", 0.0)
+                    scores.append(s)
+                self._active_span.update(
+                    output={"retrieved_count": len(nodes), "top_scores": scores[:5]},
+                )
+                self._active_span.end()
+
+            elif event_type == CBEventType.RERANKING and self._active_span:
+                self._active_span.update(
+                    output=payload or {},
+                )
+                self._active_span.end()
+
+            elif event_type == CBEventType.SYNTHESIZE and self._active_span:
+                response = ""
+                source_count = 0
+                if payload:
+                    response = str(payload.get("response", ""))[:200]
+                    source_count = len(payload.get("source_nodes", []))
+                self._active_span.update(
+                    output={"response_preview": response, "source_count": source_count},
+                )
+                self._active_span.end()
+
+            elif event_type == CBEventType.LLM and self._active_span:
+                token_counts = {}
+                if payload:
+                    token_counts = {
+                        "prompt_tokens": payload.get("prompt_tokens", 0),
+                        "completion_tokens": payload.get("completion_tokens", 0),
+                        "total_tokens": payload.get("total_tokens", 0),
+                    }
+                self._active_span.update(
+                    output={"token_usage": token_counts},
+                )
+                self._active_span.end()
+
+            elif event_type == CBEventType.QUERY and self._active_trace:
+                response = ""
+                if payload:
+                    response = str(payload.get("response", ""))[:500]
+                self._active_trace.update(
+                    output=response,
+                )
+                self._client.flush()
+                self._active_trace = None
+
+        except Exception as e:
+            logger.debug("LangFuse on_event_end 异常: %s", e)
+
+    def flush(self):
+        if self._client and self._enabled:
+            try:
+                self._client.flush()
+            except Exception:
+                pass
+
+
 class LlamaCallbackManager:
     def __init__(self, trace_dir: Optional[Path] = None):
-        # TokenCountingHandler is NOT added to CallbackManager.
-        # Manual model call recording via record_model_call() is the source of truth.
-        # TokenCountingHandler is kept here for potential future aggregate validation.
         self._token_counter = TokenCountingHandler()
         self._rag_handler = RAGCallbackHandler(
             trace_file=trace_dir / "rag_trace.jsonl" if trace_dir else None,
         )
-        self._callback_manager = CallbackManager([self._rag_handler])
+        self._langfuse_handler = LangFuseCallbackHandler()
+        self._callback_manager = CallbackManager([
+            self._rag_handler,
+            self._langfuse_handler,
+        ])
 
     @property
     def callback_manager(self) -> CallbackManager:
