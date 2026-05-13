@@ -15,7 +15,7 @@ from api.schemas import (
     TestQuestionItem,
 )
 from rag.eval_storage import init_eval_run_db, init_test_question_db
-from rag.evaluation import RAGAS_AVAILABLE, evaluate_ragas
+from rag.evaluation import evaluate_ragas
 from rag.logger import get_logger
 
 logger = get_logger(__name__)
@@ -24,6 +24,8 @@ router = APIRouter(prefix="/evaluation", tags=["evaluation"])
 
 @router.post("/run", response_model=EvalRunResponse)
 def run_evaluation(req: EvalRunRequest):
+    from rag.evaluation import RAGAS_AVAILABLE
+
     if not RAGAS_AVAILABLE:
         raise HTTPException(
             status_code=400,

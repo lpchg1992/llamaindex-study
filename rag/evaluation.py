@@ -176,28 +176,13 @@ def run_batch_evaluation(
     )
 
 
-RAGAS_AVAILABLE = False
-RAGAS_IMPORT_ERROR = None
-_evaluate = None
-_SingleTurnSample = None
-_context_precision = None
-_context_recall = None
-_faithfulness = None
-_answer_relevancy = None
-
-try:
-    from ragas import evaluate as _evaluate
-    from ragas.dataset_schema import SingleTurnSample as _SingleTurnSample
-    from ragas.metrics import (
-        context_precision as _context_precision,
-        context_recall as _context_recall,
-        faithfulness as _faithfulness,
-        answer_relevancy as _answer_relevancy,
-    )
-
-    RAGAS_AVAILABLE = True
-except ImportError as e:
-    RAGAS_IMPORT_ERROR = str(e)
+def _check_ragas_available() -> bool:
+    """Check if ragas can be imported (lazy check to avoid nest_asyncio/uvloop conflict)."""
+    try:
+        from ragas import evaluate  # noqa: F401
+        return True
+    except ImportError:
+        return False
 
 
 def evaluate_ragas(
@@ -206,9 +191,19 @@ def evaluate_ragas(
     metrics: List[str],
     llm: Optional[Any] = None,
 ) -> Dict[str, Any]:
-    if not RAGAS_AVAILABLE:
+    # Lazy import to avoid nest_asyncio/uvloop conflict at startup
+    try:
+        from ragas import evaluate as _evaluate
+        from ragas.dataset_schema import SingleTurnSample as _SingleTurnSample
+        from ragas.metrics import (
+            context_precision as _context_precision,
+            context_recall as _context_recall,
+            faithfulness as _faithfulness,
+            answer_relevancy as _answer_relevancy,
+        )
+    except ImportError as e:
         raise ImportError(
-            f"ragas is not installed or import failed: {RAGAS_IMPORT_ERROR}. "
+            f"ragas is not installed or import failed: {e}. "
             "Please install ragas>=0.2.0,<0.3.0 to use evaluate_ragas()."
         )
 
@@ -278,6 +273,12 @@ def evaluate_ragas(
         "summary": summary,
         "per_question": score_dicts,
     }
+
+
+def __getattr__(name: str):
+    if name == "RAGAS_AVAILABLE":
+        return _check_ragas_available()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 __all__ = [
