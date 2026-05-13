@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
-import { useKBs, useChat, useChatSessions, useChatHistory, useDeleteChatSession } from '@/api/hooks'
+import { useKBs, useChat, useChatSessions, useChatHistory, useDeleteChatSession, useModels } from '@/api/hooks'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Textarea } from '@/components/ui/textarea'
+import { Input } from '@/components/ui/input'
 import {
   Select,
   SelectContent,
@@ -10,7 +11,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { MessageSquare, Loader2, Send, Trash2, Plus, Clock, User, Bot } from 'lucide-react'
+import { Label } from '@/components/ui/label'
+import { MessageSquare, Loader2, Send, Trash2, Plus, Clock, User, Bot, Settings2, ChevronDown, ChevronUp } from 'lucide-react'
 import { toast } from 'sonner'
 import { MarkdownRenderer } from '@/components/MarkdownRenderer'
 import type { ChatMessage } from '@/types/api'
@@ -23,10 +25,16 @@ export function Chat() {
   const { data: sessions, refetch: refetchSessions } = useChatSessions(selectedKB)
   const { data: history } = useChatHistory(selectedKB, selectedSession)
   const deleteSession = useDeleteChatSession()
+  const { data: models } = useModels('llm')
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [inputMessage, setInputMessage] = useState('')
   const [currentSessionId, setCurrentSessionId] = useState<string>('')
   const [chatMode, setChatMode] = useState<string>('condense_question')
+  const [temperature, setTemperature] = useState<number>(0.7)
+  const [maxTokens, setMaxTokens] = useState<string>('')
+  const [topK, setTopK] = useState<string>('')
+  const [selectedModel, setSelectedModel] = useState<string>('')
+  const [showSettings, setShowSettings] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -68,6 +76,10 @@ export function Chat() {
         message: inputMessage,
         session_id: currentSessionId || undefined,
         chat_mode: chatMode,
+        model_id: selectedModel || undefined,
+        temperature: temperature,
+        max_tokens: maxTokens ? parseInt(maxTokens, 10) : undefined,
+        top_k: topK ? parseInt(topK, 10) : undefined,
       })
       const assistantMessage: ChatMessage = { role: 'assistant', content: result.response }
       setMessages(prev => [...prev, assistantMessage])
@@ -129,8 +141,107 @@ export function Chat() {
               <SelectItem value="best">Best</SelectItem>
             </SelectContent>
           </Select>
-          <p className="text-xs text-muted-foreground">How the chat engine uses conversation history</p>
+
+          <details className="text-xs border rounded-md p-2 bg-muted/30">
+            <summary className="cursor-pointer font-medium text-muted-foreground hover:text-foreground">
+              What does each mode do?
+            </summary>
+            <div className="mt-2 space-y-2 text-muted-foreground">
+              <div>
+                <span className="font-medium text-foreground">Condense Question</span> (default)
+                <p className="mt-0.5">将历史对话压缩成独立问题，再检索相关上下文。适合多轮对话场景，推荐大多数情况使用。</p>
+              </div>
+              <div>
+                <span className="font-medium text-foreground">Context</span>
+                <p className="mt-0.5">仅根据当前问题检索上下文，不利用对话历史。适合单轮问答或不需要记忆的简单查询。</p>
+              </div>
+              <div>
+                <span className="font-medium text-foreground">Condense + Context</span>
+                <p className="mt-0.5">结合历史压缩与上下文检索，在多轮对话中获得更丰富的上下文支撑。</p>
+              </div>
+              <div>
+                <span className="font-medium text-foreground">Simple</span>
+                <p className="mt-0.5">无检索模式，直接与 LLM 对话。不依赖知识库内容，适合闲聊或通用知识问答。</p>
+              </div>
+              <div>
+                <span className="font-medium text-foreground">Best</span>
+                <p className="mt-0.5">自动选择最优模式（由 LLM 判断当前对话应使用哪种策略）。适合不想手动选择的用户。</p>
+              </div>
+            </div>
+          </details>
         </div>
+
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setShowSettings(!showSettings)}
+          className="mb-2 w-full justify-start text-muted-foreground"
+        >
+          <Settings2 className="h-4 w-4 mr-2" />
+          Advanced Settings
+          {showSettings ? <ChevronUp className="h-4 w-4 ml-auto" /> : <ChevronDown className="h-4 w-4 ml-auto" />}
+        </Button>
+
+        {showSettings && (
+          <div className="mb-4 space-y-3 pl-2 border-l-2 border-muted">
+            <div className="space-y-1">
+              <Label className="text-xs">Model</Label>
+              <Select value={selectedModel} onValueChange={setSelectedModel}>
+                <SelectTrigger className="h-8 text-xs">
+                  <SelectValue placeholder="Default model" />
+                </SelectTrigger>
+                <SelectContent>
+                  {models?.map((model) => (
+                    <SelectItem key={model.id} value={model.id}>
+                      {model.name || model.id}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1">
+              <Label className="text-xs flex justify-between">
+                Temperature
+                <span className="text-muted-foreground font-normal">{temperature.toFixed(1)}</span>
+              </Label>
+              <input
+                type="range"
+                min="0"
+                max="2"
+                step="0.1"
+                value={temperature}
+                onChange={(e) => setTemperature(parseFloat(e.target.value))}
+                className="w-full h-2 bg-muted rounded-lg appearance-none cursor-pointer accent-primary"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <Label className="text-xs">Max Tokens</Label>
+              <Input
+                type="number"
+                placeholder="No limit"
+                value={maxTokens}
+                onChange={(e) => setMaxTokens(e.target.value)}
+                className="h-8 text-xs"
+                min="1"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <Label className="text-xs">Top K (Retrieval)</Label>
+              <Input
+                type="number"
+                placeholder="Default (5)"
+                value={topK}
+                onChange={(e) => setTopK(e.target.value)}
+                className="h-8 text-xs"
+                min="1"
+                max="100"
+              />
+            </div>
+          </div>
+        )}
 
         <div className="flex items-center justify-between mb-2">
           <Label>Sessions</Label>
@@ -274,10 +385,6 @@ export function Chat() {
       </div>
     </div>
   )
-}
-
-function Label({ children }: { children: React.ReactNode }) {
-  return <span className="text-sm font-medium">{children}</span>
 }
 
 export function ChatPage() {

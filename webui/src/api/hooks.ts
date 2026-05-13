@@ -52,6 +52,11 @@ import type {
   ChunkInfo,
   SelectiveImportRequest,
   FilesImportRequest,
+  EvalRunRequest,
+  EvalRunResponse,
+  EvalCompareRequest,
+  EvalCompareResponse,
+  TestQuestionItem,
 } from '@/types/api'
 
 const API_BASE = ''
@@ -556,55 +561,6 @@ export function useLanceDuplicates(kbId: string, tableName?: string) {
       return data
     },
     enabled: !!kbId,
-  })
-}
-
-export function useChat(kbId: string) {
-  return useMutation<ChatResponse, Error, ChatRequest>({
-    mutationFn: async (req: ChatRequest) => {
-      const { data } = await apiClient.post<ChatResponse>(
-        `${API_BASE}/chat/${kbId}`,
-        { message: req.message, session_id: req.session_id, chat_mode: req.chat_mode }
-      )
-      return data
-    },
-  })
-}
-
-export function useChatSessions(kbId: string) {
-  return useQuery<ChatSessionsResponse, Error>({
-    queryKey: ['chat-sessions', kbId],
-    queryFn: async () => {
-      const { data } = await apiClient.get(`${API_BASE}/chat/${kbId}/sessions`)
-      return data
-    },
-    enabled: !!kbId,
-  })
-}
-
-export function useChatHistory(kbId: string, sessionId: string, limit?: number) {
-  return useQuery<ChatHistoryResponse, Error>({
-    queryKey: ['chat-history', kbId, sessionId, limit],
-    queryFn: async () => {
-      const { data } = await apiClient.get(`${API_BASE}/chat/${kbId}/history/${sessionId}`, {
-        params: { limit },
-      })
-      return data
-    },
-    enabled: !!kbId && !!sessionId,
-  })
-}
-
-export function useDeleteChatSession() {
-  const queryClient = useQueryClient()
-  return useMutation<{ deleted: boolean; session_id: string }, Error, { kbId: string; sessionId: string }>({
-    mutationFn: async ({ kbId, sessionId }) => {
-      const { data } = await apiClient.delete(`${API_BASE}/chat/${kbId}/sessions/${sessionId}`)
-      return data
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['chat-sessions'] })
-    },
   })
 }
 
@@ -1122,5 +1078,53 @@ export function useDeleteCanonicalName() {
       return data
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['canonical-names'] }),
+  })
+}
+
+export function useChat(kbId: string) {
+  return useMutation<ChatResponse, Error, ChatRequest>({
+    mutationFn: async (req) => {
+      const { data } = await apiClient.post<ChatResponse>(`${API_BASE}/chat/${kbId}`, req)
+      return data
+    },
+  })
+}
+
+export function useChatSessions(kbId: string) {
+  return useQuery<ChatSessionsResponse, Error>({
+    queryKey: ['chat-sessions', kbId],
+    queryFn: async () => {
+      const { data } = await apiClient.get<ChatSessionsResponse>(`${API_BASE}/chat/${kbId}/sessions`)
+      return data
+    },
+    enabled: !!kbId,
+  })
+}
+
+export function useChatHistory(kbId: string, sessionId: string) {
+  return useQuery<ChatHistoryResponse, Error>({
+    queryKey: ['chat-history', kbId, sessionId],
+    queryFn: async () => {
+      const { data } = await apiClient.get<ChatHistoryResponse>(
+        `${API_BASE}/chat/${kbId}/history/${sessionId}`
+      )
+      return data
+    },
+    enabled: !!kbId && !!sessionId,
+  })
+}
+
+export function useDeleteChatSession() {
+  const qc = useQueryClient()
+  return useMutation<{ deleted: boolean; session_id: string }, Error, { kbId: string; sessionId: string }>({
+    mutationFn: async ({ kbId, sessionId }) => {
+      const { data } = await apiClient.delete<{ deleted: boolean; session_id: string }>(
+        `${API_BASE}/chat/${kbId}/sessions/${sessionId}`
+      )
+      return data
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['chat-sessions'] })
+    },
   })
 }

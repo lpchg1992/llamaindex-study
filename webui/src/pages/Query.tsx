@@ -46,7 +46,7 @@ const PRESETS: Record<PresetMode, { label: string; icon: React.ElementType; desc
 }
 
 interface QueryConfig {
-  route_mode: 'general' | 'auto'
+  route_mode: 'general' | 'auto' | 'agent' | 'agent'
   selectedKBs: string[]
   excludedKBs: string[]
   retrieval_mode: 'vector' | 'hybrid'
@@ -214,13 +214,14 @@ export function QueryPage() {
           <div className="border-t pt-4">
             <div className="space-y-2">
               <Label>Route Mode</Label>
-              <Select value={config.route_mode} onValueChange={(v) => updateConfig('route_mode', v as 'general' | 'auto')}>
+              <Select value={config.route_mode} onValueChange={(v) => updateConfig('route_mode', v as 'general' | 'auto' | 'agent')}>
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="general">User selects KBs</SelectItem>
                   <SelectItem value="auto">Auto routing</SelectItem>
+                  <SelectItem value="agent">ReAct Agent (auto-route + reasoning)</SelectItem>
                 </SelectContent>
               </Select>
             </div>

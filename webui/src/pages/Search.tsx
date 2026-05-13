@@ -31,6 +31,7 @@ export function SearchPage() {
   const [retrievalMode, setRetrievalMode] = useState<'vector' | 'hybrid'>('vector')
   const [useAutoMerging, setUseAutoMerging] = useState(false)
   const [useReranker, setUseReranker] = useState(true)
+  const [routeMode, setRouteMode] = useState<'general' | 'auto'>('general')
   const [kbSearch, setKbSearch] = useState('')
   const [topK, setTopK] = useState(5)
 
@@ -61,7 +62,7 @@ export function SearchPage() {
         query,
         kb_ids: selectedKBs.join(','),
         top_k: topK,
-        route_mode: 'general',
+        route_mode: routeMode,
         retrieval_mode: retrievalMode,
         use_auto_merging: useAutoMerging || undefined,
         use_reranker: useReranker || undefined,
@@ -87,6 +88,17 @@ export function SearchPage() {
         <h2 className="mb-4 text-lg font-semibold">Search Settings</h2>
 
         <div className="space-y-4 flex-1 overflow-y-auto">
+          <div className="space-y-2">
+            <Label>Route Mode</Label>
+            <Select value={routeMode} onValueChange={(v) => setRouteMode(v as 'general' | 'auto')}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="general">Specify KBs</SelectItem>
+                <SelectItem value="auto">Auto-route</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
           <div className="space-y-2">
             <Label>Retrieval Mode</Label>
             <Select value={retrievalMode} onValueChange={(v) => setRetrievalMode(v as 'vector' | 'hybrid')}>

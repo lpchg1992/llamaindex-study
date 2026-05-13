@@ -71,7 +71,7 @@ export interface SearchResult {
 export interface SearchRequest {
   query: string
   top_k?: number
-  route_mode: 'general' | 'auto'
+  route_mode: 'general' | 'auto' | 'all' | 'agent'
   model_id?: string
   embed_model_id?: string
   kb_ids?: string
@@ -84,7 +84,7 @@ export interface SearchRequest {
 export interface QueryRequest {
   query: string
   top_k?: number
-  route_mode: 'general' | 'auto'
+  route_mode: 'general' | 'auto' | 'all' | 'agent'
   retrieval_mode?: 'vector' | 'hybrid'
   model_id?: string
   embed_model_id?: string
@@ -96,14 +96,21 @@ export interface QueryRequest {
   num_multi_queries?: number
   use_auto_merging?: boolean
   use_reranker?: boolean
-  response_mode?: string
   use_sub_question?: boolean
+  response_mode?: string
+  chat_mode?: string
 }
 
 export interface ChatRequest {
   message: string
   session_id?: string
   chat_mode?: string
+  model_id?: string
+  temperature?: number
+  max_tokens?: number
+  top_k?: number
+  system_prompt?: string
+  streaming?: boolean
 }
 
 export interface QueryResponse {
@@ -429,7 +436,7 @@ export interface PaginatedChunksResponse {
 
 // Chat
 export interface ChatMessage {
-  role: 'user' | 'assistant'
+  role: 'user' | 'assistant' | 'system'
   content: string
   timestamp?: string
 }
@@ -746,4 +753,47 @@ export interface SettingsUpdateRequest {
 export interface RestartResponse {
   status: string
   message: string
+}
+
+export interface ChatHistoryResponse {
+  session_id: string
+  history: ChatMessage[]
+}
+
+// ============== Evaluation ==============
+
+export interface TestQuestionItem {
+  query: string
+  reference_answer: string
+}
+
+export interface EvalRunRequest {
+  kb_id: string
+  test_questions: TestQuestionItem[]
+  metrics: string[]
+}
+
+export interface EvalQuestionResult {
+  query: string
+  metrics: Record<string, number>
+}
+
+export interface EvalRunResponse {
+  run_id: string
+  kb_id: string
+  metrics: string[]
+  summary: Record<string, number>
+  questions: EvalQuestionResult[]
+  timestamp: string
+}
+
+export interface EvalCompareRequest {
+  run_id_1: string
+  run_id_2: string
+}
+
+export interface EvalCompareResponse {
+  run_1: EvalRunResponse
+  run_2: EvalRunResponse
+  diff: Record<string, number>
 }
