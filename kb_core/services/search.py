@@ -374,15 +374,23 @@ class SearchService:
                     model_id=model_id,
                 )
                 response = engine.query(query)
-                return {
-                    "response": str(response),
-                    "sources": [
-                        {"text": r.text, "score": r.score} for r in (response.source_nodes or [])
-                    ],
-                }
-            except ImportError as e:
+                response_str = str(response)
+                sources = [
+                    {"text": r.text, "score": r.score} for r in (response.source_nodes or [])
+                ]
+                logger.info(
+                    f"[SearchService.query] SubQuestion response_len={len(response_str)}, sources={len(sources)}"
+                )
+                if not response_str or response_str.strip() == "":
+                    logger.warning("Sub-Question returned empty response, falling back to standard query engine")
+                else:
+                    return {
+                        "response": response_str,
+                        "sources": sources,
+                    }
+            except Exception as e:
                 logger.warning(
-                    f"Sub-question engine unavailable ({e}), using standard query engine"
+                    f"Sub-question engine failed ({type(e).__name__}: {e}), falling back to standard query engine"
                 )
 
         query_engine = create_query_engine(
