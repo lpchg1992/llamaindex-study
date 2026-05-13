@@ -10,7 +10,20 @@ from .knowledge_base import KnowledgeBaseService
 from .search import SearchService
 
 class QueryRouter:
-    """查询路由服务 — 使用 LlamaIndex LLMMultiSelector 语义匹配路由。"""
+    """查询路由服务 — 使用 LlamaIndex LLMMultiSelector 语义匹配路由。
+
+    .. todo:: 大知识库路由优化
+
+       当前路由仅依据 KB 的 name + description 做语义匹配。对于内容
+       覆盖广泛的 KB（如「动物营养」库包含数百个子主题），简短描述
+       可能导致「发酵纤维」等具体查询匹配不到正确的 KB。
+
+       待调研方案：
+       1. 丰富 KB description 字段，列举子领域/关键词
+          （改 registry.py + KB 创建界面）
+       2. 两级检索：第一阶段全 KB 轻量检索（只取 top-1 score），
+          第二阶段对高分 KB 做完整 RAG 查询
+    """
 
     @staticmethod
     def route(
