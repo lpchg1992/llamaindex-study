@@ -230,128 +230,9 @@ curl -X POST http://localhost:37241/kbs \
 | GET | `/observability/dates` | 获取有数据的日期列表 |
 
 ### 检索查询
-
-| 方法 | 端点 | 功能 |
-|------|------|------|
-| POST | `/search` | 向量检索（统一入口） |
-| POST | `/query` | RAG 问答（统一入口） |
-
 ### 供应商管理
-
-| 方法 | 端点 | 功能 |
-|------|------|
-| GET | `/vendors` | 列出所有供应商 |
-| POST | `/vendors` | 创建供应商 |
-| GET | `/vendors/{vendor_id}` | 获取指定供应商 |
-| PUT | `/vendors/{vendor_id}` | 更新供应商 |
-| DELETE | `/vendors/{vendor_id}` | 删除供应商 |
-
-**供应商类型**:
-- **云服务商 (Cloud)**: 需要 API Key（如 SiliconFlow、OpenAI）
-- **本地服务商 (Local)**: 无需 API Key（如 Ollama），只需提供 API Base URL
-
-**供应商示例**:
-```bash
-# 创建供应商
-curl -X POST http://localhost:37241/vendors \
-  -H "Content-Type: application/json" \
-  -d '{
-    "id": "siliconflow",
-    "name": "SiliconFlow",
-    "api_base": "https://api.siliconflow.cn/v1",
-    "api_key": "your-api-key"
-  }'
-
-# 创建供应商（Ollama不需要API Key）
-curl -X POST http://localhost:37241/vendors \
-  -H "Content-Type: application/json" \
-  -d '{
-    "id": "ollama",
-    "name": "Ollama",
-    "api_base": "http://localhost:11434"
-  }'
-```
-
 ### 模型管理
-
-| 方法 | 端点 | 功能 |
-|------|------|------|
-| GET | `/models` | 列出所有模型（支持 `?type=` 筛选） |
-| POST | `/models` | 创建模型（供应商不存在时自动创建） |
-| GET | `/models/{model_id}` | 获取指定模型 |
-| PUT | `/models/{model_id}` | 更新模型 |
-| DELETE | `/models/{model_id}` | 删除模型 |
-| PUT | `/models/{model_id}/default` | 设置默认模型 |
-
-**模型ID格式**: `{vendor_id}/{model-name}`，如 `siliconflow/DeepSeek-V3.2`、`ollama/lfm2.5-instruct`
-
-**类型筛选**: `?type=llm`、`?type=embedding`、`?type=reranker`
-
-**模型配置 (config)**: 不同类型模型支持不同的配置参数
-
-| 模型类型 | 配置参数 | 说明 | 默认值 |
-|---------|---------|------|--------|
-| `llm` | `temperature` | 温度参数 (0-2) | 0.7 |
-| `llm` | `max_tokens` | 最大 token 数 | 2048 |
-| `llm` | `top_p` | Top-p 采样 | 0.9 |
-| `llm` | `frequency_penalty` | 频率惩罚 (-2-2) | 0 |
-| `embedding` | `dimensions` | 向量维度 | 1024 |
-| `embedding` | `batch_size` | 批处理大小 | 32 |
-| `embedding` | `pooling` | 池化模式: `mean`/`cls` | `mean` |
-| `reranker` | `top_k` | 返回 top k 结果 | 10 |
-| `reranker` | `normalize` | 是否归一化分数 | true |
-
-**示例**:
-```bash
-# 列出所有模型
-curl http://localhost:37241/models
-
-# 按类型筛选（llm/embedding/reranker）
-curl http://localhost:37241/models?type=llm
-curl http://localhost:37241/models?type=embedding
-
-# 创建 LLM 模型（带配置）
-curl -X POST http://localhost:37241/models \
-  -H "Content-Type: application/json" \
-  -d '{
-    "id": "ollama/lfm2.5-thinking:latest",
-    "vendor_id": "ollama",
-    "name": "lfm2.5-thinking:latest",
-    "type": "llm",
-    "is_default": false,
-    "config": {
-      "temperature": 0.7,
-      "max_tokens": 2048,
-      "top_p": 0.9
-    }
-  }'
-
-# 创建 Embedding 模型（带配置）
-curl -X POST http://localhost:37241/models \
-  -H "Content-Type: application/json" \
-  -d '{
-    "id": "ollama/bge-m3:latest",
-    "vendor_id": "ollama",
-    "name": "bge-m3:latest",
-    "type": "embedding",
-    "is_default": true,
-    "config": {
-      "dimensions": 1024,
-      "batch_size": 32,
-      "pooling": "mean"
-    }
-  }'
-
-# 使用模型查询
-curl -X POST http://localhost:37241/query \
-  -H "Content-Type: application/json" \
-  -d '{
-    "query": "测试问题",
-    "kb_ids": "my_kb",
-    "model_id": "ollama/lfm2.5-thinking:latest"
-  }'
-```
-
+### RAGAS 评估
 ### Obsidian
 
 | 方法 | 端点 | 功能 |
@@ -721,7 +602,7 @@ curl -X POST "http://localhost:37241/search" \
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `query` | string | 必填 | 查询内容 |
-| `route_mode` | enum | `"general"` | 路由模式：`general`(用户选择知识库)、`auto`(自动路由)、`all`(所有知识库) |
+| `route_mode` | enum | `"general"` | 路由模式：`general`(用户选择知识库)、`auto`(自动路由)、`all`(所有知识库)、`agent`(ReAct Agent) |
 | `top_k` | int | `5` | 返回结果数量 |
 | `retrieval_mode` | enum | `"vector"` | 检索模式：`vector` 或 `hybrid` |
 | `model_id` | string | null | 使用的模型ID（如 `siliconflow/DeepSeek-V3.2`, `ollama/lfm2.5-instruct`），不填则使用默认模型（Ollama） |
@@ -733,7 +614,8 @@ curl -X POST "http://localhost:37241/search" \
 
 **参数约束：**
 - `route_mode=general`：**忽略 `model_id`**，仅做向量检索
-- `route_mode=auto`/`route_mode=all`：`model_id` 用于 LLM 辅助路由决策
+- `route_mode=auto`/`route_mode=all`/`route_mode=agent`：`model_id` 用于 LLM 辅助路由决策
+- `route_mode=agent`：自动路由 + ReAct Agent 多步推理（支持工具调用）
 - `route_mode=general`：必须提供 `kb_ids`，且不支持 `exclude`
 - `route_mode=auto`：可使用 `exclude`，`kb_ids` 可省略
 - `route_mode=all`：检索所有知识库，可使用 `exclude` 排除部分
@@ -753,7 +635,7 @@ curl -X POST "http://localhost:37241/search" \
 
 #### POST /query
 
-RAG 问答的统一入口，支持三种路由模式：
+RAG 问答的统一入口，支持四种路由模式（含 ReAct Agent）：
 
 ```bash
 # 用户选择知识库问答（默认）
@@ -766,15 +648,20 @@ curl -X POST "http://localhost:37241/query" \
   -H "Content-Type: application/json" \
   -d '{"query": "如何配置 Nginx 反向代理", "route_mode": "auto"}'
 
+# ReAct Agent（多步推理 + 工具调用）
+curl -X POST "http://localhost:37241/query" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "对比三个知识库的仔猪营养方案差异", "route_mode": "agent"}'
+
 # 全库问答
 curl -X POST "http://localhost:37241/query" \
   -H "Content-Type: application/json" \
   -d '{"query": "公司有哪些技术积累？", "route_mode": "all"}'
 
-# 指定模型 + 混合搜索
+# 子问题分解 + 混合搜索
 curl -X POST "http://localhost:37241/query" \
   -H "Content-Type: application/json" \
-  -d '{"query": "Python 性能优化", "kb_ids": "tech_tools", "model_id": "ollama/lfm2.5-instruct:1.2b", "retrieval_mode": "hybrid"}'
+  -d '{"query": "分析腹泻防治与饲料配方的关联", "kb_ids": "swine", "retrieval_mode": "hybrid", "use_sub_question": true}'
 ```
 
 **请求参数说明：**
@@ -782,7 +669,7 @@ curl -X POST "http://localhost:37241/query" \
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `query` | string | 必填 | 查询内容 |
-| `route_mode` | enum | `"general"` | 路由模式：`general`(用户选择知识库)、`auto`(自动路由)、`all`(所有知识库) |
+| `route_mode` | enum | `"general"` | 路由模式：`general` / `auto` / `all` / `agent`(ReAct Agent) |
 | `top_k` | int | `5` | 检索返回的结果数量 |
 | `retrieval_mode` | enum | `"vector"` | 检索模式：`vector`(向量检索) 或 `hybrid`(混合搜索) |
 | `model_id` | string | null | 使用的 LLM 模型ID（如 `siliconflow/DeepSeek-V3.2`, `ollama/lfm2.5-instruct`），不填则使用默认模型 |
@@ -795,11 +682,14 @@ curl -X POST "http://localhost:37241/query" \
 | `num_multi_queries` | int | null | 多查询变体数量（None=使用配置默认值，默认 3） |
 | `use_auto_merging` | bool | null | 启用 Auto-Merging（None=使用配置默认值） |
 | `use_reranker` | bool | null | 启用 Reranker（None=使用配置默认值） |
+| `use_sub_question` | bool | null | 启用 Sub-Question 分解（复杂查询拆分为子问题逐个回答） |
 | `response_mode` | string | null | 答案生成模式：`compact`(默认)、`refine`、`tree_summarize`、`simple`、`accumulate` |
 
 **参数约束：**
 - `route_mode=general`：必须提供 `kb_ids`，且不支持 `exclude`
 - `route_mode=auto`：可使用 `exclude`，`kb_ids` 可省略
+- `route_mode=all`：可使用 `exclude`，检索所有知识库
+- `route_mode=agent`：自动路由 + ReAct Agent 多步推理，支持计算器/单位转换等工具调用
 - `route_mode=all`：检索所有知识库，可使用 `exclude` 排除部分
 - `route_mode=general`：**忽略 `model_id`**，仅做检索
 
@@ -890,6 +780,71 @@ curl -X POST "http://localhost:37241/query" \
 | `accumulate` | 累积式生成 |
 | `generation` | 仅生成答案（不使用检索结果） |
 | `compact_accumulate` | 压缩后累积式生成 |
+
+---
+
+## RAGAS 评估
+
+评估端点用于自动化检索质量检测，支持 faithfulness、context_precision、context_recall、answer_relevancy 四项指标。
+
+### 运行评估
+
+#### POST /evaluation/run
+
+```bash
+curl -X POST "http://localhost:37241/evaluation/run" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "kb_id": "my_kb",
+    "test_questions": [
+      {"query": "仔猪断奶后腹泻的防治方法", "reference_answer": "..."},
+      {"query": "育肥猪的最佳饲料转化率", "reference_answer": "..."}
+    ],
+    "metrics": ["faithfulness", "context_precision", "context_recall", "answer_relevancy"]
+  }'
+```
+
+**请求参数：**
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `kb_id` | string | 知识库 ID |
+| `test_questions` | object[] | 测试问题列表，每项含 `query` 和 `reference_answer` |
+| `metrics` | string[] | 评估指标：`faithfulness` / `context_precision` / `context_recall` / `answer_relevancy` |
+
+**响应：** 返回 `run_id`、各指标平均分和每题详细分数。
+
+### 获取评估结果
+
+#### GET /evaluation/results/{run_id}
+
+```bash
+curl http://localhost:37241/evaluation/results/<run_id>
+```
+
+### 对比两次评估
+
+#### POST /evaluation/compare
+
+```bash
+curl -X POST "http://localhost:37241/evaluation/compare" \
+  -H "Content-Type: application/json" \
+  -d '{"run_id_1": "run_001", "run_id_2": "run_002"}'
+```
+
+返回两次评估的指标差异（diff），用于 A/B 测试模型或配置变更前后的质量对比。
+
+### 管理测试问题
+
+```bash
+# 列出知识库的测试问题
+GET /evaluation/test-questions/{kb_id}
+
+# 添加测试问题
+curl -X POST "http://localhost:37241/evaluation/test-questions/my_kb" \
+  -H "Content-Type: application/json" \
+  -d '{"questions": [{"query": "...", "reference_answer": "..."}]}'
+```
 
 ---
 
@@ -1212,6 +1167,7 @@ curl -X POST http://localhost:37241/admin/reload-config
 ## 可观测性
 
 > **数据持久化**: 统计数据存储在 `~/.llamaindex/stats/token_stats.db`（SQLite），支持按日期范围查询历史数据。
+> **LangFuse 集成**: 配置 `LANGFUSE_SECRET_KEY` 和 `LANGFUSE_PUBLIC_KEY` 环境变量后，所有 RAG 查询完整链路（检索→重排→生成）自动上报到 LangFuse 平台。无需额外代码改动。
 
 ### 获取模型调用统计
 

@@ -946,6 +946,22 @@ uv run llamaindex-study query <kb_id> "<question>" --model-id <model_id>
 ```bash
 # 使用指定模型进行问答
 uv run llamaindex-study query tech_tools "如何优化Python性能？" --model-id ollama/lfm2.5-thinking:latest
+
+# Sub-Question 分解（复杂查询自动拆分为子问题）
+uv run llamaindex-study query tech_tools "分析腹泻防治与饲料配方的关联" --sub-question
+
+# ReAct Agent（自动路由 + 多步推理 + 工具调用）
+uv run llamaindex-study query "对比三个知识库的仔猪营养方案差异" --agent
+```
+
+### RAGAS 评估命令
+
+```bash
+# 添加测试问题（JSON 文件格式：{"questions": [{"query": "...", "reference_answer": "..."}]}）
+uv run llamaindex-study eval add-questions my_kb ./test_questions.json
+
+# 运行评估
+uv run llamaindex-study eval run my_kb --metrics faithfulness,context_precision
 ```
 
 ---

@@ -214,7 +214,13 @@ TaskScheduler.run()
 │  ├── embedding_service.py   # Ollama Embedding 服务        │
 │  ├── embedding_loadbalancer.py  # 负载均衡                  │
 │  ├── vector_store.py        # 向量数据库（多后端）          │
-│  ├── query_engine.py        # 查询引擎                     │
+│  ├── query_engine.py        # 查询引擎（含 SubQuestion）     │
+│  ├── chat_engine.py         # 对话引擎（5 种模式 + 流式）    │
+│  ├── agent.py               # ReAct Agent（多步推理）        │
+│  ├── pipeline.py            # 声明式 QueryPipeline          │
+│  ├── evaluation.py          # RAGAS 评估                   │
+│  ├── eval_storage.py        # 评估结果持久化                │
+│  ├── callbacks.py           # LangFuse 可观测回调           │
 │  ├── reranker.py           # 重排序                       │
 │  ├── node_parser.py        # 统一节点解析器               │
 │  ├── query_transform.py    # HyDE、多查询转换、Query Rewrite│

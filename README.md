@@ -18,7 +18,13 @@
 - 📝 **多查询转换** — 生成多个查询变体，减少遗漏
 - 🎯 **Reranker 重排序** — Cross-Encoder 二次排序，提升精度
 - 🔬 **Sub-Question 分解** — 复杂查询自动拆分为子问题
-- 📊 **声明式 QueryPipeline** — 可视化 DAG 检索链
+- 🤖 **ReAct Agent** — 多步推理 + 工具调用，自主决策检索策略
+- 💬 **多模式聊天** — 5 种对话引擎（condense / context / simple 等），支持流式输出
+
+### 质量保障
+- ✅ **RAGAS 评估** — context_precision / recall / faithfulness / relevancy 自动评估
+- 🔭 **LangFuse 可观测** — 全链路 Trace（检索→重排→生成）耗时 + Token 追踪
+- 📊 **声明式 QueryPipeline** — DAG 检索链，可视化、可序列化、可热插拔
 
 ### 智能分块
 - 🏗️ **层级分块** — 父子节点结构（默认），支持 Auto-Merging
@@ -98,6 +104,18 @@ uv run llamaindex-study query "如何优化代码性能" --auto
 uv run llamaindex-study query my_kb "..." --auto-merging  # Auto-Merging
 uv run llamaindex-study query my_kb "..." --hyde         # HyDE 查询
 uv run llamaindex-study query my_kb "..." --multi-query  # 多查询
+uv run llamaindex-study query my_kb "..." --sub-question # Sub-Question 分解
+
+# ReAct Agent（智能推理模式）
+uv run llamaindex-study query "对比三个知识库的断奶仔猪营养建议" --agent
+
+# 多模式聊天
+uv run llamaindex-study chat my_kb --chat-mode condense_question
+uv run llamaindex-study chat my_kb --chat-mode context --streaming
+
+# RAGAS 评估
+uv run llamaindex-study eval add-questions my_kb ./test_questions.json
+uv run llamaindex-study eval run my_kb --metrics faithfulness,context_precision
 
 # 任务管理
 uv run llamaindex-study task list
@@ -119,17 +137,19 @@ from kb_core.services import SearchService, KnowledgeBaseService
 # 创建知识库
 KnowledgeBaseService.create("my_kb", name="我的知识库")
 
-# 导入文档（异步）
-from kb_core.services import ObsidianService
-ObsidianService.import_vault("my_kb", folder_path="技术")
-
 # RAG 问答
 result = SearchService.query("my_kb", "如何优化代码性能", top_k=5)
 print(result)
 
+# Sub-Question 分解
+result = SearchService.query("my_kb", "复杂问题", use_sub_question=True)
+
 # 自动路由（根据问题内容选择知识库）
 from kb_core.services import QueryRouter
 result = QueryRouter.query("Python 异步编程最佳实践")
+
+# ReAct Agent（多步推理）
+result = QueryRouter.query("对比分析三个知识库的建议", mode="agent")
 ```
 
 ### REST API 示例
@@ -142,6 +162,16 @@ curl http://localhost:37241/kbs/HTE_history/topics
 curl -X POST http://localhost:37241/kbs/HTE_history/topics/refresh \
   -H "Content-Type: application/json" \
   -d '{"has_new_docs": true}'
+
+# ReAct Agent 问答
+curl -X POST http://localhost:37241/query \
+  -H "Content-Type: application/json" \
+  -d '{"query": "对比分析断奶仔猪的营养方案", "route_mode": "agent"}'
+
+# RAGAS 评估
+curl -X POST http://localhost:37241/evaluation/run \
+  -H "Content-Type: application/json" \
+  -d '{"kb_id": "my_kb", "test_questions": [{"query": "...", "reference_answer": "..."}], "metrics": ["faithfulness", "context_precision"]}'
 ```
 
 ## 配置
@@ -158,6 +188,9 @@ curl -X POST http://localhost:37241/kbs/HTE_history/topics/refresh \
 | `USE_HYBRID_SEARCH` | `false` | 启用混合搜索（向量+关键词） |
 | `MAX_CONCURRENT_TASKS` | `10` | 最大并发任务数 |
 | `CORS_EXTRA_ORIGINS` | - | 额外的 CORS 来源（逗号分隔） |
+| `LANGFUSE_SECRET_KEY` | - | LangFuse Secret Key（可选，配置后启用链路追踪） |
+| `LANGFUSE_PUBLIC_KEY` | - | LangFuse Public Key |
+| `LANGFUSE_HOST` | `https://cloud.langfuse.com` | LangFuse 服务地址 |
 
 > **模型配置**（LLM、Embedding、Reranker）通过 CLI/API 管理，存储在数据库中：
 > ```bash
@@ -186,9 +219,16 @@ llamaindex-study/
 ├── kb_cli/                   # CLI 命令实现
 ├── rag/                      # 核心库（RAG 组件）
 │   ├── config.py             # 配置管理
-│   ├── vector_store.py       # 向量数据库（ LanceDB）
-│   ├── query_engine.py       # 查询引擎
-│   ├── node_parser.py        # 节点解析器
+│   ├── vector_store.py       # 向量数据库（LanceDB）
+│   ├── query_engine.py       # 查询引擎（含 SubQuestion）
+│   ├── chat_engine.py        # 对话引擎（5 种模式 + 流式输出）
+│   ├── agent.py              # ReAct Agent（多步推理 + 工具调用）
+│   ├── pipeline.py           # 声明式 QueryPipeline
+│   ├── evaluation.py         # RAGAS 评估
+│   ├── eval_storage.py       # 评估结果持久化
+│   ├── callbacks.py          # LangFuse 可观测性回调
+│   ├── ingestion.py          # IngestionPipeline
+│   ├── response_synthesizer.py
 │   ├── embedding_service.py  # Embedding 服务
 │   └── reranker.py           # 重排序
 ├── kb_core/                  # 核心服务（业务逻辑）
