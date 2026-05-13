@@ -20,7 +20,7 @@ class GenericService:
     def import_file(
         kb_id: str,
         path: str,
-        refresh_topics: bool = True,
+        
         progress_callback: Optional[Callable[[str], None]] = None,
         chunk_strategy: Optional[str] = None,
         chunk_size: Optional[int] = None,
@@ -73,12 +73,6 @@ class GenericService:
             if progress_callback:
                 progress_callback(
                     f"完成！导入 {stats.get('files', 0)} 个文件，{stats.get('nodes', 0)} 个节点"
-                )
-
-            if refresh_topics:
-                KnowledgeBaseService.refresh_topics(
-                    kb_id=kb_id,
-                    has_new_docs=stats.get("files", 0) > 0,
                 )
             return stats
 

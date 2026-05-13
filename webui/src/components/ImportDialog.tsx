@@ -469,7 +469,6 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
           req: {
             paths,
             async_mode: true,
-            refresh_topics: true,
             ...chunkParams,
           },
         })
@@ -515,7 +514,6 @@ export function ImportDialog({ open, onOpenChange, kbId, kbName }: ImportDialogP
             source_type: sourceType,
             items: importItems,
             async_mode: true,
-            refresh_topics: false,
             ...(activeSource === 'zotero' && { prefix: zoteroPrefix }),
             ...chunkParams,
           },

@@ -14,7 +14,6 @@ import type {
   ZoteroIngestRequest,
   ModelInfo,
   VendorInfo,
-  TopicInfo,
   ZoteroCollectionsResponse,
   ZoteroCollectionStructure,
   ZoteroCollectionWithItems,
@@ -46,7 +45,6 @@ import type {
   VendorCreateRequest,
   ModelCreateRequest,
   InitializeKBResponse,
-  RefreshTopicsRequest,
   SystemSettings,
   SettingsUpdateRequest,
   RestartResponse,
@@ -119,22 +117,6 @@ export function useUpdateKB() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['kbs'] })
-    },
-  })
-}
-
-export function useUpdateTopics() {
-  const queryClient = useQueryClient()
-  return useMutation<TopicInfo, Error, { kbId: string; topics: string[] }>({
-    mutationFn: async ({ kbId, topics }) => {
-      const { data } = await apiClient.put<TopicInfo>(
-        `${API_BASE}/kbs/${kbId}/topics`,
-        { topics }
-      )
-      return data
-    },
-    onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['kb-topics', variables.kbId] })
     },
   })
 }
@@ -303,33 +285,6 @@ export function useVendors() {
     queryFn: async () => {
       const { data } = await apiClient.get(`${API_BASE}/vendors`)
       return data
-    },
-  })
-}
-
-export function useKBTopics(kbId: string) {
-  return useQuery<TopicInfo>({
-    queryKey: ['kb-topics', kbId],
-    queryFn: async () => {
-      const { data } = await apiClient.get(`${API_BASE}/kbs/${kbId}/topics`)
-      return data
-    },
-    enabled: !!kbId,
-  })
-}
-
-export function useRefreshTopics() {
-  const queryClient = useQueryClient()
-  return useMutation<TopicInfo, Error, { kbId: string; req: RefreshTopicsRequest }>({
-    mutationFn: async ({ kbId, req }) => {
-      const { data } = await apiClient.post<TopicInfo>(
-        `${API_BASE}/kbs/${kbId}/topics/refresh`,
-        req
-      )
-      return data
-    },
-    onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['kb-topics', variables.kbId] })
     },
   })
 }

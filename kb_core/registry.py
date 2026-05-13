@@ -49,9 +49,6 @@ class KnowledgeBase:
     persist_name: str  # 存储目录名
     tags: List[str] = field(default_factory=list)  # 标签（描述用）
     source_tags: List[str] = field(default_factory=list)  # 用于分类的标签列表
-    topics: List[str] = field(
-        default_factory=list
-    )  # 主题关键词（帮助 LLM 理解 KB 内容）
 
     @property
     def persist_dir(self) -> Path:
@@ -74,7 +71,6 @@ class KnowledgeBase:
             "persist_name": self.persist_name,
             "tags": self.tags,
             "source_tags": self.source_tags,
-            "topics": self.topics,
         }
 
 

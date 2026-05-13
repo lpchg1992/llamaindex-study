@@ -9,7 +9,6 @@ class ImportRequest:
     kind: str
     kb_id: str
     async_mode: bool = True
-    refresh_topics: bool = False
     source: str = ""
     path: Optional[str] = None
     paths: Optional[List[str]] = None
@@ -42,7 +41,6 @@ class SelectiveImportRequest:
     source_type: str
     items: List[SelectiveImportItem]
     async_mode: bool = True
-    refresh_topics: bool = False
     prefix: str = "[kb]"
     chunk_strategy: Optional[str] = None
     chunk_size: Optional[int] = None
@@ -73,7 +71,7 @@ class ImportApplicationService:
     @staticmethod
     def submit_task(req: ImportRequest) -> Dict[str, Any]:
         if req.kind == "generic":
-            params: Dict[str, Any] = {"refresh_topics": req.refresh_topics}
+            params: Dict[str, Any] = {}
             if req.paths:
                 params["paths"] = req.paths
             elif req.path:
@@ -107,8 +105,7 @@ class ImportApplicationService:
                 "exclude_patterns": req.exclude_patterns,
                 "rebuild": req.rebuild,
                 "persist_dir": req.persist_dir,
-                "refresh_topics": req.refresh_topics,
-            }
+                            }
             if req.chunk_strategy:
                 params["chunk_strategy"] = req.chunk_strategy
             if req.chunk_size:
@@ -128,8 +125,7 @@ class ImportApplicationService:
                 "collection_id": req.collection_id,
                 "collection_name": req.collection_name,
                 "rebuild": req.rebuild,
-                "refresh_topics": req.refresh_topics,
-            }
+                            }
             if req.chunk_strategy:
                 params["chunk_strategy"] = req.chunk_strategy
             if req.chunk_size:
@@ -174,8 +170,7 @@ class ImportApplicationService:
                 for item in req.items
             ],
             "async_mode": req.async_mode,
-            "refresh_topics": req.refresh_topics,
-            "prefix": req.prefix,
+                        "prefix": req.prefix,
         }
         if req.chunk_strategy:
             params["chunk_strategy"] = req.chunk_strategy
@@ -213,18 +208,10 @@ class ImportApplicationService:
                 for item in req.paths:
                     stats = GenericService.import_file(
                         kb_id=req.kb_id,
-                        path=item,
-                        refresh_topics=False,
-                    )
+                        path=item,                    )
                     merged["files"] += stats.get("files", 0)
                     merged["nodes"] += stats.get("nodes", 0)
                     merged["failed"] += stats.get("failed", 0)
-                if req.refresh_topics:
-                    from kb_core.services import KnowledgeBaseService
-
-                    KnowledgeBaseService.refresh_topics(
-                        req.kb_id, has_new_docs=merged["files"] > 0
-                    )
                 return merged
 
             path = req.path or (req.paths[0] if req.paths else None)
@@ -232,9 +219,7 @@ class ImportApplicationService:
                 raise ValueError("generic 同步导入缺少 path")
             return GenericService.import_file(
                 kb_id=req.kb_id,
-                path=path,
-                refresh_topics=req.refresh_topics,
-            )
+                path=path,            )
 
         if req.kind == "obsidian":
             if not req.vault_path:
@@ -245,9 +230,7 @@ class ImportApplicationService:
                 folder_path=req.folder_path,
                 recursive=req.recursive,
                 exclude_patterns=req.exclude_patterns,
-                rebuild=req.rebuild,
-                refresh_topics=req.refresh_topics,
-                force_delete=req.force_delete if req.force_delete is not None else True,
+                rebuild=req.rebuild,                force_delete=req.force_delete if req.force_delete is not None else True,
             )
 
         if req.kind == "zotero":
@@ -255,8 +238,6 @@ class ImportApplicationService:
                 kb_id=req.kb_id,
                 collection_id=req.collection_id,
                 collection_name=req.collection_name,
-                rebuild=req.rebuild,
-                refresh_topics=req.refresh_topics,
-            )
+                rebuild=req.rebuild,            )
 
         raise ValueError(f"不支持的导入类型: {req.kind}")

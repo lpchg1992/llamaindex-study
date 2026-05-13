@@ -340,27 +340,7 @@ class TaskExecutor:
 
         return get_vault_root()
 
-    def _update_kb_topics(self, kb_id: str, has_new_docs: bool = True) -> None:
-        """按需更新知识库 topics"""
-        try:
-            from kb_analysis.topic_analyzer import analyze_and_update_topics
 
-            topics = analyze_and_update_topics(kb_id, has_new_docs=has_new_docs)
-            if topics:
-                logger.info(f"KB {kb_id} topics 已处理: {len(topics)} 个")
-        except Exception as e:
-            logger.warning(f"更新 KB topics 失败 {kb_id}: {e}")
-
-    def _should_refresh_topics(self, params: Dict[str, Any]) -> bool:
-        """检查是否应该刷新 topics
-        
-        Args:
-            params: 任务参数字典
-            
-        Returns:
-            是否刷新
-        """
-        return bool(params.get("refresh_topics", True))
 
     def _record_embedding_model(self, kb_id: str) -> None:
         try:
@@ -737,8 +717,6 @@ class TaskExecutor:
             },
         )
 
-        if self._should_refresh_topics(params):
-            self._update_kb_topics(kb_id, has_new_docs=processed_files > 0)
 
         self._record_embedding_model(kb_id)
 
@@ -895,9 +873,7 @@ class TaskExecutor:
                         lambda: ZoteroService.import_collection(
                             kb_id=kb_id,
                             collection_id=item.get("id"),
-                            collection_name=item.get("name", "Unknown"),
-                            refresh_topics=False,
-                        )
+                            collection_name=item.get("name", "Unknown"),                        )
                     )
                     stats["files"] += result.get("items", 0)
                     stats["nodes"] += result.get("nodes", 0)
@@ -960,9 +936,7 @@ class TaskExecutor:
                         lambda: ZoteroService.import_item(
                             kb_id=kb_id,
                             item_id=item.get("id"),
-                            options=item_options,
-                            refresh_topics=False,
-                            prefix=prefix,
+                            options=item_options,                            prefix=prefix,
                             chunk_strategy=chunk_strategy,
                             chunk_size=chunk_size,
                             hierarchical_chunk_sizes=hierarchical_chunk_sizes,
@@ -1011,9 +985,7 @@ class TaskExecutor:
                             lambda: ObsidianService.import_vault(
                                 kb_id=kb_id,
                                 vault_path=vault_path,
-                                folder_path=folder_path,
-                                refresh_topics=False,
-                                chunk_strategy=chunk_strategy,
+                                folder_path=folder_path,                                chunk_strategy=chunk_strategy,
                                 chunk_size=chunk_size,
                                 hierarchical_chunk_sizes=hierarchical_chunk_sizes,
                             )
@@ -1049,9 +1021,7 @@ class TaskExecutor:
                             None,
                             lambda: GenericService.import_file(
                                 kb_id=kb_id,
-                                path=path,
-                                refresh_topics=False,
-                                chunk_strategy=chunk_strategy,
+                                path=path,                                chunk_strategy=chunk_strategy,
                                 chunk_size=chunk_size,
                                 hierarchical_chunk_sizes=hierarchical_chunk_sizes,
                             )
@@ -1102,9 +1072,6 @@ class TaskExecutor:
 
             if (i + 1) % 5 == 0:
                 await self._update_heartbeat(task_id)
-
-        if params.get("refresh_topics", True):
-            self._update_kb_topics(kb_id, has_new_docs=stats["files"] > 0)
 
         self._record_embedding_model(kb_id)
 
@@ -1742,9 +1709,7 @@ class TaskExecutor:
             )
             logger.info(f"[{task_id}] 任务完成并标记为已完成")
 
-            if self._should_refresh_topics(params):
-                self._update_kb_topics(kb_id, has_new_docs=stats.get("items", 0) > 0)
-
+    
             self._record_embedding_model(kb_id)
 
         except Exception as e:
@@ -2060,8 +2025,6 @@ class TaskExecutor:
 
         vs.set_chunk_strategy(settings.chunk_strategy)
 
-        if self._should_refresh_topics(params):
-            self._update_kb_topics(kb_id, has_new_docs=stats["files"] > 0)
 
         self._record_embedding_model(kb_id)
 

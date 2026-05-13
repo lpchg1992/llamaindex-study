@@ -17,10 +17,6 @@ export interface KBUpdateRequest {
   canonical_name?: string
 }
 
-export interface TopicUpdateRequest {
-  topics: string[]
-}
-
 export interface DangerousOperationRequest {
   confirmation_name: string
 }
@@ -122,7 +118,6 @@ export interface QueryResponse {
 export interface IngestRequest {
   path: string
   async_mode?: boolean
-  refresh_topics?: boolean
 }
 
 export interface IngestResponse {
@@ -141,7 +136,6 @@ export interface ObsidianIngestRequest {
   recursive?: boolean
   async_mode?: boolean
   exclude_patterns?: string[]
-  refresh_topics?: boolean
   chunk_strategy?: string
   chunk_size?: number
   hierarchical_chunk_sizes?: number[]
@@ -153,7 +147,6 @@ export interface ZoteroIngestRequest {
   collection_name?: string
   async_mode?: boolean
   rebuild?: boolean
-  refresh_topics?: boolean
   chunk_strategy?: string
   chunk_size?: number
   hierarchical_chunk_sizes?: number[]
@@ -175,7 +168,6 @@ export interface SelectiveImportRequest {
   source_type: string
   items: SelectiveImportItem[]
   async_mode?: boolean
-  refresh_topics?: boolean
   prefix?: string
   chunk_strategy?: string
   chunk_size?: number
@@ -186,7 +178,6 @@ export interface SelectiveImportRequest {
 export interface FilesImportRequest {
   paths: string[]
   async_mode?: boolean
-  refresh_topics?: boolean
   chunk_strategy?: string
   chunk_size?: number
   hierarchical_chunk_sizes?: number[]
@@ -210,12 +201,6 @@ export interface VendorInfo {
   api_base?: string
   api_key?: string
   is_active: boolean
-}
-
-export interface TopicInfo {
-  kb_id: string
-  topics: string[]
-  topic_count: number
 }
 
 // Zotero
@@ -643,11 +628,6 @@ export interface InitializeKBResponse {
   status: string
   task_id?: string
   message: string
-}
-
-// Refresh Topics
-export interface RefreshTopicsRequest {
-  has_new_docs?: boolean
 }
 
 // File Preview

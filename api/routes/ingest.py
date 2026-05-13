@@ -49,9 +49,7 @@ def ingest(kb_id: str, req: IngestRequest):
                 kind="generic",
                 kb_id=kb_id,
                 async_mode=False,
-                path=req.path,
-                refresh_topics=req.refresh_topics,
-                chunk_strategy=req.chunk_strategy,
+                path=req.path,                chunk_strategy=req.chunk_strategy,
                 chunk_size=req.chunk_size,
                 hierarchical_chunk_sizes=req.hierarchical_chunk_sizes,
             )
@@ -68,9 +66,7 @@ def ingest(kb_id: str, req: IngestRequest):
         ImportRequest(
             kind="generic",
             kb_id=kb_id,
-            path=req.path,
-            refresh_topics=req.refresh_topics,
-            source=req.path,
+            path=req.path,            source=req.path,
             chunk_strategy=req.chunk_strategy,
             chunk_size=req.chunk_size,
             hierarchical_chunk_sizes=req.hierarchical_chunk_sizes,
@@ -121,9 +117,7 @@ def ingest_zotero(kb_id: str, req: ZoteroIngestRequest):
                 async_mode=False,
                 collection_id=collection_id,
                 collection_name=collection_name,
-                rebuild=req.rebuild,
-                refresh_topics=req.refresh_topics,
-                chunk_strategy=req.chunk_strategy,
+                rebuild=req.rebuild,                chunk_strategy=req.chunk_strategy,
                 chunk_size=req.chunk_size,
                 hierarchical_chunk_sizes=req.hierarchical_chunk_sizes,
             )
@@ -143,9 +137,7 @@ def ingest_zotero(kb_id: str, req: ZoteroIngestRequest):
             kb_id=kb_id,
             collection_id=collection_id,
             collection_name=collection_name,
-            rebuild=req.rebuild,
-            refresh_topics=req.refresh_topics,
-            source=f"zotero:{collection_name}",
+            rebuild=req.rebuild,            source=f"zotero:{collection_name}",
             chunk_strategy=req.chunk_strategy,
             chunk_size=req.chunk_size,
             hierarchical_chunk_sizes=req.hierarchical_chunk_sizes,
@@ -192,9 +184,7 @@ def ingest_obsidian(kb_id: str, req: ObsidianIngestRequest):
                 vault_path=str(vault_path_obj) if vault_path_obj else None,
                 folder_path=req.folder_path,
                 recursive=req.recursive,
-                exclude_patterns=req.exclude_patterns,
-                refresh_topics=req.refresh_topics,
-                chunk_strategy=req.chunk_strategy,
+                exclude_patterns=req.exclude_patterns,                chunk_strategy=req.chunk_strategy,
                 chunk_size=req.chunk_size,
                 hierarchical_chunk_sizes=req.hierarchical_chunk_sizes,
             )
@@ -215,9 +205,7 @@ def ingest_obsidian(kb_id: str, req: ObsidianIngestRequest):
             vault_path=str(vault_path_obj) if vault_path_obj else None,
             folder_path=req.folder_path,
             recursive=req.recursive,
-            exclude_patterns=req.exclude_patterns,
-            refresh_topics=req.refresh_topics,
-            source=f"obsidian:{import_dir_name}",
+            exclude_patterns=req.exclude_patterns,            source=f"obsidian:{import_dir_name}",
             chunk_strategy=req.chunk_strategy,
             chunk_size=req.chunk_size,
             hierarchical_chunk_sizes=req.hierarchical_chunk_sizes,
@@ -261,9 +249,7 @@ def ingest_selective(kb_id: str, req: SelectiveImportRequest):
     service_req = ServiceSelectiveRequest(
         source_type=req.source_type,
         items=items,
-        async_mode=req.async_mode,
-        refresh_topics=req.refresh_topics,
-        prefix=req.prefix,
+        async_mode=req.async_mode,        prefix=req.prefix,
         chunk_strategy=req.chunk_strategy,
         chunk_size=req.chunk_size,
         hierarchical_chunk_sizes=req.hierarchical_chunk_sizes,
@@ -304,19 +290,13 @@ def ingest_files(kb_id: str, req: FilesImportRequest):
             try:
                 stats = GenericService.import_file(
                     kb_id=kb_id,
-                    path=path,
-                    refresh_topics=False,
-                )
+                    path=path,                )
                 merged["files"] += stats.get("files", 0)
                 merged["nodes"] += stats.get("nodes", 0)
                 merged["failed"] += stats.get("failed", 0)
             except Exception as e:
                 merged["failed"] += 1
                 logger.error(f"导入文件失败 {path}: {e}")
-
-        if req.refresh_topics and merged["files"] > 0:
-            KnowledgeBaseService.refresh_topics(kb_id, has_new_docs=True)
-
         return IngestResponse(
             status="completed",
             files_processed=merged.get("files", 0),
@@ -330,9 +310,7 @@ def ingest_files(kb_id: str, req: FilesImportRequest):
         ImportRequest(
             kind="generic",
             kb_id=kb_id,
-            paths=validated_paths,
-            refresh_topics=req.refresh_topics,
-            source=f"files:{len(validated_paths)}files",
+            paths=validated_paths,            source=f"files:{len(validated_paths)}files",
             chunk_strategy=req.chunk_strategy,
             chunk_size=req.chunk_size,
             hierarchical_chunk_sizes=req.hierarchical_chunk_sizes,

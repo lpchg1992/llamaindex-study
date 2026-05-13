@@ -47,9 +47,6 @@ class KnowledgeBaseService:
                     pass
 
             db_row = all_db_rows.get(kb.id, {})
-            db_topics = db_row.get("topics", []) or []
-            registry_topics = getattr(kb, "topics", []) or []
-            all_topics = list(set(db_topics + registry_topics))
 
             result.append(
                 {
@@ -63,7 +60,6 @@ class KnowledgeBaseService:
                     "chunk_strategy": chunk_strategy,
                     "embedding_model_id": embedding_model_id,
                     "canonical_name": db_row.get("canonical_name"),
-                    "topics": all_topics,
                 }
             )
             seen.add(kb.id)
@@ -87,7 +83,6 @@ class KnowledgeBaseService:
                 "chunk_count": 0,
                 "chunk_strategy": None,
                 "canonical_name": kb_meta.get("canonical_name"),
-                "topics": kb_meta.get("topics", []),
             }
             if persist_dir.exists():
                 try:
@@ -148,30 +143,9 @@ class KnowledgeBaseService:
         else:
             info["status"] = "not_found"
 
-        info["topics"] = kb_meta.get("topics", []) if kb_meta else []
         info["tags"] = kb_meta.get("tags", []) if kb_meta else []
 
         return info
-
-    @staticmethod
-    def get_topics(kb_id: str) -> List[str]:
-        """获取知识库的主题关键词
-        
-        Args:
-            kb_id: 知识库 ID
-            
-        Returns:
-            主题关键词列表
-        """
-        from ..database import init_kb_meta_db
-
-        return init_kb_meta_db().get_topics(kb_id)
-
-    @staticmethod
-    def refresh_topics(kb_id: str, has_new_docs: bool = True) -> List[str]:
-        from kb_analysis.topic_analyzer import analyze_and_update_topics
-
-        return analyze_and_update_topics(kb_id, has_new_docs=has_new_docs)
 
     @staticmethod
     def update_info(
@@ -234,8 +208,7 @@ class KnowledgeBaseService:
             source_type=source_type,
             persist_path=str(kb.persist_dir),
             tags=kb.tags,
-            topics=[],
-            source_paths=kb.source_paths,
+                        source_paths=kb.source_paths,
             source_tags=kb.source_tags,
         )
         return True

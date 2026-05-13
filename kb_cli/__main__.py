@@ -8,7 +8,7 @@ LlamaIndex Study CLI 入口
     uv run llamaindex-study <command> [options]
 
 主要命令:
-    - kb: 知识库管理 (list, create, delete, topics, etc.)
+    - kb: 知识库管理 (list, create, delete, etc.)
     - ingest: 文档导入 (obsidian, zotero, file, batch)
     - search/query: 检索问答
     - task: 任务管理 (list, watch, cancel, etc.)
@@ -445,355 +445,6 @@ def handle_kb_initialize(args: argparse.Namespace) -> int:
     )
 
 
-def handle_kb_topics(args: argparse.Namespace) -> int:
-    from kb_analysis.topic_analyzer import analyze_and_update_topics
-    from kb_core.registry import registry
-    from kb_core.database import init_kb_meta_db
-
-    if args.all:
-        kb_ids = [kb.id for kb in registry.list_all()]
-    elif args.kb_id:
-        kb_ids = [args.kb_id]
-    else:
-        print("错误: 请指定 kb_id 或使用 --all", file=sys.stderr)
-        return 1
-
-    for kb_id in kb_ids:
-        print(f"\n分析知识库: {kb_id}")
-        topics = analyze_and_update_topics(kb_id, has_new_docs=True)
-        if topics:
-            print(f"  主题词 ({len(topics)} 个):")
-            for t in topics[:15]:
-                print(f"    - {t}")
-            if len(topics) > 15:
-                print(f"    ... 共 {len(topics)} 个")
-        else:
-            print(f"  无主题词")
-        if args.update:
-            db = init_kb_meta_db()
-            db.update_topics(kb_id, topics)
-            print(f"  已更新到数据库")
-
-    return 0
-
-
-def handle_kb_topics_local(args: argparse.Namespace) -> int:
-    import httpx
-    import re
-    from collections import Counter
-    from kb_core.registry import registry
-
-    OLLAMA_URL = "http://localhost:11434/api/chat"
-    LOCAL_MODEL = "tomng/lfm2.5-instruct:1.2b"
-
-    EXTRACT_PROMPT = """你是一个专业的知识库主题分析助手。请从以下文档内容中提取3-8个主题词。
-    要求：
-    1. 只提取专业术语、学术名词、具体概念
-    2. 只提取名词性词汇，不要动词、形容词
-    3. 用换行符分隔，每行一个词
-
-    ---文档内容---
-    {text}
-    ---文档结束---
-
-    主题词（每行一个）："""
-
-    REVIEW_PROMPT = """以下是从知识库文档中提取的主题词。请审查并过滤掉：
-    1. 过于通用的词（如"实验设计"、"专业术语"、"使用者"、"注意事项"）
-    2. 疑似幻觉/错误的词
-    3. 动词、形容词、副词
-    4. 长度小于2的词
-
-    保留真正有学科特色的专业术语。
-
-    主题词列表：
-    {keywords}
-
-    过滤后的有效主题词（每行一个，只返回有效的）："""
-
-    client = httpx.Client(timeout=60.0)
-
-    def wait_for_model_ready(max_wait=120):
-        start = time.time()
-        while time.time() - start < max_wait:
-            try:
-                resp = client.get(f"{OLLAMA_URL.rsplit('/api/', 1)[0]}/api/tags")
-                if resp.status_code == 200:
-                    models = [m["name"] for m in resp.json().get("models", [])]
-                    if LOCAL_MODEL in models:
-                        return True
-            except:
-                pass
-            time.sleep(1)
-        return False
-
-    def extract_with_retry(text, max_retries=5, initial_delay=2.0, backoff_factor=1.5):
-        prompt = EXTRACT_PROMPT.format(text=text[:2000])
-        delay = initial_delay
-        for attempt in range(max_retries):
-            try:
-                resp = client.post(
-                    OLLAMA_URL,
-                    json={
-                        "model": LOCAL_MODEL,
-                        "messages": [{"role": "user", "content": prompt}],
-                        "stream": False,
-                    },
-                )
-                if resp.status_code == 200:
-                    result = resp.json().get("message", {}).get("content", "")
-                    keywords = []
-                    for line in result.split("\n"):
-                        line = line.strip().strip("0123456789.-、，、:：) ")
-                        if line and len(line) >= 2:
-                            keywords.append(line)
-                    return keywords
-                elif resp.status_code == 503:
-                    print(
-                        f"  [模型加载中，重试 {attempt + 1}/{max_retries}，等待 {delay:.1f}s]"
-                    )
-                    time.sleep(delay)
-                    delay *= backoff_factor
-                else:
-                    return []
-            except Exception as e:
-                if attempt == max_retries - 1:
-                    return []
-        return []
-
-    def _is_garbage(kw):
-        if not kw or len(kw) < 2:
-            return True
-        junk = {
-            "iss",
-            "thr",
-            "com",
-            "www",
-            "http",
-            "https",
-            "ftp",
-            "the",
-            "and",
-            "for",
-            "are",
-            "but",
-            "not",
-            "you",
-            "all",
-            "can",
-            "had",
-            "her",
-            "was",
-            "one",
-            "our",
-            "out",
-            "has",
-            "his",
-            "how",
-            "its",
-            "may",
-            "new",
-            "now",
-            "old",
-            "see",
-            "two",
-            "way",
-            "who",
-            "boy",
-            "did",
-            "get",
-            "let",
-            "put",
-            "say",
-            "she",
-            "too",
-            "use",
-            "dir",
-            "lst",
-            "idx",
-            "tmp",
-            "bak",
-            "ddd",
-            "mmm",
-            "yyy",
-            "xxx",
-            "www",
-            "png",
-            "jpg",
-            "gif",
-            "css",
-            "js",
-            "html",
-            "xml",
-            "json",
-            "实验设计",
-            "专业术语",
-            "使用者",
-            "注意事项",
-        }
-        if kw.lower() in junk:
-            return True
-        if re.match(r"^\d+$", kw):
-            return True
-        if re.match(r"^[a-zA-Z]{1,2}$", kw):
-            return True
-        return False
-
-    def _is_similar(kw1, kw2):
-        if kw1.lower() == kw2.lower():
-            return True
-        particles = {"的", "之", "于", "在", "和", "与", "及"}
-        rp1 = "".join(c for c in kw1 if c not in particles)
-        rp2 = "".join(c for c in kw2 if c not in particles)
-        if rp1 and rp2:
-            if rp1 in rp2 or rp2 in rp1:
-                return True
-        n = 2
-        ngrams1 = (
-            set(kw1[i : i + n] for i in range(len(kw1) - n + 1))
-            if len(kw1) >= n
-            else {kw1}
-        )
-        ngrams2 = (
-            set(kw2[i : i + n] for i in range(len(kw2) - n + 1))
-            if len(kw2) >= n
-            else {kw2}
-        )
-        if not ngrams1 or not ngrams2:
-            return False
-        intersection = len(ngrams1 & ngrams2)
-        union = len(ngrams1 | ngrams2)
-        return (intersection / union) >= 0.75 if union > 0 else False
-
-    def review_keywords(keywords):
-        if not keywords:
-            return []
-        prompt = REVIEW_PROMPT.format(keywords="\n".join(keywords))
-        try:
-            resp = client.post(
-                OLLAMA_URL,
-                json={
-                    "model": LOCAL_MODEL,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "stream": False,
-                },
-            )
-            resp.raise_for_status()
-            result = resp.json().get("message", {}).get("content", "")
-            reviewed = []
-            for line in result.split("\n"):
-                line = line.strip().strip("0123456789.-、，、:：) ")
-                if line and len(line) >= 2:
-                    reviewed.append(line)
-            return reviewed
-        except Exception as e:
-            print(f"  [警告] 审查失败: {e}")
-            return keywords
-
-    def local_rule_filter(keywords):
-        result = []
-        for kw in keywords:
-            if _is_garbage(kw):
-                continue
-            is_dup = False
-            for existing in result:
-                if _is_similar(kw, existing):
-                    is_dup = True
-                    break
-            if not is_dup:
-                result.append(kw)
-        return result
-
-    def get_chunks(kb_id):
-        kb = registry.get(kb_id)
-        if not kb:
-            return []
-        persist_dir = kb.persist_dir
-        if not persist_dir.exists():
-            return []
-        try:
-            import lancedb
-
-            db = lancedb.connect(str(persist_dir))
-            table = db.open_table(list(db.table_names())[0])
-            df = table.to_pandas()
-            return df["text"].dropna().tolist() if "text" in df.columns else []
-        except:
-            return []
-
-    if args.all:
-        kb_ids = [kb.id for kb in registry.list_all()]
-    elif args.kb_id:
-        kb_ids = [args.kb_id]
-    else:
-        print("错误: 请指定 kb_id 或使用 --all", file=sys.stderr)
-        return 1
-
-    for kb_id in kb_ids:
-        print(f"\n{'=' * 50}")
-        print(f"处理知识库: {kb_id}")
-        chunks = get_chunks(kb_id)
-        if not chunks:
-            print(f"  无文档")
-            continue
-        print(f"  共 {len(chunks)} 个 chunks（全部处理）")
-
-        print(f"  [等待模型就绪...]")
-        if not wait_for_model_ready():
-            print(f"  [警告] 模型未就绪，继续尝试...")
-        else:
-            print(f"  [模型已就绪]")
-
-        print(f"  [阶段1] 提取主题词...")
-        all_keywords = []
-        for i, chunk in enumerate(chunks):
-            if len(chunk) < 50:
-                continue
-            keywords = extract_with_retry(chunk)
-            if keywords:
-                all_keywords.append(keywords)
-            if (i + 1) % 50 == 0:
-                print(f"    已处理 {i + 1}/{len(chunks)}")
-
-        if not all_keywords:
-            print(f"  未能提取主题词")
-            continue
-
-        print(f"  [阶段2] 本地规则过滤...")
-        counter = Counter()
-        for keywords in all_keywords:
-            for kw in keywords:
-                if not _is_garbage(kw):
-                    counter[kw] += 1
-        merged = [kw for kw, _ in counter.most_common(80)]
-        filtered = local_rule_filter(merged)
-        print(f"  规则过滤后: {len(filtered)} 个")
-
-        print(f"  [阶段3] 本地模型二次审查...")
-        reviewed = review_keywords(filtered)
-        if reviewed:
-            filtered = reviewed
-            print(f"  审查后: {len(filtered)} 个")
-        else:
-            print(f"  审查失败，保留原结果")
-
-        print(f"\n  最终主题词 ({len(filtered)} 个):")
-        for kw in filtered[:20]:
-            print(f"    - {kw}")
-        if len(filtered) > 20:
-            print(f"    ... 共 {len(filtered)} 个")
-
-        if args.update:
-            from kb_core.database import init_kb_meta_db
-
-            db = init_kb_meta_db()
-            db.update_topics(kb_id, filtered)
-            print(f"\n  已更新到数据库")
-
-    print(f"\n{'=' * 50}")
-    print("完成!")
-    return 0
-
 
 def handle_kb_consistency(args: argparse.Namespace) -> int:
     from kb_core.services import ConsistencyService
@@ -1120,9 +771,7 @@ def handle_ingest_obsidian(args: argparse.Namespace) -> int:
             recursive=args.recursive,
             force_delete=args.force_delete,
             rebuild=args.rebuild,
-            persist_dir=args.persist_dir,
-            refresh_topics=args.refresh_topics,
-            source=args.folder_path or args.vault_path,
+            persist_dir=args.persist_dir,            source=args.folder_path or args.vault_path,
         )
     )
 
@@ -1144,9 +793,7 @@ def handle_ingest_zotero(args: argparse.Namespace) -> int:
             kb_id=args.kb_id,
             collection_id=args.collection_id,
             collection_name=args.collection_name,
-            rebuild=args.rebuild,
-            refresh_topics=args.refresh_topics,
-            source=source,
+            rebuild=args.rebuild,            source=source,
             chunk_strategy=args.chunk_strategy,
             chunk_size=args.chunk_size,
             hierarchical_chunk_sizes=hierarchical_chunk_sizes,
@@ -1206,9 +853,7 @@ def handle_ingest_file(args: argparse.Namespace) -> int:
         ImportRequest(
             kind="generic",
             kb_id=args.kb_id,
-            paths=[args.path],
-            refresh_topics=args.refresh_topics,
-            source=args.path,
+            paths=[args.path],            source=args.path,
         )
     )
 
@@ -1253,9 +898,7 @@ def handle_ingest_batch(args: argparse.Namespace) -> int:
             kb_id=args.kb_id,
             paths=paths,
             include_exts=include_exts,
-            exclude_exts=exclude_exts,
-            refresh_topics=args.refresh_topics,
-            source=paths[0],
+            exclude_exts=exclude_exts,            source=paths[0],
         )
     )
 
@@ -1278,9 +921,7 @@ def handle_ingest_rebuild(args: argparse.Namespace) -> int:
             kind="zotero",
             kb_id=args.kb_id,
             collection_name=collection_name,
-            rebuild=True,
-            refresh_topics=args.refresh_topics,
-            source="cli:ingest:rebuild",
+            rebuild=True,            source="cli:ingest:rebuild",
         )
     elif source_type == "generic":
         paths = source_paths if source_paths else None
@@ -1288,9 +929,7 @@ def handle_ingest_rebuild(args: argparse.Namespace) -> int:
             kind="generic",
             kb_id=args.kb_id,
             paths=paths,
-            rebuild=True,
-            refresh_topics=args.refresh_topics,
-            source="cli:ingest:rebuild",
+            rebuild=True,            source="cli:ingest:rebuild",
         )
     else:
         vault_path = str(get_vault_root())
@@ -1300,9 +939,7 @@ def handle_ingest_rebuild(args: argparse.Namespace) -> int:
             kb_id=args.kb_id,
             vault_path=vault_path,
             folder_path=folder_path,
-            rebuild=True,
-            refresh_topics=args.refresh_topics,
-            source="cli:ingest:rebuild",
+            rebuild=True,            source="cli:ingest:rebuild",
         )
 
     return submit_import_and_handle(req)
@@ -1359,9 +996,7 @@ def handle_obsidian_import_all(args: argparse.Namespace) -> int:
                     folder_path=folder_path,
                     recursive=True,
                     rebuild=args.rebuild,
-                    force_delete=args.force_delete,
-                    refresh_topics=True,
-                    source=folder_path or mapping.kb_id,
+                    force_delete=args.force_delete,                    source=folder_path or mapping.kb_id,
                 )
             )
             results.append(submission)
@@ -2261,21 +1896,6 @@ def build_parser() -> argparse.ArgumentParser:
     kb_initialize = kb_sub.add_parser("initialize", help="初始化知识库（清空所有数据）")
     kb_initialize.add_argument("kb_id")
     kb_initialize.set_defaults(handler=handle_kb_initialize)
-
-    kb_topics = kb_sub.add_parser("topics", help="分析知识库主题词（使用远程LLM）")
-    kb_topics.add_argument("kb_id", nargs="?", default=None)
-    kb_topics.add_argument("--all", action="store_true", help="分析所有知识库")
-    kb_topics.add_argument("--update", action="store_true", help="更新到数据库")
-    kb_topics.set_defaults(handler=handle_kb_topics)
-
-    kb_topics_local = kb_sub.add_parser(
-        "topics-local", help="分析知识库主题词（使用本地模型）"
-    )
-    kb_topics_local.add_argument("kb_id", nargs="?", default=None)
-    kb_topics_local.add_argument("--all", action="store_true", help="分析所有知识库")
-    kb_topics_local.add_argument("--update", action="store_true", help="更新到数据库")
-    kb_topics_local.set_defaults(handler=handle_kb_topics_local)
-
     kb_consistency = kb_sub.add_parser("consistency", help="知识库一致性检查和修复")
     kb_consistency.add_argument(
         "kb_id", nargs="?", default=None, help="知识库ID，不指定则检查所有"
@@ -2510,11 +2130,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--force-delete", action=argparse.BooleanOptionalAction, default=True
     )
     ingest_obsidian.add_argument("--persist-dir")
-    ingest_obsidian.add_argument(
-        "--refresh-topics",
-        action=argparse.BooleanOptionalAction,
+    ingest_obsidian.add_argument(        action=argparse.BooleanOptionalAction,
         default=True,
-        help="导入完成后是否刷新 topics",
     )
     ingest_obsidian.set_defaults(handler=handle_ingest_obsidian)
 
@@ -2523,11 +2140,8 @@ def build_parser() -> argparse.ArgumentParser:
     ingest_zotero.add_argument("--collection-id")
     ingest_zotero.add_argument("--collection-name")
     ingest_zotero.add_argument("--rebuild", action="store_true")
-    ingest_zotero.add_argument(
-        "--refresh-topics",
-        action=argparse.BooleanOptionalAction,
+    ingest_zotero.add_argument(        action=argparse.BooleanOptionalAction,
         default=True,
-        help="导入完成后是否刷新 topics",
     )
     ingest_zotero.add_argument(
         "--chunk-strategy",
@@ -2548,11 +2162,8 @@ def build_parser() -> argparse.ArgumentParser:
     ingest_file = ingest_sub.add_parser("file", help="导入单个文件或目录")
     ingest_file.add_argument("kb_id")
     ingest_file.add_argument("path")
-    ingest_file.add_argument(
-        "--refresh-topics",
-        action=argparse.BooleanOptionalAction,
+    ingest_file.add_argument(        action=argparse.BooleanOptionalAction,
         default=True,
-        help="导入完成后是否刷新 topics",
     )
     ingest_file.set_defaults(handler=handle_ingest_file)
 
@@ -2567,11 +2178,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--exclude",
         help="从默认格式中排除指定的文件格式 (如: xlsx,png)，逗号分隔",
     )
-    ingest_batch.add_argument(
-        "--refresh-topics",
-        action=argparse.BooleanOptionalAction,
+    ingest_batch.add_argument(        action=argparse.BooleanOptionalAction,
         default=True,
-        help="导入完成后是否刷新 topics",
     )
     ingest_batch.set_defaults(handler=handle_ingest_batch)
 
@@ -2579,11 +2187,8 @@ def build_parser() -> argparse.ArgumentParser:
         "rebuild", help="重建知识库（清空后重新导入）"
     )
     ingest_rebuild.add_argument("kb_id")
-    ingest_rebuild.add_argument(
-        "--refresh-topics",
-        action=argparse.BooleanOptionalAction,
+    ingest_rebuild.add_argument(        action=argparse.BooleanOptionalAction,
         default=True,
-        help="重建完成后是否刷新 topics",
     )
     ingest_rebuild.set_defaults(handler=handle_ingest_rebuild)
 

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useUpdateKB, useUpdateTopics, useCanonicalNames } from '@/api/hooks'
+import { useUpdateKB, useCanonicalNames } from '@/api/hooks'
 import {
   Dialog,
   DialogContent,
@@ -12,7 +12,6 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { ScrollArea } from '@/components/ui/scroll-area'
 import {
   Select,
   SelectContent,
@@ -20,38 +19,31 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { X, Plus, Loader2, Pencil } from 'lucide-react'
+import { Loader2, Pencil } from 'lucide-react'
 import { toast } from 'sonner'
-import type { KBInfo, TopicInfo } from '@/types/api'
+import type { KBInfo } from '@/types/api'
 
 interface KBEditDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   kb: KBInfo
-  topics?: TopicInfo
 }
 
-export function KBEditDialog({ open, onOpenChange, kb, topics }: KBEditDialogProps) {
+export function KBEditDialog({ open, onOpenChange, kb }: KBEditDialogProps) {
   const updateKB = useUpdateKB()
-  const updateTopics = useUpdateTopics()
   const { data: canonicalNames } = useCanonicalNames()
 
   const [name, setName] = useState(kb.name)
   const [description, setDescription] = useState(kb.description)
   const [canonicalName, setCanonicalName] = useState<string | undefined>(kb.canonical_name)
-  const [localTopics, setLocalTopics] = useState<string[]>(topics?.topics || [])
-  const [newTopic, setNewTopic] = useState('')
-  const [activeTab, setActiveTab] = useState('basic')
 
   useEffect(() => {
     if (open) {
       setName(kb.name)
       setDescription(kb.description)
       setCanonicalName(kb.canonical_name)
-      setLocalTopics(topics?.topics || [])
-      setNewTopic('')
     }
-  }, [open, kb, topics])
+  }, [open, kb])
 
   const handleSaveBasic = async () => {
     try {
@@ -70,34 +62,6 @@ export function KBEditDialog({ open, onOpenChange, kb, topics }: KBEditDialogPro
     }
   }
 
-  const handleAddTopic = () => {
-    const trimmed = newTopic.trim()
-    if (!trimmed) return
-    if (localTopics.includes(trimmed)) {
-      toast.error('Topic already exists')
-      return
-    }
-    setLocalTopics([...localTopics, trimmed])
-    setNewTopic('')
-  }
-
-  const handleRemoveTopic = (topic: string) => {
-    setLocalTopics(localTopics.filter((t) => t !== topic))
-  }
-
-  const handleSaveTopics = async () => {
-    try {
-      await updateTopics.mutateAsync({
-        kbId: kb.id,
-        topics: localTopics,
-      })
-      toast.success('Topics updated')
-      onOpenChange(false)
-    } catch (error) {
-      toast.error('Failed to update topics')
-    }
-  }
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
@@ -108,12 +72,9 @@ export function KBEditDialog({ open, onOpenChange, kb, topics }: KBEditDialogPro
           </DialogTitle>
         </DialogHeader>
 
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 overflow-hidden">
-          <TabsList className="grid w-full grid-cols-2">
+        <Tabs defaultValue="basic" className="flex-1 overflow-hidden">
+          <TabsList className="grid w-full grid-cols-1">
             <TabsTrigger value="basic">Basic Info</TabsTrigger>
-            <TabsTrigger value="topics">
-              Topics ({localTopics.length})
-            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="basic" className="space-y-4 py-4">
@@ -176,58 +137,6 @@ export function KBEditDialog({ open, onOpenChange, kb, topics }: KBEditDialogPro
               </div>
             </div>
           </TabsContent>
-
-          <TabsContent value="topics" className="py-4">
-            <div className="space-y-4">
-              <div className="flex gap-2">
-                <Input
-                  value={newTopic}
-                  onChange={(e) => setNewTopic(e.target.value)}
-                  placeholder="Enter new topic..."
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault()
-                      handleAddTopic()
-                    }
-                  }}
-                />
-                <Button onClick={handleAddTopic} disabled={!newTopic.trim()}>
-                  <Plus className="h-4 w-4 mr-1" />
-                  Add
-                </Button>
-              </div>
-
-              <ScrollArea className="h-[300px] border rounded-lg p-4">
-                {localTopics.length > 0 ? (
-                  <div className="flex flex-wrap gap-2">
-                    {localTopics.map((topic, index) => (
-                      <Badge
-                        key={index}
-                        variant="outline"
-                        className="pl-3 pr-2 py-1.5 flex items-center gap-1.5"
-                      >
-                        {topic}
-                        <button
-                          onClick={() => handleRemoveTopic(topic)}
-                          className="ml-1 hover:bg-destructive/10 rounded p-0.5"
-                        >
-                          <X className="h-3 w-3 text-muted-foreground hover:text-destructive" />
-                        </button>
-                      </Badge>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="flex items-center justify-center h-full text-muted-foreground">
-                    No topics yet. Add some topics above.
-                  </div>
-                )}
-              </ScrollArea>
-
-              <p className="text-xs text-muted-foreground">
-                Click the X on a topic to remove it. Press Enter or click Add to add a new topic.
-              </p>
-            </div>
-          </TabsContent>
         </Tabs>
 
         <DialogFooter className="gap-2">
@@ -235,13 +144,10 @@ export function KBEditDialog({ open, onOpenChange, kb, topics }: KBEditDialogPro
             Cancel
           </Button>
           <Button
-            onClick={activeTab === 'basic' ? handleSaveBasic : handleSaveTopics}
-            disabled={
-              (activeTab === 'basic' && updateKB.isPending) ||
-              (activeTab === 'topics' && updateTopics.isPending)
-            }
+            onClick={handleSaveBasic}
+            disabled={updateKB.isPending}
           >
-            {updateKB.isPending || updateTopics.isPending ? (
+            {updateKB.isPending ? (
               <Loader2 className="h-4 w-4 mr-2 animate-spin" />
             ) : null}
             Save Changes

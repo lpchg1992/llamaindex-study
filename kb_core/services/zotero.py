@@ -43,7 +43,7 @@ class ZoteroService:
         collection_id: Optional[str] = None,
         collection_name: Optional[str] = None,
         rebuild: bool = False,
-        refresh_topics: bool = True,
+        
         progress_callback: Optional[Callable[[str], None]] = None,
     ) -> Dict[str, Any]:
         """
@@ -121,12 +121,6 @@ class ZoteroService:
                 progress_callback(
                     f"完成！导入 {stats.get('items', 0)} 篇文献，{stats.get('nodes', 0)} 个节点"
                 )
-
-            if refresh_topics:
-                KnowledgeBaseService.refresh_topics(
-                    kb_id=kb_id,
-                    has_new_docs=stats.get("items", 0) > 0,
-                )
             return stats
 
         finally:
@@ -137,7 +131,7 @@ class ZoteroService:
         kb_id: str,
         item_id: str,
         options: Optional[Dict[str, Any]] = None,
-        refresh_topics: bool = True,
+        
         progress_callback: Optional[Callable[[str], None]] = None,
         prefix: str = "[kb]",
         chunk_strategy: Optional[str] = None,
@@ -212,9 +206,6 @@ class ZoteroService:
 
             if progress_callback:
                 progress_callback(f"完成！导入 {nodes} 个节点")
-
-            if refresh_topics:
-                KnowledgeBaseService.refresh_topics(kb_id=kb_id, has_new_docs=nodes > 0)
 
             result = {
                 "items": 1,

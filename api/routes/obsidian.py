@@ -95,9 +95,7 @@ def import_obsidian_all():
                     kb_id=mapping.kb_id,
                     vault_path=str(vault_root),
                     folder_path=folder,
-                    recursive=True,
-                    refresh_topics=True,
-                    source=f"obsidian:{folder}",
+                    recursive=True,                    source=f"obsidian:{folder}",
                 )
             )
             task_id = task["task_id"]

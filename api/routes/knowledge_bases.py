@@ -10,7 +10,6 @@ from api.schemas import (
     KBInfo,
     KBUpdateRequest,
     DangerousOperationRequest,
-    RefreshTopicsRequest,
 )
 
 router = APIRouter(prefix="/kbs", tags=["knowledge-bases"])
@@ -81,39 +80,6 @@ def delete_kb(kb_id: str, req: DangerousOperationRequest = Body(...)):
     if KnowledgeBaseService.delete(kb_id):
         return {"status": "deleted", "kb_id": kb_id}
     raise HTTPException(status_code=404, detail=f"知识库 {kb_id} 不存在")
-
-
-@router.get("/{kb_id}/topics")
-def get_kb_topics(kb_id: str):
-    from kb_core.services import KnowledgeBaseService
-
-    info = KnowledgeBaseService.get_info(kb_id)
-    if not info:
-        raise HTTPException(status_code=404, detail=f"知识库不存在: {kb_id}")
-    topics = KnowledgeBaseService.get_topics(kb_id)
-    return {
-        "kb_id": kb_id,
-        "topics": topics,
-        "topic_count": len(topics),
-    }
-
-
-@router.post("/{kb_id}/topics/refresh")
-def refresh_kb_topics(kb_id: str, req: RefreshTopicsRequest):
-    from kb_core.services import KnowledgeBaseService
-
-    info = KnowledgeBaseService.get_info(kb_id)
-    if not info:
-        raise HTTPException(status_code=404, detail=f"知识库不存在: {kb_id}")
-    topics = KnowledgeBaseService.refresh_topics(
-        kb_id=kb_id,
-        has_new_docs=req.has_new_docs,
-    )
-    return {
-        "kb_id": kb_id,
-        "topics": topics,
-        "topic_count": len(topics),
-    }
 
 
 @router.get("/{kb_id}/consistency")

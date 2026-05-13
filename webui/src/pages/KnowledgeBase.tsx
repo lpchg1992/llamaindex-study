@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useKBs, useCreateKB, useDeleteKB, useKBTopics, useRefreshTopics, useConsistencyCheck, useConsistencyRepair, useInitializeKB, useRepairAll, useCheckAndMarkFailed, useRevectorTask, useModels } from '@/api/hooks'
+import { useKBs, useCreateKB, useDeleteKB, useConsistencyCheck, useConsistencyRepair, useInitializeKB, useRepairAll, useCheckAndMarkFailed, useRevectorTask, useModels } from '@/api/hooks'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -25,8 +25,6 @@ import type { KBInfo } from '@/types/api'
 
 function KBDetailsPanel({ kb }: { kb: KBInfo }) {
   const navigate = useNavigate()
-  const { data: topics, isLoading: topicsLoading } = useKBTopics(kb.id)
-  const refreshTopics = useRefreshTopics()
   const { data: consistency, isLoading: consistencyLoading, refetch: refetchConsistency } = useConsistencyCheck(kb.id)
   const repairConsistency = useConsistencyRepair()
   const initializeKB = useInitializeKB()
@@ -35,20 +33,7 @@ function KBDetailsPanel({ kb }: { kb: KBInfo }) {
   const embedCanonical = embedModel?.canonical_name
   const checkAndMarkFailed = useCheckAndMarkFailed()
   const revectorTask = useRevectorTask()
-  const [isRefreshingTopics, setIsRefreshingTopics] = useState(false)
   const [isInitializeOpen, setIsInitializeOpen] = useState(false)
-
-  const handleRefreshTopics = async () => {
-    setIsRefreshingTopics(true)
-    try {
-      await refreshTopics.mutateAsync({ kbId: kb.id, req: { has_new_docs: true } })
-      toast.success('Topics refreshed')
-    } catch (error) {
-      toast.error('Failed to refresh topics')
-    } finally {
-      setIsRefreshingTopics(false)
-    }
-  }
 
   const handleRepair = async () => {
     try {
@@ -123,9 +108,8 @@ function KBDetailsPanel({ kb }: { kb: KBInfo }) {
       </CardHeader>
       <CardContent>
         <Tabs defaultValue="overview" className="w-full">
-          <TabsList className="grid w-full grid-cols-4">
+          <TabsList className="grid w-full grid-cols-3">
             <TabsTrigger value="overview">Overview</TabsTrigger>
-            <TabsTrigger value="topics">Topics</TabsTrigger>
             <TabsTrigger value="consistency">Consistency</TabsTrigger>
             <TabsTrigger value="maintenance">Maintenance</TabsTrigger>
           </TabsList>
@@ -169,38 +153,6 @@ function KBDetailsPanel({ kb }: { kb: KBInfo }) {
               )}
             </div>
 
-          </TabsContent>
-
-          <TabsContent value="topics" className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h4 className="text-sm font-medium">Knowledge Topics</h4>
-              <Button variant="outline" size="sm" onClick={handleRefreshTopics} disabled={refreshTopics.isPending || isRefreshingTopics} title="刷新知识主题">
-                {isRefreshingTopics || refreshTopics.isPending ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <RefreshCw className="h-4 w-4 mr-1" />
-                )}
-                Refresh
-              </Button>
-            </div>
-            {topicsLoading ? (
-              <div className="flex items-center justify-center py-8">
-                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-              </div>
-            ) : topics && topics.topics.length > 0 ? (
-              <ScrollArea className="h-48">
-                <div className="flex flex-wrap gap-2">
-                  {topics.topics.map((topic, index) => (
-                    <Badge key={index} variant="outline">
-                      {topic}
-                    </Badge>
-                  ))}
-                </div>
-              </ScrollArea>
-            ) : (
-              <p className="text-sm text-muted-foreground text-center py-4">No topics available</p>
-            )}
-            <p className="text-xs text-muted-foreground">{topics?.topic_count || 0} topics</p>
           </TabsContent>
 
           <TabsContent value="consistency" className="space-y-4">
@@ -408,7 +360,6 @@ function KBListItem({
   onSelect: () => void
   onDeleteSuccess?: () => void
 }) {
-  const { data: kbTopics } = useKBTopics(kb.id)
   const [isEditOpen, setIsEditOpen] = useState(false)
   const [isDeleteOpen, setIsDeleteOpen] = useState(false)
   const [isLanceOpen, setIsLanceOpen] = useState(false)
@@ -476,7 +427,6 @@ function KBListItem({
         open={isEditOpen}
         onOpenChange={setIsEditOpen}
         kb={kb}
-        topics={kbTopics}
       />
       <DangerConfirmDialog
         open={isDeleteOpen}

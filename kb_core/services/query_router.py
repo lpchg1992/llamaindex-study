@@ -10,7 +10,7 @@ from .knowledge_base import KnowledgeBaseService
 from .search import SearchService
 
 class QueryRouter:
-    """查询路由服务 - 自动选择知识库"""
+    """查询路由服务 — 使用 LlamaIndex LLMMultiSelector 语义匹配路由。"""
 
     @staticmethod
     def route(
@@ -19,16 +19,10 @@ class QueryRouter:
         exclude: Optional[List[str]] = None,
         model_id: Optional[str] = None,
     ) -> List[str]:
-        """根据查询内容路由到最相关的知识库
+        """根据查询语义路由到最相关的知识库。
 
-        Args:
-            query: 用户查询
-            top_k: 返回最相关的 top_k 个知识库
-            exclude: 排除的知识库 ID 列表
-            model_id: 使用的LLM模型ID (None=使用默认Ollama模型)
-
-        Returns:
-            知识库 ID 列表
+        主路由使用 LlamaIndex LLMMultiSelector（基于 KB 名称 + 描述做语义匹配），
+        降级方案使用简单关键词匹配（名称 + 描述，不使用 topics）。
         """
         kbs = KnowledgeBaseService.list_all()
         exclude = exclude or []
@@ -41,110 +35,82 @@ class QueryRouter:
         if len(kbs) == 1:
             return [kbs[0]["id"]]
 
-        kb_ids = QueryRouter._llm_route(query, kbs, model_id=model_id)
+        # Primary: LlamaIndex LLMMultiSelector semantic routing
+        try:
+            kb_ids = QueryRouter._selector_route(query, kbs, model_id=model_id)
+            if kb_ids:
+                return kb_ids[:top_k]
+        except Exception as e:
+            logger.warning(f"Selector routing failed: {e}")
 
-        if not kb_ids:
-            kb_ids = QueryRouter._keyword_route(query, kbs)
-
-        if not kb_ids:
-            kb_ids = QueryRouter._fallback_route(query, kbs)
-
+        # Fallback: simple name/description keyword matching
+        kb_ids = QueryRouter._simple_route(query, kbs)
         return kb_ids[:top_k]
 
     @staticmethod
-    def _llm_route(
+    def _build_kb_description(kb: Dict[str, Any]) -> str:
+        """Build a description string from KB metadata (NOT topics)."""
+        parts = []
+        if name := kb.get("name"):
+            parts.append(name)
+        if desc := kb.get("description"):
+            parts.append(desc)
+        doc_count = kb.get("row_count") or kb.get("document_count") or 0
+        if doc_count > 0:
+            parts.append(f"{doc_count} documents")
+        return " — ".join(parts) if parts else kb["id"]
+
+    @staticmethod
+    def _selector_route(
         query: str,
         kbs: List[Dict[str, Any]],
         model_id: Optional[str] = None,
     ) -> List[str]:
-        """使用 LLM 进行知识库路由
+        """Use LlamaIndex LLMMultiSelector to pick relevant KBs by name/description."""
+        from llama_index.core.selectors import LLMMultiSelector
+        from llama_index.core.tools import ToolMetadata
 
-        Args:
-            query: 用户查询
-            kbs: 知识库列表
-            model_id: 使用的LLM模型ID (None=使用默认Ollama模型)
+        choices = [
+            ToolMetadata(
+                name=kb["id"],
+                description=QueryRouter._build_kb_description(kb),
+            )
+            for kb in kbs
+        ]
 
-        Returns:
-            知识库 ID 列表
-        """
-        try:
-            from rag.ollama_utils import create_llm
-
-            kb_descriptions = []
-            for kb in kbs:
-                topics = kb.get("topics", [])
-                topics_str = ", ".join(topics) if topics else "无"
-                kb_descriptions.append(f"- {kb['id']}: {topics_str}")
-
-            kb_list_text = "\n".join(kb_descriptions)
-
-            prompt = f"""分析用户问题，从知识库列表中找出所有可能相关的知识库。
-
-重要原则：
-- 仅根据每个知识库的主题关键词（topics）进行判断
-- 如果问题中的关键词与某知识库的主题高度重合，则选择该库
-- 主题关键词完全不匹配的知识库不要选择
-- 宁可精确匹配，也不要随意扩展
-
-知识库列表：
-{kb_list_text}
-
-用户问题：{query}
-
-请先分析问题中的关键词，然后与每个知识库的主题进行匹配，返回最相关的知识库 ID，用逗号分隔。
-
-返回格式示例：kb1,kb2,kb3
-
-请只返回 ID 列表，不要其他内容。"""
-
-            llm = create_llm(model_id=model_id)
-            response = llm.complete(prompt)
-            result = response.text.strip()
-
-            selected = [kb_id.strip() for kb_id in result.split(",")]
-
-            valid_ids = {kb["id"] for kb in kbs}
-            selected = [kb_id for kb_id in selected if kb_id in valid_ids]
-
-            return selected
-
-        except Exception as e:
-            logger = get_logger(__name__)
-            logger.warning(f"LLM 路由失败: {e}")
-            return []
+        selector = LLMMultiSelector.from_defaults()
+        result = selector.select(choices, query)
+        return [s.id for s in result.selections]
 
     @staticmethod
-    def _keyword_route(query: str, kbs: List[Dict[str, Any]]) -> List[str]:
-        """使用关键词匹配进行知识库路由（仅基于 topics）"""
-        query_words = QueryRouter._tokenize_query(query)
-
+    def _simple_route(query: str, kbs: List[Dict[str, Any]]) -> List[str]:
+        """Fallback: match query tokens against KB name and description (no topics)."""
+        tokens = QueryRouter._tokenize_query(query)
         scores: Dict[str, float] = {}
-
         for kb in kbs:
-            kb_id = kb["id"]
-            topics = kb.get("topics", [])
-            if not topics:
-                continue
-
             score = 0.0
-            for word in query_words:
-                if len(word) < 1:
-                    continue
-                for topic in topics:
-                    topic_lower = topic.lower()
-                    if word in topic_lower:
-                        score += 1.0
-                    if len(topic_lower) >= 2 and topic_lower in word:
-                        score += 0.5
-
+            kb_name = str(kb.get("name", "")).lower()
+            kb_desc = str(kb.get("description", "")).lower()
+            for token in tokens:
+                if token in kb_name:
+                    score += 2.0
+                if token in kb_desc:
+                    score += 1.0
             if score > 0:
-                scores[kb_id] = score
+                scores[kb["id"]] = score
 
-        if not scores:
-            return []
+        if scores:
+            sorted_kbs = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+            return [kid for kid, _ in sorted_kbs]
 
-        sorted_kbs = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-        return [kb_id for kb_id, _ in sorted_kbs]
+        indexed = sorted(
+            [kb for kb in kbs if int(kb.get("document_count", 0) or kb.get("row_count", 0) or 0) > 0],
+            key=lambda kb: int(kb.get("document_count", 0) or kb.get("row_count", 0) or 0),
+            reverse=True,
+        )
+        if indexed:
+            return [kb["id"] for kb in indexed]
+        return [kb["id"] for kb in kbs]
 
     @staticmethod
     def _tokenize_query(query: str) -> List[str]:
@@ -158,39 +124,9 @@ class QueryRouter:
                     tokens.add(seg[i : i + 2])
         return [t for t in tokens if t]
 
-    @staticmethod
-    def _fallback_route(query: str, kbs: List[Dict[str, Any]]) -> List[str]:
-        tokens = QueryRouter._tokenize_query(query)
-        scores: Dict[str, float] = {}
-        for kb in kbs:
-            kb_id = kb["id"]
-            kb_name = str(kb.get("name", "")).lower()
-            kb_desc = str(kb.get("description", "")).lower()
-            kb_topics = [str(t).lower() for t in (kb.get("topics") or [])]
-            score = 0.0
-            for token in tokens:
-                if token in kb_name:
-                    score += 1.0
-                if token in kb_desc:
-                    score += 0.8
-                for topic in kb_topics:
-                    if token in topic:
-                        score += 1.2
-            if score > 0:
-                scores[kb_id] = score
-
-        if scores:
-            sorted_kbs = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-            return [kb_id for kb_id, _ in sorted_kbs]
-
-        indexed_kbs = sorted(
-            [kb for kb in kbs if int(kb.get("document_count", 0) or 0) > 0],
-            key=lambda kb: int(kb.get("document_count", 0) or 0),
-            reverse=True,
-        )
-        if indexed_kbs:
-            return [kb["id"] for kb in indexed_kbs]
-        return [kb["id"] for kb in kbs]
+    # ------------------------------------------------------------------
+    # Public query / search methods
+    # ------------------------------------------------------------------
 
     @staticmethod
     def search(

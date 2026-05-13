@@ -70,7 +70,6 @@ class KnowledgeBaseMetaModel(Base):
     source_type: Mapped[str] = mapped_column(String, nullable=False)
     persist_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     tags: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
-    topics: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
     source_paths: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
     source_tags: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
     config: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
@@ -951,7 +950,6 @@ class KnowledgeBaseMetaDB:
             "source_type": row.source_type,
             "persist_path": row.persist_path or "",
             "tags": _json_load(row.tags, []),
-            "topics": _json_load(row.topics, []),
             "source_paths": _json_load(row.source_paths, []),
             "source_tags": _json_load(row.source_tags, []),
             "config": _json_load(row.config, {}),
@@ -968,7 +966,6 @@ class KnowledgeBaseMetaDB:
         source_type: str = "unknown",
         persist_path: str = "",
         tags: List[str] = None,
-        topics: List[str] = None,
         source_paths: List[str] = None,
         source_tags: List[str] = None,
         config: Dict[str, Any] = None,
@@ -982,7 +979,6 @@ class KnowledgeBaseMetaDB:
             source_type=source_type,
             persist_path=persist_path,
             tags=_json_dump(tags, []),
-            topics=_json_dump(topics, []),
             source_paths=_json_dump(source_paths, []),
             source_tags=_json_dump(source_tags, []),
             config=_json_dump(config, {}),
@@ -998,7 +994,6 @@ class KnowledgeBaseMetaDB:
                 "source_type": stmt.excluded.source_type,
                 "persist_path": stmt.excluded.persist_path,
                 "tags": stmt.excluded.tags,
-                "topics": stmt.excluded.topics,
                 "source_paths": stmt.excluded.source_paths,
                 "source_tags": stmt.excluded.source_tags,
                 "config": stmt.excluded.config,
@@ -1060,24 +1055,6 @@ class KnowledgeBaseMetaDB:
             )
             return (result.rowcount or 0) > 0
 
-    def update_topics(self, kb_id: str, topics: List[str]) -> bool:
-        with self.db.session_scope() as session:
-            result = session.execute(
-                update(KnowledgeBaseMetaModel)
-                .where(KnowledgeBaseMetaModel.kb_id == kb_id)
-                .values(topics=_json_dump(topics, []), updated_at=time.time())
-            )
-            return (result.rowcount or 0) > 0
-
-    def get_topics(self, kb_id: str) -> List[str]:
-        with self.db.session_scope() as session:
-            topics = session.scalar(
-                select(KnowledgeBaseMetaModel.topics)
-                .where(KnowledgeBaseMetaModel.kb_id == kb_id)
-                .limit(1)
-            )
-            return _json_load(topics, [])
-
     def seed_from_registry(
         self, kb_configs: List[Dict[str, Any]], source_type: str = "obsidian"
     ) -> int:
@@ -1091,7 +1068,6 @@ class KnowledgeBaseMetaDB:
                 source_type=source_type,
                 persist_path=persist_path,
                 tags=kb.get("tags", []),
-                topics=kb.get("topics", []),
                 source_paths=kb.get("source_paths", []),
                 source_tags=kb.get("source_tags", []),
             )

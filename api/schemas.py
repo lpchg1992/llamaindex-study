@@ -116,7 +116,6 @@ class QueryResponse(BaseModel):
 class IngestRequest(BaseModel):
     path: str = Field(..., description="文件路径")
     async_mode: bool = Field(True, description="是否异步处理")
-    refresh_topics: bool = Field(False, description="任务完成后是否刷新 topics")
     chunk_strategy: Optional[str] = Field(
         None, description="分块策略: hierarchical/sentence/semantic/markdown"
     )
@@ -246,7 +245,6 @@ class ZoteroIngestRequest(BaseModel):
     collection_name: Optional[str] = None
     async_mode: bool = Field(True, description="是否异步处理")
     rebuild: bool = Field(False, description="是否重建")
-    refresh_topics: bool = Field(False, description="任务完成后是否刷新 topics")
     chunk_strategy: Optional[str] = Field(
         None, description="分块策略: hierarchical/sentence/semantic"
     )
@@ -329,7 +327,6 @@ class ObsidianIngestRequest(BaseModel):
     recursive: bool = Field(True, description="递归处理子文件夹")
     async_mode: bool = Field(True, description="是否异步处理")
     exclude_patterns: Optional[List[str]] = Field(None, description="排除模式")
-    refresh_topics: bool = Field(False, description="任务完成后是否刷新 topics")
     chunk_strategy: Optional[str] = Field(
         None, description="分块策略: hierarchical/sentence/semantic/markdown"
     )
@@ -346,7 +343,6 @@ class SelectiveImportRequest(BaseModel):
     source_type: str = Field(..., description="来源类型: zotero, obsidian, files")
     items: List[Dict[str, Any]] = Field(..., description="要导入的项目列表")
     async_mode: bool = Field(True, description="是否异步处理")
-    refresh_topics: bool = Field(False, description="任务完成后是否刷新 topics")
     prefix: str = Field("[kb]", description="Zotero 附件标题前缀标记")
     chunk_strategy: Optional[str] = Field(
         None, description="分块策略: hierarchical/sentence/semantic/markdown"
@@ -363,7 +359,6 @@ class SelectiveImportRequest(BaseModel):
 class FilesImportRequest(BaseModel):
     paths: List[str] = Field(..., description="文件路径列表")
     async_mode: bool = Field(True, description="是否异步处理")
-    refresh_topics: bool = Field(False, description="任务完成后是否刷新 topics")
     chunk_strategy: Optional[str] = Field(
         None, description="分块策略: hierarchical/sentence/semantic/markdown"
     )
@@ -429,10 +424,6 @@ class ChunkResponse(BaseModel):
     embedding_error: Optional[str] = None
     created_at: float
     updated_at: float
-
-
-class RefreshTopicsRequest(BaseModel):
-    has_new_docs: bool = Field(True, description="是否按有新文档方式刷新 topics")
 
 
 # ============== Chat/WebSocket Models ==============
